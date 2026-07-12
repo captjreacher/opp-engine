@@ -6,6 +6,7 @@ import {
   createOutreachDraft,
   fetchOpportunityDetail,
   isApiConfigured,
+  sendOutreachDraft,
   setReviewState,
   updateOutreachDraft,
 } from "../lib/api";
@@ -51,6 +52,8 @@ export default function OpportunityDetail() {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [approvingDraft, setApprovingDraft] = useState(false);
+  const [sendingDraft, setSendingDraft] = useState(false);
+  const [sendNotice, setSendNotice] = useState<string | null>(null);
   const [draftMutationError, setDraftMutationError] = useState<string | null>(null);
 
   async function load() {
@@ -125,6 +128,24 @@ export default function OpportunityDetail() {
       setDraftMutationError(errorMessage(err));
     } finally {
       setApprovingDraft(false);
+    }
+  }
+
+  async function handleSendDraft(draftId: string) {
+    if (!id) return;
+    setSendingDraft(true);
+    setDraftMutationError(null);
+    setSendNotice(null);
+    try {
+      const res = await sendOutreachDraft(id, draftId);
+      setSendNotice(
+        `Sent to ${res.sent_to}${res.overridden ? " (test override — not the prospect)" : ""}.`,
+      );
+      await load();
+    } catch (err) {
+      setDraftMutationError(errorMessage(err));
+    } finally {
+      setSendingDraft(false);
     }
   }
 
@@ -411,14 +432,23 @@ export default function OpportunityDetail() {
               )}
             </div>
           ) : (
-            <DraftEditor
-              draft={latestDraft}
-              onSave={(fields) => handleSaveDraft(latestDraft.id, fields)}
-              onApprove={() => handleApproveDraft(latestDraft.id)}
-              saving={savingDraft}
-              approving={approvingDraft}
-              error={draftMutationError}
-            />
+            <div className="space-y-2">
+              <DraftEditor
+                draft={latestDraft}
+                onSave={(fields) => handleSaveDraft(latestDraft.id, fields)}
+                onApprove={() => handleApproveDraft(latestDraft.id)}
+                onSend={() => handleSendDraft(latestDraft.id)}
+                saving={savingDraft}
+                approving={approvingDraft}
+                sending={sendingDraft}
+                error={draftMutationError}
+              />
+              {sendNotice && (
+                <p className="rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                  {sendNotice}
+                </p>
+              )}
+            </div>
           )}
 
           {priorDrafts.length > 0 && (

@@ -96,7 +96,15 @@ Set the Edge Function `ALLOWED_ORIGIN` secret to the console origin (defaults to
 The operator token ships in the client build, so keep the deployment access-restricted
 (internal / staging only) until the Supabase Auth migration (`docs/auth-migration.md`).
 
+## Email sending (Phase 3)
+
+Approved drafts are sent via Resend from `POST /opportunities/:id/outreach/:draftId/send` —
+operator-gated (approved-only, explicit confirm, no auto-send), idempotent, and staging-safe.
+See [`docs/email-sending.md`](docs/email-sending.md) for the secrets and recipient-resolution
+rules. By default it will only send to a configured test override; it never emails a real prospect
+until you set `OUTREACH_SEND_MODE=live`.
+
 ## Roadmap
 - **Phase 1 — API layer** ✅ deployed
 - **Phase 2 — Operator console** ✅ built (board + detail + review workflow + outreach review→approve)
-- **Phase 3 — Email**: Resend send on approved draft (reuse Swanson worker pattern) + emit events
+- **Phase 3 — Email sending** ✅ built (Resend send on approved drafts; operator-gated; staging-safe)

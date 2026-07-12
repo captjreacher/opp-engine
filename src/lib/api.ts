@@ -13,6 +13,7 @@ import type {
   OppListResponse,
   ReviewResponse,
   ReviewState,
+  SendResponse,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").trim();
@@ -141,6 +142,18 @@ export function updateOutreachDraft(
       method: "PATCH",
       body: JSON.stringify(payload),
     },
+  );
+}
+
+/**
+ * POST {VITE_API_BASE}/{id}/outreach/{draftId}/send -> { draft, sent_to, overridden, resend_id }
+ * Sends an APPROVED draft via Resend (operator-gated, no auto-send). The API returns 409 if the
+ * draft is not approved or already sent, and 503 if sending secrets are not configured.
+ */
+export function sendOutreachDraft(id: string, draftId: string): Promise<SendResponse> {
+  return request<SendResponse>(
+    `/${encodeURIComponent(id)}/outreach/${encodeURIComponent(draftId)}/send`,
+    { method: "POST", body: JSON.stringify({}) },
   );
 }
 

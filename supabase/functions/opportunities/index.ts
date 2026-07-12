@@ -1,5 +1,5 @@
 // Supabase Edge Function: `opportunities`
-// Standalone Local Business Opportunity Engine — the API boundary (Phase 1 + Phase 2).
+// Standalone Local Business Opportunity Engine — the API boundary (Phase 1 + 2 + 3).
 //
 // Architecture:  Browser (React/Vite)  ->  THIS function (service role)  ->  existing local_business_* tables
 //
@@ -11,15 +11,15 @@
 // The opportunity-intelligence backend (discovery/scoring/audit) is NOT modified.
 //
 // Routes (an optional `/api` prefix is tolerated):
-//   GET   /opportunities/health                  -> unauthenticated liveness (no data)
-//   GET   /opportunities                         -> board list
-//   GET   /opportunities/:id                     -> full detail (+ review_state + console_events)
-//   POST  /opportunities/:id/outreach            -> generate + store a draft (never sends)
-//   PATCH /opportunities/:id/outreach/:draftId   -> edit/save or approve a draft (never sends)
-//   POST  /opportunities/:id/review              -> record an operator review-state transition
+//   GET   /opportunities/health                       -> unauthenticated liveness (no data)
+//   GET   /opportunities                              -> board list
+//   GET   /opportunities/:id                          -> full detail (+ review_state + console_events)
+//   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
+//   PATCH /opportunities/:id/outreach/:draftId        -> edit/save or approve a draft (never sends)
+//   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via Resend (operator-gated)
+//   POST  /opportunities/:id/review                   -> record an operator review-state transition
 //
 // Auth: `Authorization: Bearer <OPERATOR_TOKEN>` (or `x-operator-token`). Fails closed if unset.
-// See docs/auth-migration.md for the Phase-2 migration path to a Supabase Auth operator role.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -36,10 +36,7 @@ const cors = {
 };
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...cors, "content-type": "application/json" },
-  });
+  return new Response(JSON.stringify(body), { status, headers: { ...cors, "content-type": "application/json" } });
 }
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -51,12 +48,10 @@ function authorized(req: Request): boolean {
   const h = req.headers.get("authorization") ?? "";
   const bearer = h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
   const alt = req.headers.get("x-operator-token") ?? "";
-  return (bearer.length > 0 && bearer === OPERATOR_TOKEN) ||
-    (alt.length > 0 && alt === OPERATOR_TOKEN);
+  return (bearer.length > 0 && bearer === OPERATOR_TOKEN) || (alt.length > 0 && alt === OPERATOR_TOKEN);
 }
 
 // ---- Operator review workflow (app-owned; derived from the audit log) -------
-// Detected -> Reviewed -> Approved -> Contact Ready
 const REVIEW_EVENT_TO_STATE: Record<string, string> = {
   opportunity_review_started: "reviewed",
   opportunity_review_completed: "approved",
@@ -75,8 +70,7 @@ async function deriveReviewState(leadId: string): Promise<string> {
     .eq("lead_id", leadId)
     .in("action", Object.keys(REVIEW_EVENT_TO_STATE))
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1).maybeSingle();
   return data ? (REVIEW_EVENT_TO_STATE[data.action as string] ?? "detected") : "detected";
 }
 
@@ -84,17 +78,34 @@ async function consoleEvents(leadId: string) {
   const { data } = await supabase
     .from("opportunity_console_audit_log")
     .select("id, action, draft_id, actor, metadata, created_at")
-    .eq("lead_id", leadId)
-    .order("created_at", { ascending: false });
+    .eq("lead_id", leadId).order("created_at", { ascending: false });
   return data ?? [];
+}
+
+// ---- Email (Resend) — mirrors the Swanson worker pattern --------------------
+function esc(s: unknown): string {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function htmlFromBody(body: string): string {
+  const paras = esc(body).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+  return `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5;color:#111">${paras}</div>`;
+}
+async function sendViaResend(apiKey: string, from: string, to: string, subject: string, text: string, html: string): Promise<string | null> {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ from, to: [to], subject, text, html }),
+  });
+  if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json().catch(() => ({} as Record<string, unknown>));
+  return (data as { id?: string })?.id ?? null;
 }
 
 // ---- Handlers ---------------------------------------------------------------
 
 async function listOpportunities(): Promise<Response> {
   const { data, error } = await supabase
-    .from("v_opportunity_list")
-    .select("*")
+    .from("v_opportunity_list").select("*")
     .order("opportunity_score", { ascending: false, nullsFirst: false });
   if (error) throw error;
   return json({ opportunities: data ?? [] });
@@ -107,21 +118,16 @@ async function getOpportunity(id: string): Promise<Response> {
   if (!lead) return json({ error: "not_found" }, 404);
 
   const [assessments, reports, events, drafts, review_state, cEvents] = await Promise.all([
-    supabase.from("local_business_lead_assessments").select("*")
-      .eq("lead_id", id).order("assessed_at", { ascending: false }),
-    supabase.from("local_business_audit_reports").select("*")
-      .eq("lead_id", id).order("generated_at", { ascending: false }),
-    supabase.from("local_business_lead_events").select("*")
-      .eq("lead_id", id).order("created_at", { ascending: false }),
-    supabase.from("local_business_outreach_drafts").select("*")
-      .eq("lead_id", id).order("created_at", { ascending: false }),
+    supabase.from("local_business_lead_assessments").select("*").eq("lead_id", id).order("assessed_at", { ascending: false }),
+    supabase.from("local_business_audit_reports").select("*").eq("lead_id", id).order("generated_at", { ascending: false }),
+    supabase.from("local_business_lead_events").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
+    supabase.from("local_business_outreach_drafts").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
     deriveReviewState(id),
     consoleEvents(id),
   ]);
   for (const r of [assessments, reports, events, drafts]) {
     if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
   }
-
   return json({
     lead,
     latest_assessment: assessments.data?.[0] ?? null,
@@ -135,29 +141,24 @@ async function getOpportunity(id: string): Promise<Response> {
   });
 }
 
-// POST /:id/outreach — generate + STORE a draft. Never sends.
 async function createOutreach(id: string, payload: Record<string, unknown>): Promise<Response> {
   const { data: lead, error: leadErr } = await supabase
-    .from("local_business_leads")
-    .select("id, business_name, email, website_url, category, suburb, region")
+    .from("local_business_leads").select("id, business_name, email, website_url, category, suburb, region")
     .eq("id", id).maybeSingle();
   if (leadErr) throw leadErr;
   if (!lead) return json({ error: "not_found" }, 404);
 
   const { data: assessment } = await supabase
-    .from("local_business_lead_assessments")
-    .select("opportunity_score, recommended_outreach_angle")
+    .from("local_business_lead_assessments").select("opportunity_score, recommended_outreach_angle")
     .eq("lead_id", id).order("assessed_at", { ascending: false }).limit(1).maybeSingle();
 
   const angle = (assessment?.recommended_outreach_angle ?? "").toString().trim();
   const biz = (lead.business_name ?? "your business").toString();
-  const subject = (payload.subject as string | undefined)?.trim() ||
-    `Quick opportunity audit for ${biz}`;
+  const subject = (payload.subject as string | undefined)?.trim() || `Quick opportunity audit for ${biz}`;
   const body = (payload.body as string | undefined)?.trim() || [
     `Kia ora,`, ``,
     `We ran a quick online-visibility audit for ${biz}. ${angle ? angle + "." : "There are a few clear quick wins we can share."}`,
-    ``,
-    `Would you like the full audit summary — no obligation? Happy to walk you through the top three fixes.`,
+    ``, `Would you like the full audit summary — no obligation? Happy to walk you through the top three fixes.`,
     ``, `Ngā mihi,`, `MGRNZ`,
   ].join("\n");
 
@@ -183,40 +184,102 @@ async function updateOutreach(id: string, draftId: string, payload: Record<strin
   let action = "outreach_draft_updated";
   const status = payload.status as string | undefined;
   if (status === "sent") {
-    return json({ error: "sending_disabled", detail: "Phase 2 is draft-only; sending is not implemented." }, 400);
+    return json({ error: "use_send_endpoint", detail: "Approve the draft, then POST .../send. Status cannot be set to 'sent' directly." }, 400);
   }
   if (status === "approved") {
-    fields.status = "approved";
-    fields.approved_by = "operator-console";
-    fields.approved_at = new Date().toISOString();
+    fields.status = "approved"; fields.approved_by = "operator-console"; fields.approved_at = new Date().toISOString();
     action = "outreach_draft_approved";
   } else if (status === "draft") {
     fields.status = "draft";
   }
 
   const { data: draft, error } = await supabase
-    .from("local_business_outreach_drafts")
-    .update(fields).eq("id", draftId).eq("lead_id", id).select("*").maybeSingle();
+    .from("local_business_outreach_drafts").update(fields).eq("id", draftId).eq("lead_id", id).select("*").maybeSingle();
   if (error) throw error;
   if (!draft) return json({ error: "not_found" }, 404);
 
   await supabase.from("opportunity_console_audit_log").insert({
-    action, lead_id: id, draft_id: draftId, actor: "operator-console",
-    metadata: { status: draft.status },
+    action, lead_id: id, draft_id: draftId, actor: "operator-console", metadata: { status: draft.status },
   });
   return json({ draft });
 }
 
-// POST /:id/review — record an operator review-state transition (app-owned event log).
+// POST /:id/outreach/:draftId/send — send an APPROVED draft via Resend. Operator-gated, no auto-send.
+async function sendOutreach(id: string, draftId: string): Promise<Response> {
+  const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
+  const EMAIL_FROM = (Deno.env.get("OUTREACH_EMAIL_FROM") ?? "").trim();
+  const OVERRIDE_TO = (Deno.env.get("OUTREACH_OVERRIDE_TO") ?? "").trim();
+  const LIVE = (Deno.env.get("OUTREACH_SEND_MODE") ?? "test").toLowerCase() === "live";
+
+  if (!RESEND_API_KEY || !EMAIL_FROM) {
+    return json({ error: "sending_not_configured", detail: "Set RESEND_API_KEY and OUTREACH_EMAIL_FROM secrets on the function." }, 503);
+  }
+
+  const { data: draft, error: dErr } = await supabase
+    .from("local_business_outreach_drafts").select("*").eq("id", draftId).eq("lead_id", id).maybeSingle();
+  if (dErr) throw dErr;
+  if (!draft) return json({ error: "not_found" }, 404);
+
+  // Operator-approval gate + idempotency.
+  if (draft.status === "sent" || draft.sent_at) return json({ error: "already_sent", sent_at: draft.sent_at }, 409);
+  if (draft.status !== "approved") {
+    return json({ error: "not_approved", detail: "Only operator-approved drafts can be sent. Approve it first." }, 409);
+  }
+
+  const { data: lead } = await supabase.from("local_business_leads").select("business_name, email").eq("id", id).maybeSingle();
+  const prospectEmail = (lead?.email ?? "").trim();
+
+  // Staging safety: send to the override inbox unless explicitly in live mode.
+  const recipient = OVERRIDE_TO || (LIVE ? prospectEmail : "");
+  if (!recipient) {
+    return json({
+      error: "no_recipient",
+      detail: "No send target. Set OUTREACH_OVERRIDE_TO (recommended for staging) or OUTREACH_SEND_MODE=live to email the prospect directly.",
+      prospect_email: prospectEmail || null,
+    }, 409);
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return json({ error: "invalid_recipient", recipient }, 422);
+  const overridden = !!OVERRIDE_TO && recipient !== prospectEmail;
+
+  const subject = (draft.subject ?? `Outreach — ${lead?.business_name ?? ""}`).toString();
+  const banner = overridden ? `[TEST SEND — intended recipient: ${prospectEmail || "(none on file)"}]\n\n` : "";
+  const text = banner + (draft.body ?? "");
+  const html = (overridden
+    ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
+    : "") + htmlFromBody(String(draft.body ?? ""));
+
+  let resendId: string | null = null;
+  try {
+    resendId = await sendViaResend(RESEND_API_KEY, EMAIL_FROM, recipient, subject, text, html);
+  } catch (e) {
+    await supabase.from("opportunity_console_audit_log").insert({
+      action: "outreach_send_failed", lead_id: id, draft_id: draftId, actor: "operator-console",
+      metadata: { recipient, error: String((e as Error).message).slice(0, 300) },
+    });
+    return json({ error: "send_failed", detail: String((e as Error).message).slice(0, 300) }, 502);
+  }
+
+  // Mark sent only after a successful send.
+  const { data: updated, error: uErr } = await supabase
+    .from("local_business_outreach_drafts")
+    .update({ status: "sent", sent_at: new Date().toISOString() })
+    .eq("id", draftId).eq("lead_id", id).select("*").single();
+  if (uErr) throw uErr;
+
+  await supabase.from("opportunity_console_audit_log").insert({
+    action: "outreach_sent", lead_id: id, draft_id: draftId, actor: "operator-console",
+    metadata: { recipient, overridden, resend_id: resendId, live: LIVE },
+  });
+
+  return json({ draft: updated, sent_to: recipient, overridden, resend_id: resendId });
+}
+
 async function setReview(id: string, payload: Record<string, unknown>): Promise<Response> {
   const to = String((payload.to_state ?? payload.state ?? "")).toLowerCase();
   const action = STATE_TO_REVIEW_EVENT[to];
-  if (!action) {
-    return json({ error: "invalid_state", allowed: Object.keys(STATE_TO_REVIEW_EVENT) }, 400);
-  }
+  if (!action) return json({ error: "invalid_state", allowed: Object.keys(STATE_TO_REVIEW_EVENT) }, 400);
   const { data: lead } = await supabase.from("local_business_leads").select("id").eq("id", id).maybeSingle();
   if (!lead) return json({ error: "not_found" }, 404);
-
   const { error } = await supabase.from("opportunity_console_audit_log").insert({
     action, lead_id: id, actor: "operator-console", metadata: { to_state: to },
   });
@@ -237,7 +300,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const parts = path.split("/").filter(Boolean);
 
   if (req.method === "GET" && parts.length === 1 && parts[0] === "health") {
-    return json({ ok: true, service: "opportunities", ts: new Date().toISOString() });
+    return json({ ok: true, service: "opportunities", version: 3, ts: new Date().toISOString() });
   }
 
   if (!authorized(req)) return json({ error: "unauthorized" }, 401);
@@ -248,6 +311,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     if (req.method === "POST" && parts.length === 2 && parts[1] === "outreach") {
       return await createOutreach(parts[0], await req.json().catch(() => ({})));
+    }
+    if (req.method === "POST" && parts.length === 4 && parts[1] === "outreach" && parts[3] === "send") {
+      return await sendOutreach(parts[0], parts[2]);
     }
     if (req.method === "PATCH" && parts.length === 3 && parts[1] === "outreach") {
       return await updateOutreach(parts[0], parts[2], await req.json().catch(() => ({})));

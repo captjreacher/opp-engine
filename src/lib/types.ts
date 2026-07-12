@@ -97,6 +97,7 @@ export interface Draft {
   status: DraftStatus;
   created_at: string;
   approved_at: string | null;
+  sent_at: string | null;
 }
 
 export type ReviewState = "detected" | "reviewed" | "approved" | "contact_ready";
@@ -156,6 +157,14 @@ export interface OppDetail {
 /** Response from POST {VITE_API_BASE}/{id}/outreach and PATCH .../outreach/{draftId}. */
 export interface DraftResponse {
   draft: Draft;
+}
+
+/** Response from POST {VITE_API_BASE}/{id}/outreach/{draftId}/send. */
+export interface SendResponse {
+  draft: Draft;
+  sent_to: string;
+  overridden: boolean;
+  resend_id: string | null;
 }
 
 /** Response from POST {VITE_API_BASE}/{id}/review. */
