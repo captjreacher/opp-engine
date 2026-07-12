@@ -64,7 +64,39 @@ supabase functions deploy opportunities --project-ref jqfodlzcsgfocyuawzyx --no-
 supabase db push
 ```
 
+## Console (Phase 2) — standalone operator UI
+
+A React + Vite + TypeScript + Tailwind SPA that consumes the `opportunities` API.
+Routes: `/opportunities` (board) and `/opportunities/:id` (detail with the operator
+review workflow + outreach draft editing). The browser never touches Supabase directly.
+
+The API gained two console-owned routes in Phase 2 (both write only to the app-owned
+`opportunity_console_audit_log` — the intelligence backend is untouched):
+- `PATCH /opportunities/:id/outreach/:draftId` — edit/save or **approve** a draft (never sends)
+- `POST  /opportunities/:id/review` — record a review-state transition
+  (`reviewed` → `approved` → `contact_ready`)
+
+### Local development
+```bash
+cp .env.example .env     # set VITE_API_BASE and VITE_OPERATOR_TOKEN
+npm install
+npm run dev              # http://localhost:5173
+```
+```
+VITE_API_BASE=https://jqfodlzcsgfocyuawzyx.functions.supabase.co/opportunities
+VITE_OPERATOR_TOKEN=<the OPERATOR_TOKEN you set on the Edge Function>
+```
+
+### Build & deploy (staging only)
+```bash
+npm run build            # -> dist/
+```
+Serve `dist/` as a static site under `staging.maximisedai.com/<slug>/` (per CONTEXT governance).
+Set the Edge Function `ALLOWED_ORIGIN` secret to the console origin (defaults to `*`).
+The operator token ships in the client build, so keep the deployment access-restricted
+(internal / staging only) until the Supabase Auth migration (`docs/auth-migration.md`).
+
 ## Roadmap
 - **Phase 1 — API layer** ✅ deployed
-- **Phase 2 — Dashboard**: React/Vite/Tailwind board + detail + outreach review→approve
+- **Phase 2 — Operator console** ✅ built (board + detail + review workflow + outreach review→approve)
 - **Phase 3 — Email**: Resend send on approved draft (reuse Swanson worker pattern) + emit events

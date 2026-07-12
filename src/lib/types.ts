@@ -1,0 +1,173 @@
+// Shared types for the opp-engine frontend.
+//
+// These mirror the API contract served by the `opportunities` Supabase Edge
+// Function EXACTLY. The frontend never computes or reshapes scores/state —
+// it only renders what the API returns and calls the mutation endpoints.
+
+/** A single row in the board/list response (GET {VITE_API_BASE}). */
+export interface OppRow {
+  id: string;
+  business_name: string;
+  location: string | null;
+  industry: string | null;
+  pipeline_status: string;
+  /** Decimal string from Postgres numeric, e.g. "168.00". Parse with parseFloat. */
+  opportunity_score: string | null;
+  demand_signal_score: number;
+  trust_leakage_score: number;
+  conversion_maturity_score: number;
+  ai_readiness_score: number;
+  recommended_outreach_angle: string | null;
+  assessed_at: string | null;
+  has_audit: boolean;
+  outreach_status: string | null;
+  updated_at: string;
+}
+
+export interface OppListResponse {
+  opportunities: OppRow[];
+}
+
+/** A point-in-time scoring assessment for a lead. */
+export interface Assessment {
+  id: string;
+  demand_signal_score: number;
+  trust_leakage_score: number;
+  conversion_maturity_score: number;
+  ai_readiness_score: number;
+  opportunity_score: string | null;
+  assessment_summary: string | null;
+  recommended_outreach_angle: string | null;
+  assessed_at: string;
+}
+
+/** One metric shown in an audit report's metric grid. */
+export interface AuditMetric {
+  id: string;
+  label: string;
+  value: number;
+  band: string;
+}
+
+/** The structured "report_model" shape nested in audit_report.metadata_json. */
+export interface AuditReportModel {
+  metrics?: AuditMetric[];
+  business?: {
+    name?: string;
+    source?: string;
+    category?: string;
+    location?: string;
+    websiteUrl?: string;
+  };
+  metadata?: {
+    generatedAt?: string;
+  };
+  // Free-form narrative content that may or may not be present — rendered
+  // as-is when found, never fabricated.
+  summary?: string;
+  narrative?: string;
+  sections?: unknown;
+  [key: string]: unknown;
+}
+
+/** metadata_json shape on an audit_report row. */
+export interface AuditReportMetadataJson {
+  report_model?: AuditReportModel;
+  validation?: {
+    customer_ready?: boolean;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface AuditReport {
+  id: string;
+  generated_at: string;
+  report_version: string;
+  pdf_url: string | null;
+  metadata_json: AuditReportMetadataJson | null;
+}
+
+export type DraftStatus = "draft" | "approved" | "sent";
+
+export interface Draft {
+  id: string;
+  subject: string | null;
+  body: string;
+  status: DraftStatus;
+  created_at: string;
+  approved_at: string | null;
+}
+
+export type ReviewState = "detected" | "reviewed" | "approved" | "contact_ready";
+
+/** Ordered review-state pipeline, used to derive which "next" action(s) to enable. */
+export const REVIEW_STATE_ORDER: ReviewState[] = [
+  "detected",
+  "reviewed",
+  "approved",
+  "contact_ready",
+];
+
+export interface ConsoleEvent {
+  id: string;
+  action: string;
+  draft_id: string | null;
+  actor: string;
+  metadata: unknown;
+  created_at: string;
+}
+
+/** The lead/business record embedded in the detail response. */
+export interface Lead {
+  id: string;
+  business_name: string;
+  slug: string | null;
+  category: string | null;
+  categories: string[] | null;
+  suburb: string | null;
+  region: string | null;
+  country: string | null;
+  phone: string | null;
+  email: string | null;
+  website_url: string | null;
+  facebook_url: string | null;
+  google_maps_url: string | null;
+  status: string | null;
+  source: string | null;
+  source_platform: string | null;
+  address: string | null;
+  trust_summary: string | null;
+}
+
+/** Full detail response (GET {VITE_API_BASE}/{id}). */
+export interface OppDetail {
+  lead: Lead;
+  latest_assessment: Assessment | null;
+  assessments: Assessment[];
+  audit_report: AuditReport | null;
+  audit_reports: AuditReport[];
+  events: unknown[];
+  outreach_drafts: Draft[];
+  review_state: ReviewState;
+  console_events: ConsoleEvent[];
+}
+
+/** Response from POST {VITE_API_BASE}/{id}/outreach and PATCH .../outreach/{draftId}. */
+export interface DraftResponse {
+  draft: Draft;
+}
+
+/** Response from POST {VITE_API_BASE}/{id}/review. */
+export interface ReviewResponse {
+  review_state: ReviewState;
+  event: string;
+}
+
+/** Shape of a parsed API error body, when the API returns a JSON error payload. */
+export interface ApiErrorBody {
+  error?: string;
+  detail?: string;
+  allowed?: string[];
+  [key: string]: unknown;
+}
