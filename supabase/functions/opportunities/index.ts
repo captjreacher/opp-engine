@@ -10,13 +10,17 @@
 // opportunity_console_audit_log. No MGRNZ cockpit / event-routing / auth / CRM / FMF / FYV.
 // The opportunity-intelligence backend (discovery/scoring/audit) is NOT modified.
 //
+// Email transport = the shared internal MGRNZ SMTP mailer (raw SMTP over Deno TLS), the same
+// approach used by the supercity-contact / painted-by-jess-contact Edge Functions. No third-party
+// email provider.
+//
 // Routes (an optional `/api` prefix is tolerated):
 //   GET   /opportunities/health                       -> unauthenticated liveness (no data)
 //   GET   /opportunities                              -> board list
 //   GET   /opportunities/:id                          -> full detail (+ review_state + console_events)
 //   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
 //   PATCH /opportunities/:id/outreach/:draftId        -> edit/save or approve a draft (never sends)
-//   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via Resend (operator-gated)
+//   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via SMTP (operator-gated)
 //   POST  /opportunities/:id/review                   -> record an operator review-state transition
 //
 // Auth: `Authorization: Bearer <OPERATOR_TOKEN>` (or `x-operator-token`). Fails closed if unset.
@@ -82,7 +86,11 @@ async function consoleEvents(leadId: string) {
   return data ?? [];
 }
 
-// ---- Email (Resend) — mirrors the Swanson worker pattern --------------------
+// ---- Email helpers ----------------------------------------------------------
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+const EHLO_DOMAIN = Deno.env.get("OUTREACH_EHLO_DOMAIN") ?? "opp-engine.staging.maximisedai.com";
+
 function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -90,15 +98,106 @@ function htmlFromBody(body: string): string {
   const paras = esc(body).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
   return `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5;color:#111">${paras}</div>`;
 }
-async function sendViaResend(apiKey: string, from: string, to: string, subject: string, text: string, html: string): Promise<string | null> {
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ from, to: [to], subject, text, html }),
-  });
-  if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = await res.json().catch(() => ({} as Record<string, unknown>));
-  return (data as { id?: string })?.id ?? null;
+function isValidEmailAddress(v: unknown): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v ?? "").trim());
+}
+
+// ---- Internal SMTP mailer (raw SMTP over Deno TLS) --------------------------
+// Ported faithfully from the MGRNZ supercity-contact / painted-by-jess-contact pattern.
+interface SmtpConfig { host: string; port: number; username: string; password: string; fromEmail: string; fromName: string; }
+
+function getSmtpConfig(): SmtpConfig {
+  const host = Deno.env.get("MGRNZ_SMTP_HOST") || "";
+  const port = Number(Deno.env.get("MGRNZ_SMTP_PORT") || "465");
+  const username = Deno.env.get("MGRNZ_SMTP_USERNAME") || "";
+  const password = Deno.env.get("MGRNZ_SMTP_PASSWORD") || "";
+  const fromEmail = username; // shared MGRNZ sender identity
+  const fromName = Deno.env.get("OUTREACH_FROM_NAME") || "Maximised AI";
+  if (!host || !Number.isFinite(port) || port <= 0) throw new Error("MGRNZ SMTP configuration is invalid.");
+  if (!username || !password) throw new Error("MGRNZ_SMTP_USERNAME and MGRNZ_SMTP_PASSWORD are required.");
+  return { host, port, username, password, fromEmail, fromName };
+}
+
+function base64(value: string): string { return btoa(String.fromCharCode(...textEncoder.encode(value))); }
+function encodeHeader(value: string): string { return /^[\x20-\x7E]*$/.test(value) ? value : `=?UTF-8?B?${base64(value)}?=`; }
+function normalizeEmailBody(value: string): string { return value.replace(/\r?\n/g, "\r\n"); }
+function dotStuff(value: string): string { return normalizeEmailBody(value).replace(/^\./gm, ".."); }
+function smtpAddress(email: string): string { return `<${String(email ?? "").replace(/[<>\r\n]/g, "")}>`; }
+
+function buildOutreachMessage(subject: string, text: string, html: string, tag: string, cfg: SmtpConfig, recipient: string): string {
+  const boundary = `oppengine-${tag}`;
+  const headers = [
+    `From: ${encodeHeader(cfg.fromName)} ${smtpAddress(cfg.fromEmail)}`,
+    `To: ${smtpAddress(recipient)}`,
+    `Subject: ${encodeHeader(subject)}`,
+    "MIME-Version: 1.0",
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: <${tag.toLowerCase()}-outreach@${EHLO_DOMAIN}>`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  ].join("\r\n");
+  return [
+    headers, "",
+    `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit", "", text, "",
+    `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', "Content-Transfer-Encoding: 8bit", "", html, "",
+    `--${boundary}--`, "",
+  ].join("\r\n");
+}
+
+async function readSmtpResponse(conn: Deno.Conn | Deno.TlsConn): Promise<string> {
+  const chunks: string[] = [];
+  const buffer = new Uint8Array(2048);
+  while (true) {
+    const size = await conn.read(buffer);
+    if (size === null) throw new Error("SMTP connection closed unexpectedly.");
+    chunks.push(textDecoder.decode(buffer.subarray(0, size)));
+    const response = chunks.join("");
+    const lines = response.trimEnd().split(/\r?\n/);
+    if (/^\d{3} /.test(lines[lines.length - 1] || "")) return response;
+  }
+}
+function smtpStatus(response: string): number { return Number(response.slice(0, 3)); }
+async function writeSmtp(conn: Deno.Conn | Deno.TlsConn, value: string): Promise<void> { await conn.write(textEncoder.encode(value)); }
+async function smtpCommand(conn: Deno.Conn | Deno.TlsConn, command: string, expected: number[]): Promise<string> {
+  await writeSmtp(conn, `${command}\r\n`);
+  const response = await readSmtpResponse(conn);
+  if (!expected.includes(smtpStatus(response))) throw new Error(`SMTP command failed (${command.split(" ")[0]}): ${response.trim()}`);
+  return response;
+}
+async function readSmtpGreeting(conn: Deno.Conn | Deno.TlsConn): Promise<void> {
+  const response = await readSmtpResponse(conn);
+  if (smtpStatus(response) !== 220) throw new Error(`SMTP greeting failed: ${response.trim()}`);
+}
+async function connectSmtp(host: string, port: number): Promise<Deno.Conn | Deno.TlsConn> {
+  if (port === 465) { const conn = await Deno.connectTls({ hostname: host, port }); await readSmtpGreeting(conn); return conn; }
+  let conn: Deno.Conn | Deno.TlsConn = await Deno.connect({ hostname: host, port });
+  await readSmtpGreeting(conn);
+  await smtpCommand(conn, `EHLO ${EHLO_DOMAIN}`, [250]);
+  await smtpCommand(conn, "STARTTLS", [220]);
+  conn = await Deno.startTls(conn, { hostname: host });
+  return conn;
+}
+async function sendSmtpEmail(cfg: SmtpConfig, email: { subject: string; text: string; html: string }, tag: string, recipient: string): Promise<void> {
+  if (!isValidEmailAddress(recipient)) throw new Error("Recipient email is invalid.");
+  let conn: Deno.Conn | Deno.TlsConn | undefined;
+  try {
+    conn = await connectSmtp(cfg.host, cfg.port);
+    await smtpCommand(conn, `EHLO ${EHLO_DOMAIN}`, [250]);
+    await smtpCommand(conn, "AUTH LOGIN", [334]);
+    await smtpCommand(conn, base64(cfg.username), [334]);
+    await smtpCommand(conn, base64(cfg.password), [235]);
+    await smtpCommand(conn, `MAIL FROM:${smtpAddress(cfg.fromEmail)}`, [250]);
+    await smtpCommand(conn, `RCPT TO:${smtpAddress(recipient)}`, [250, 251]);
+    await smtpCommand(conn, "DATA", [354]);
+    const message = buildOutreachMessage(email.subject, email.text, email.html, tag, cfg, recipient);
+    await writeSmtp(conn, `${dotStuff(message)}\r\n.\r\n`);
+    const response = await readSmtpResponse(conn);
+    if (smtpStatus(response) !== 250) throw new Error(`SMTP DATA failed: ${response.trim()}`);
+    await smtpCommand(conn, "QUIT", [221]);
+  } catch (error) {
+    throw new Error(`SMTP email failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    try { conn?.close(); } catch (_e) { /* already closed */ }
+  }
 }
 
 // ---- Handlers ---------------------------------------------------------------
@@ -204,16 +303,21 @@ async function updateOutreach(id: string, draftId: string, payload: Record<strin
   return json({ draft });
 }
 
-// POST /:id/outreach/:draftId/send — send an APPROVED draft via Resend. Operator-gated, no auto-send.
+// POST /:id/outreach/:draftId/send — send an APPROVED draft via internal SMTP. Operator-gated, no auto-send.
+//
+// Lifecycle note: the DB `status` CHECK allows only draft/pending_review/approved/rejected/sent/
+// archived. So "sending" is a transient UI state and "failed" is DERIVED from the
+// `outreach_send_failed` audit event — on failure the draft stays `approved`, so the operator can
+// retry. Only a successful SMTP send flips the draft to `sent` (+ sent_at).
 async function sendOutreach(id: string, draftId: string): Promise<Response> {
-  const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
-  const EMAIL_FROM = (Deno.env.get("OUTREACH_EMAIL_FROM") ?? "").trim();
-  const OVERRIDE_TO = (Deno.env.get("OUTREACH_OVERRIDE_TO") ?? "").trim();
-  const LIVE = (Deno.env.get("OUTREACH_SEND_MODE") ?? "test").toLowerCase() === "live";
-
-  if (!RESEND_API_KEY || !EMAIL_FROM) {
-    return json({ error: "sending_not_configured", detail: "Set RESEND_API_KEY and OUTREACH_EMAIL_FROM secrets on the function." }, 503);
+  let smtp: SmtpConfig;
+  try {
+    smtp = getSmtpConfig();
+  } catch (e) {
+    return json({ error: "sending_not_configured", detail: String((e as Error).message) }, 503);
   }
+  const OVERRIDE_TO = (Deno.env.get("OUTREACH_TEST_EMAIL") ?? "").trim();
+  const LIVE = (Deno.env.get("OUTREACH_SEND_MODE") ?? "test").toLowerCase() === "live";
 
   const { data: draft, error: dErr } = await supabase
     .from("local_business_outreach_drafts").select("*").eq("id", draftId).eq("lead_id", id).maybeSingle();
@@ -234,29 +338,29 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
   if (!recipient) {
     return json({
       error: "no_recipient",
-      detail: "No send target. Set OUTREACH_OVERRIDE_TO (recommended for staging) or OUTREACH_SEND_MODE=live to email the prospect directly.",
+      detail: "No send target. Set OUTREACH_TEST_EMAIL (recommended for staging) or OUTREACH_SEND_MODE=live to email the prospect directly.",
       prospect_email: prospectEmail || null,
     }, 409);
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) return json({ error: "invalid_recipient", recipient }, 422);
+  if (!isValidEmailAddress(recipient)) return json({ error: "invalid_recipient", recipient }, 422);
   const overridden = !!OVERRIDE_TO && recipient !== prospectEmail;
 
   const subject = (draft.subject ?? `Outreach — ${lead?.business_name ?? ""}`).toString();
   const banner = overridden ? `[TEST SEND — intended recipient: ${prospectEmail || "(none on file)"}]\n\n` : "";
-  const text = banner + (draft.body ?? "");
+  const text = banner + String(draft.body ?? "");
   const html = (overridden
     ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
     : "") + htmlFromBody(String(draft.body ?? ""));
 
-  let resendId: string | null = null;
+  // Send via internal SMTP. On failure: do NOT mark sent; log failure; draft stays approved (retryable).
   try {
-    resendId = await sendViaResend(RESEND_API_KEY, EMAIL_FROM, recipient, subject, text, html);
+    await sendSmtpEmail(smtp, { subject, text, html }, draftId, recipient);
   } catch (e) {
     await supabase.from("opportunity_console_audit_log").insert({
       action: "outreach_send_failed", lead_id: id, draft_id: draftId, actor: "operator-console",
       metadata: { recipient, error: String((e as Error).message).slice(0, 300) },
     });
-    return json({ error: "send_failed", detail: String((e as Error).message).slice(0, 300) }, 502);
+    return json({ error: "send_failed", detail: String((e as Error).message).slice(0, 300), retryable: true }, 502);
   }
 
   // Mark sent only after a successful send.
@@ -268,10 +372,10 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
 
   await supabase.from("opportunity_console_audit_log").insert({
     action: "outreach_sent", lead_id: id, draft_id: draftId, actor: "operator-console",
-    metadata: { recipient, overridden, resend_id: resendId, live: LIVE },
+    metadata: { recipient, overridden, transport: "smtp", live: LIVE },
   });
 
-  return json({ draft: updated, sent_to: recipient, overridden, resend_id: resendId });
+  return json({ draft: updated, sent_to: recipient, overridden });
 }
 
 async function setReview(id: string, payload: Record<string, unknown>): Promise<Response> {
@@ -300,7 +404,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const parts = path.split("/").filter(Boolean);
 
   if (req.method === "GET" && parts.length === 1 && parts[0] === "health") {
-    return json({ ok: true, service: "opportunities", version: 3, ts: new Date().toISOString() });
+    return json({ ok: true, service: "opportunities", version: 4, transport: "smtp", ts: new Date().toISOString() });
   }
 
   if (!authorized(req)) return json({ error: "unauthorized" }, 401);

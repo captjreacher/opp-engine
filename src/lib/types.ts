@@ -164,7 +164,6 @@ export interface SendResponse {
   draft: Draft;
   sent_to: string;
   overridden: boolean;
-  resend_id: string | null;
 }
 
 /** Response from POST {VITE_API_BASE}/{id}/review. */

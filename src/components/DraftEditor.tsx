@@ -17,14 +17,17 @@ interface DraftEditorProps {
   saving: boolean;
   approving: boolean;
   sending: boolean;
+  /** Derived from the audit log: the last send attempt for this draft failed (still approved). */
+  sendFailed?: boolean;
   error: string | null;
 }
 
 /**
  * Editable subject + body for the latest outreach draft.
- * Flow: edit → Save changes → Approve → Send.
- * Send is available ONLY on an approved draft, requires an explicit two-step
- * confirmation (no auto-send), and the draft becomes read-only once sent.
+ * Flow: edit → Save changes → Approve → Send (via internal SMTP).
+ * Send is available ONLY on an approved draft, requires an explicit two-step confirmation
+ * (no auto-send), and the draft becomes read-only once sent. A failed send stays approved
+ * and can be retried.
  */
 export default function DraftEditor({
   draft,
@@ -34,6 +37,7 @@ export default function DraftEditor({
   saving,
   approving,
   sending,
+  sendFailed = false,
   error,
 }: DraftEditorProps) {
   const [subject, setSubject] = useState(draft.subject ?? "");
@@ -130,7 +134,7 @@ export default function DraftEditor({
               disabled={busy}
               className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Send…
+              {sendFailed ? "Retry send…" : "Send…"}
             </button>
           )}
 
@@ -160,7 +164,12 @@ export default function DraftEditor({
         </div>
       )}
 
-      {isApproved && (
+      {isApproved && sendFailed && (
+        <p className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          Last send attempt failed. You can retry — the draft is still approved.
+        </p>
+      )}
+      {isApproved && !sendFailed && (
         <p className="text-xs text-slate-500">
           Approved and ready to send. Sending is manual — nothing goes out until you confirm.
         </p>

@@ -146,9 +146,10 @@ export function updateOutreachDraft(
 }
 
 /**
- * POST {VITE_API_BASE}/{id}/outreach/{draftId}/send -> { draft, sent_to, overridden, resend_id }
- * Sends an APPROVED draft via Resend (operator-gated, no auto-send). The API returns 409 if the
- * draft is not approved or already sent, and 503 if sending secrets are not configured.
+ * POST {VITE_API_BASE}/{id}/outreach/{draftId}/send -> { draft, sent_to, overridden }
+ * Sends an APPROVED draft via the internal SMTP mailer (operator-gated, no auto-send). Returns 409
+ * if the draft is not approved or already sent, 422 for a bad recipient, 502 on SMTP failure
+ * (draft stays approved → retryable), and 503 if SMTP is not configured.
  */
 export function sendOutreachDraft(id: string, draftId: string): Promise<SendResponse> {
   return request<SendResponse>(

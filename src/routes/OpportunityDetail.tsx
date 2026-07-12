@@ -141,11 +141,11 @@ export default function OpportunityDetail() {
       setSendNotice(
         `Sent to ${res.sent_to}${res.overridden ? " (test override — not the prospect)" : ""}.`,
       );
-      await load();
     } catch (err) {
       setDraftMutationError(errorMessage(err));
     } finally {
       setSendingDraft(false);
+      await load(); // refetch on success AND failure so the event history / failed state updates
     }
   }
 
@@ -183,6 +183,19 @@ export default function OpportunityDetail() {
   const currentReviewIndex = REVIEW_STATE_ORDER.indexOf(review_state);
   const latestDraft = outreach_drafts[0] ?? null;
   const priorDrafts = outreach_drafts.slice(1);
+  // "failed" is derived: the most recent send event for the latest draft is a failure and the draft
+  // is still approved (a failed SMTP send never flips status to sent). console_events is ordered
+  // newest-first, so find() returns the most recent send-related event.
+  const latestDraftSendEvent = latestDraft
+    ? console_events.find(
+        (e) =>
+          e.draft_id === latestDraft.id &&
+          (e.action === "outreach_sent" || e.action === "outreach_send_failed"),
+      )
+    : null;
+  const latestDraftSendFailed =
+    latestDraft?.status === "approved" &&
+    latestDraftSendEvent?.action === "outreach_send_failed";
   const opportunityScoreDisplay =
     latest_assessment?.opportunity_score !== null && latest_assessment?.opportunity_score !== undefined
       ? parseFloat(latest_assessment.opportunity_score).toFixed(2)
@@ -441,6 +454,7 @@ export default function OpportunityDetail() {
                 saving={savingDraft}
                 approving={approvingDraft}
                 sending={sendingDraft}
+                sendFailed={!!latestDraftSendFailed}
                 error={draftMutationError}
               />
               {sendNotice && (
