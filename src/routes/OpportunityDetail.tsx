@@ -7,11 +7,12 @@ import {
   fetchOpportunityDetail,
   isApiConfigured,
   sendOutreachDraft,
+  setOutcomeState,
   setReviewState,
   updateOutreachDraft,
 } from "../lib/api";
-import type { OppDetail, ReviewState } from "../lib/types";
-import { REVIEW_STATE_ORDER } from "../lib/types";
+import type { OppDetail, OutcomeState, ReviewState } from "../lib/types";
+import { OUTCOME_ACTIONS, REVIEW_STATE_ORDER } from "../lib/types";
 import Badge, { toneForStatus } from "../components/Badge";
 import ScoreBar from "../components/ScoreBar";
 import ReviewStepper from "../components/ReviewStepper";
@@ -47,6 +48,9 @@ export default function OpportunityDetail() {
 
   const [reviewPending, setReviewPending] = useState<ReviewState | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+
+  const [outcomePending, setOutcomePending] = useState<OutcomeState | null>(null);
+  const [outcomeError, setOutcomeError] = useState<string | null>(null);
 
   const [generatingDraft, setGeneratingDraft] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -86,6 +90,20 @@ export default function OpportunityDetail() {
       setReviewError(errorMessage(err));
     } finally {
       setReviewPending(null);
+    }
+  }
+
+  async function handleOutcomeTransition(toState: Exclude<OutcomeState, "sent">) {
+    if (!id) return;
+    setOutcomePending(toState);
+    setOutcomeError(null);
+    try {
+      await setOutcomeState(id, toState);
+      await load();
+    } catch (err) {
+      setOutcomeError(errorMessage(err));
+    } finally {
+      setOutcomePending(null);
     }
   }
 
@@ -178,7 +196,7 @@ export default function OpportunityDetail() {
     return <p className="text-sm text-slate-500">No data.</p>;
   }
 
-  const { lead, latest_assessment, audit_report, outreach_drafts, review_state, console_events } =
+  const { lead, latest_assessment, audit_report, outreach_drafts, review_state, outcome_state, console_events } =
     detail;
   const currentReviewIndex = REVIEW_STATE_ORDER.indexOf(review_state);
   const latestDraft = outreach_drafts[0] ?? null;
@@ -488,6 +506,49 @@ export default function OpportunityDetail() {
           )}
         </section>
       </div>
+
+      {/* Outcome Tracking (Phase 4) */}
+      <section className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-200">Outcome Tracking</h2>
+          {outcome_state ? (
+            <Badge tone={toneForStatus(outcome_state)}>{outcome_state.replace(/_/g, " ")}</Badge>
+          ) : (
+            <span className="text-xs text-slate-500">Not in pipeline yet</span>
+          )}
+        </div>
+
+        {outcome_state ? (
+          <>
+            <div className="flex flex-wrap gap-2">
+              {OUTCOME_ACTIONS.map((action) => {
+                const isCurrent = outcome_state === action.toState;
+                const disabled = isCurrent || outcomePending !== null;
+                return (
+                  <button
+                    key={action.toState}
+                    type="button"
+                    onClick={() => handleOutcomeTransition(action.toState)}
+                    disabled={disabled}
+                    className="rounded bg-slate-700 px-3 py-1.5 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {outcomePending === action.toState ? "Working…" : action.label}
+                  </button>
+                );
+              })}
+            </div>
+            {outcomeError && (
+              <p className="rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+                {outcomeError}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-slate-500">
+            Send an approved outreach email to start tracking outcomes for this opportunity.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

@@ -110,6 +110,33 @@ export const REVIEW_STATE_ORDER: ReviewState[] = [
   "contact_ready",
 ];
 
+/** Post-send outcome lifecycle (Phase 4). "sent" is derived; the rest are operator-set. */
+export type OutcomeState =
+  | "sent"
+  | "awaiting_response"
+  | "replied"
+  | "meeting_booked"
+  | "converted"
+  | "closed";
+
+export const OUTCOME_STATE_ORDER: OutcomeState[] = [
+  "sent",
+  "awaiting_response",
+  "replied",
+  "meeting_booked",
+  "converted",
+  "closed",
+];
+
+/** Operator-selectable outcome transitions (excludes the derived "sent" entry state). */
+export const OUTCOME_ACTIONS: { toState: Exclude<OutcomeState, "sent">; label: string }[] = [
+  { toState: "awaiting_response", label: "Mark Awaiting Response" },
+  { toState: "replied", label: "Mark Replied" },
+  { toState: "meeting_booked", label: "Mark Meeting Booked" },
+  { toState: "converted", label: "Mark Converted" },
+  { toState: "closed", label: "Mark Closed" },
+];
+
 export interface ConsoleEvent {
   id: string;
   action: string;
@@ -151,6 +178,7 @@ export interface OppDetail {
   events: unknown[];
   outreach_drafts: Draft[];
   review_state: ReviewState;
+  outcome_state: OutcomeState | null;
   console_events: ConsoleEvent[];
 }
 
@@ -170,6 +198,36 @@ export interface SendResponse {
 export interface ReviewResponse {
   review_state: ReviewState;
   event: string;
+}
+
+/** Response from POST {VITE_API_BASE}/{id}/outcome. */
+export interface OutcomeResponse {
+  outcome_state: OutcomeState;
+  event: string;
+}
+
+/** A card on the outcome pipeline (GET {VITE_API_BASE}/pipeline). */
+export interface PipelineOpportunity {
+  id: string;
+  business_name: string;
+  industry: string | null;
+  opportunity_score: string | null;
+  outcome_state: OutcomeState;
+}
+
+export interface PipelineMetrics {
+  total_opportunities: number;
+  audited_opportunities: number;
+  drafts_created: number;
+  emails_sent: number;
+  replies: number;
+  meetings: number;
+  conversions: number;
+}
+
+export interface PipelineResponse {
+  metrics: PipelineMetrics;
+  opportunities: PipelineOpportunity[];
 }
 
 /** Shape of a parsed API error body, when the API returns a JSON error payload. */

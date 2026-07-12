@@ -105,7 +105,19 @@ draft stays `approved` and can be retried. See [`docs/email-sending.md`](docs/em
 the secrets and recipient-resolution rules; by default it only sends to a configured test override
 and never emails a real prospect until `OUTREACH_SEND_MODE=live`.
 
+## Outcome tracking (Phase 4)
+
+After a send, operators track the business outcome on the detail page and the `/pipeline` board:
+`sent → awaiting_response → replied → meeting_booked → converted → closed`. Each action logs an
+audit event (`outreach_awaiting_response`, `outreach_replied`, `meeting_booked`,
+`opportunity_converted`, `opportunity_closed`). Outcome state is **derived** from the audit log —
+no schema change (the DB `status` CHECK is unchanged). `POST /opportunities/:id/outcome` records a
+transition (requires a sent outreach); `GET /opportunities/pipeline` returns the Kanban buckets +
+summary metrics (total / audited / drafts / emails sent / replies / meetings / conversions) from
+existing data.
+
 ## Roadmap
 - **Phase 1 — API layer** ✅ deployed
 - **Phase 2 — Operator console** ✅ built (board + detail + review workflow + outreach review→approve)
 - **Phase 3 — Email sending** ✅ built (internal SMTP send on approved drafts; operator-gated; staging-safe; retry on failure)
+- **Phase 4 — Outcome tracking** ✅ built (outcome lifecycle + `/pipeline` Kanban + summary metrics)

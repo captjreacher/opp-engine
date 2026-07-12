@@ -1,5 +1,5 @@
 // Supabase Edge Function: `opportunities`
-// Standalone Local Business Opportunity Engine — the API boundary (Phase 1 + 2 + 3).
+// Standalone Local Business Opportunity Engine — the API boundary (Phase 1-4).
 //
 // Architecture:  Browser (React/Vite)  ->  THIS function (service role)  ->  existing local_business_* tables
 //
@@ -10,18 +10,18 @@
 // opportunity_console_audit_log. No MGRNZ cockpit / event-routing / auth / CRM / FMF / FYV.
 // The opportunity-intelligence backend (discovery/scoring/audit) is NOT modified.
 //
-// Email transport = the shared internal MGRNZ SMTP mailer (raw SMTP over Deno TLS), the same
-// approach used by the supercity-contact / painted-by-jess-contact Edge Functions. No third-party
-// email provider.
+// Email transport = the shared internal MGRNZ SMTP mailer (raw SMTP over Deno TLS).
 //
 // Routes (an optional `/api` prefix is tolerated):
 //   GET   /opportunities/health                       -> unauthenticated liveness (no data)
 //   GET   /opportunities                              -> board list
-//   GET   /opportunities/:id                          -> full detail (+ review_state + console_events)
+//   GET   /opportunities/pipeline                     -> outcome pipeline buckets + summary metrics
+//   GET   /opportunities/:id                          -> full detail (+ review_state + outcome_state + console_events)
 //   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
 //   PATCH /opportunities/:id/outreach/:draftId        -> edit/save or approve a draft (never sends)
 //   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via SMTP (operator-gated)
 //   POST  /opportunities/:id/review                   -> record an operator review-state transition
+//   POST  /opportunities/:id/outcome                  -> record an outcome-state transition (post-send)
 //
 // Auth: `Authorization: Bearer <OPERATOR_TOKEN>` (or `x-operator-token`). Fails closed if unset.
 
@@ -65,6 +65,24 @@ const STATE_TO_REVIEW_EVENT: Record<string, string> = {
   reviewed: "opportunity_review_started",
   approved: "opportunity_review_completed",
   contact_ready: "opportunity_contact_ready",
+};
+
+// ---- Outcome lifecycle (Phase 4; app-owned; derived from the audit log) -----
+// sent -> awaiting_response -> replied -> meeting_booked -> converted -> closed
+// "sent" is derived from a sent outreach draft; the rest are derived from these events.
+const OUTCOME_EVENT_TO_STATE: Record<string, string> = {
+  outreach_awaiting_response: "awaiting_response",
+  outreach_replied: "replied",
+  meeting_booked: "meeting_booked",
+  opportunity_converted: "converted",
+  opportunity_closed: "closed",
+};
+const STATE_TO_OUTCOME_EVENT: Record<string, string> = {
+  awaiting_response: "outreach_awaiting_response",
+  replied: "outreach_replied",
+  meeting_booked: "meeting_booked",
+  converted: "opportunity_converted",
+  closed: "opportunity_closed",
 };
 
 async function deriveReviewState(leadId: string): Promise<string> {
@@ -111,7 +129,7 @@ function getSmtpConfig(): SmtpConfig {
   const port = Number(Deno.env.get("MGRNZ_SMTP_PORT") || "465");
   const username = Deno.env.get("MGRNZ_SMTP_USERNAME") || "";
   const password = Deno.env.get("MGRNZ_SMTP_PASSWORD") || "";
-  const fromEmail = username; // shared MGRNZ sender identity
+  const fromEmail = username;
   const fromName = Deno.env.get("OUTREACH_FROM_NAME") || "Maximised AI";
   if (!host || !Number.isFinite(port) || port <= 0) throw new Error("MGRNZ SMTP configuration is invalid.");
   if (!username || !password) throw new Error("MGRNZ_SMTP_USERNAME and MGRNZ_SMTP_PASSWORD are required.");
@@ -227,6 +245,13 @@ async function getOpportunity(id: string): Promise<Response> {
   for (const r of [assessments, reports, events, drafts]) {
     if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
   }
+
+  // Outcome state derived from the app-owned audit log (latest outcome event),
+  // falling back to "sent" when a sent outreach exists, else null (not in pipeline).
+  const outcomeEvent = (cEvents as Array<{ action: string }>).find((e) => OUTCOME_EVENT_TO_STATE[e.action]);
+  const hasSentDraft = (drafts.data ?? []).some((d: { status?: string }) => d.status === "sent");
+  const outcome_state = outcomeEvent ? OUTCOME_EVENT_TO_STATE[outcomeEvent.action] : (hasSentDraft ? "sent" : null);
+
   return json({
     lead,
     latest_assessment: assessments.data?.[0] ?? null,
@@ -236,8 +261,54 @@ async function getOpportunity(id: string): Promise<Response> {
     events: events.data ?? [],
     outreach_drafts: drafts.data ?? [],
     review_state,
+    outcome_state,
     console_events: cEvents,
   });
+}
+
+// GET /opportunities/pipeline — outcome buckets + summary metrics (existing data only).
+async function pipelineView(): Promise<Response> {
+  const [listRes, draftsRes, eventsRes] = await Promise.all([
+    supabase.from("v_opportunity_list").select("id, business_name, industry, opportunity_score, has_audit"),
+    supabase.from("local_business_outreach_drafts").select("lead_id, status"),
+    supabase.from("opportunity_console_audit_log").select("lead_id, action, created_at")
+      .in("action", Object.keys(OUTCOME_EVENT_TO_STATE)).order("created_at", { ascending: false }),
+  ]);
+  for (const r of [listRes, draftsRes, eventsRes]) {
+    if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
+  }
+  const leads = (listRes.data ?? []) as Array<Record<string, unknown>>;
+  const drafts = (draftsRes.data ?? []) as Array<{ lead_id: string; status: string }>;
+  const events = (eventsRes.data ?? []) as Array<{ lead_id: string; action: string }>;
+
+  const latestOutcome = new Map<string, string>();
+  for (const e of events) { // ordered newest-first → first seen per lead is the latest
+    if (!latestOutcome.has(e.lead_id)) latestOutcome.set(e.lead_id, OUTCOME_EVENT_TO_STATE[e.action]);
+  }
+  const sentLeadIds = new Set(drafts.filter((d) => d.status === "sent").map((d) => d.lead_id));
+
+  const opportunities: Array<Record<string, unknown>> = [];
+  for (const l of leads) {
+    const id = l.id as string;
+    const outcome = latestOutcome.get(id) ?? (sentLeadIds.has(id) ? "sent" : null);
+    if (!outcome) continue; // only sent+ opportunities appear on the pipeline
+    opportunities.push({
+      id, business_name: l.business_name, industry: l.industry,
+      opportunity_score: l.opportunity_score, outcome_state: outcome,
+    });
+  }
+
+  const distinct = (act: string) => new Set(events.filter((e) => e.action === act).map((e) => e.lead_id)).size;
+  const metrics = {
+    total_opportunities: leads.length,
+    audited_opportunities: (leads as Array<{ has_audit?: boolean }>).filter((l) => l.has_audit).length,
+    drafts_created: drafts.length,
+    emails_sent: drafts.filter((d) => d.status === "sent").length,
+    replies: distinct("outreach_replied"),
+    meetings: distinct("meeting_booked"),
+    conversions: distinct("opportunity_converted"),
+  };
+  return json({ metrics, opportunities });
 }
 
 async function createOutreach(id: string, payload: Record<string, unknown>): Promise<Response> {
@@ -304,11 +375,6 @@ async function updateOutreach(id: string, draftId: string, payload: Record<strin
 }
 
 // POST /:id/outreach/:draftId/send — send an APPROVED draft via internal SMTP. Operator-gated, no auto-send.
-//
-// Lifecycle note: the DB `status` CHECK allows only draft/pending_review/approved/rejected/sent/
-// archived. So "sending" is a transient UI state and "failed" is DERIVED from the
-// `outreach_send_failed` audit event — on failure the draft stays `approved`, so the operator can
-// retry. Only a successful SMTP send flips the draft to `sent` (+ sent_at).
 async function sendOutreach(id: string, draftId: string): Promise<Response> {
   let smtp: SmtpConfig;
   try {
@@ -324,7 +390,6 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
   if (dErr) throw dErr;
   if (!draft) return json({ error: "not_found" }, 404);
 
-  // Operator-approval gate + idempotency.
   if (draft.status === "sent" || draft.sent_at) return json({ error: "already_sent", sent_at: draft.sent_at }, 409);
   if (draft.status !== "approved") {
     return json({ error: "not_approved", detail: "Only operator-approved drafts can be sent. Approve it first." }, 409);
@@ -333,7 +398,6 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
   const { data: lead } = await supabase.from("local_business_leads").select("business_name, email").eq("id", id).maybeSingle();
   const prospectEmail = (lead?.email ?? "").trim();
 
-  // Staging safety: send to the override inbox unless explicitly in live mode.
   const recipient = OVERRIDE_TO || (LIVE ? prospectEmail : "");
   if (!recipient) {
     return json({
@@ -352,7 +416,6 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
     ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
     : "") + htmlFromBody(String(draft.body ?? ""));
 
-  // Send via internal SMTP. On failure: do NOT mark sent; log failure; draft stays approved (retryable).
   try {
     await sendSmtpEmail(smtp, { subject, text, html }, draftId, recipient);
   } catch (e) {
@@ -363,7 +426,6 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
     return json({ error: "send_failed", detail: String((e as Error).message).slice(0, 300), retryable: true }, 502);
   }
 
-  // Mark sent only after a successful send.
   const { data: updated, error: uErr } = await supabase
     .from("local_business_outreach_drafts")
     .update({ status: "sent", sent_at: new Date().toISOString() })
@@ -391,6 +453,27 @@ async function setReview(id: string, payload: Record<string, unknown>): Promise<
   return json({ review_state: to, event: action }, 201);
 }
 
+// POST /:id/outcome — record an outcome-state transition (post-send lifecycle).
+async function setOutcome(id: string, payload: Record<string, unknown>): Promise<Response> {
+  const to = String((payload.to_state ?? payload.state ?? "")).toLowerCase();
+  const action = STATE_TO_OUTCOME_EVENT[to];
+  if (!action) return json({ error: "invalid_state", allowed: Object.keys(STATE_TO_OUTCOME_EVENT) }, 400);
+
+  const { data: lead } = await supabase.from("local_business_leads").select("id").eq("id", id).maybeSingle();
+  if (!lead) return json({ error: "not_found" }, 404);
+
+  // The outcome lifecycle starts at "sent" — require at least one sent outreach.
+  const { data: sentDraft } = await supabase
+    .from("local_business_outreach_drafts").select("id").eq("lead_id", id).eq("status", "sent").limit(1).maybeSingle();
+  if (!sentDraft) return json({ error: "not_sent", detail: "Send an approved outreach before tracking outcomes." }, 409);
+
+  const { error } = await supabase.from("opportunity_console_audit_log").insert({
+    action, lead_id: id, actor: "operator-console", metadata: { to_state: to },
+  });
+  if (error) throw error;
+  return json({ outcome_state: to, event: action }, 201);
+}
+
 // ---- Router -----------------------------------------------------------------
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -404,13 +487,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const parts = path.split("/").filter(Boolean);
 
   if (req.method === "GET" && parts.length === 1 && parts[0] === "health") {
-    return json({ ok: true, service: "opportunities", version: 4, transport: "smtp", ts: new Date().toISOString() });
+    return json({ ok: true, service: "opportunities", version: 5, transport: "smtp", ts: new Date().toISOString() });
   }
 
   if (!authorized(req)) return json({ error: "unauthorized" }, 401);
 
   try {
     if (req.method === "GET" && parts.length === 0) return await listOpportunities();
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "pipeline") return await pipelineView();
     if (req.method === "GET" && parts.length === 1) return await getOpportunity(parts[0]);
 
     if (req.method === "POST" && parts.length === 2 && parts[1] === "outreach") {
@@ -424,6 +508,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "review") {
       return await setReview(parts[0], await req.json().catch(() => ({})));
+    }
+    if (req.method === "POST" && parts.length === 2 && parts[1] === "outcome") {
+      return await setOutcome(parts[0], await req.json().catch(() => ({})));
     }
     return json({ error: "not_found", path, method: req.method }, 404);
   } catch (e) {

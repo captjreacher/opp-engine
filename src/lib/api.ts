@@ -11,6 +11,9 @@ import type {
   DraftStatus,
   OppDetail,
   OppListResponse,
+  OutcomeResponse,
+  OutcomeState,
+  PipelineResponse,
   ReviewResponse,
   ReviewState,
   SendResponse,
@@ -167,6 +170,22 @@ export function setReviewState(
     method: "POST",
     body: JSON.stringify({ to_state: toState }),
   });
+}
+
+/** POST {VITE_API_BASE}/{id}/outcome -> { outcome_state, event } (201) */
+export function setOutcomeState(
+  id: string,
+  toState: Exclude<OutcomeState, "sent">,
+): Promise<OutcomeResponse> {
+  return request<OutcomeResponse>(`/${encodeURIComponent(id)}/outcome`, {
+    method: "POST",
+    body: JSON.stringify({ to_state: toState }),
+  });
+}
+
+/** GET {VITE_API_BASE}/pipeline -> { metrics, opportunities } */
+export function fetchPipeline(): Promise<PipelineResponse> {
+  return request<PipelineResponse>("/pipeline");
 }
 
 /** Re-exported for convenience so components can type draft state without importing types directly. */

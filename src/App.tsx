@@ -4,6 +4,7 @@ import ConfigBanner from "./components/ConfigBanner";
 import { isApiConfigured } from "./lib/api";
 import OpportunityList from "./routes/OpportunityList";
 import OpportunityDetail from "./routes/OpportunityDetail";
+import OpportunityPipeline from "./routes/OpportunityPipeline";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/opportunities" replace />} />
           <Route path="/opportunities" element={<OpportunityList />} />
+          <Route path="/pipeline" element={<OpportunityPipeline />} />
           <Route path="/opportunities/:id" element={<OpportunityDetail />} />
           <Route
             path="*"
