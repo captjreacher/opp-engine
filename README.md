@@ -64,7 +64,60 @@ supabase functions deploy opportunities --project-ref jqfodlzcsgfocyuawzyx --no-
 supabase db push
 ```
 
+## Console (Phase 2) — standalone operator UI
+
+A React + Vite + TypeScript + Tailwind SPA that consumes the `opportunities` API.
+Routes: `/opportunities` (board) and `/opportunities/:id` (detail with the operator
+review workflow + outreach draft editing). The browser never touches Supabase directly.
+
+The API gained two console-owned routes in Phase 2 (both write only to the app-owned
+`opportunity_console_audit_log` — the intelligence backend is untouched):
+- `PATCH /opportunities/:id/outreach/:draftId` — edit/save or **approve** a draft (never sends)
+- `POST  /opportunities/:id/review` — record a review-state transition
+  (`reviewed` → `approved` → `contact_ready`)
+
+### Local development
+```bash
+cp .env.example .env     # set VITE_API_BASE and VITE_OPERATOR_TOKEN
+npm install
+npm run dev              # http://localhost:5173
+```
+```
+VITE_API_BASE=https://jqfodlzcsgfocyuawzyx.functions.supabase.co/opportunities
+VITE_OPERATOR_TOKEN=<the OPERATOR_TOKEN you set on the Edge Function>
+```
+
+### Build & deploy (staging only)
+```bash
+npm run build            # -> dist/
+```
+Serve `dist/` as a static site under `staging.maximisedai.com/<slug>/` (per CONTEXT governance).
+Set the Edge Function `ALLOWED_ORIGIN` secret to the console origin (defaults to `*`).
+The operator token ships in the client build, so keep the deployment access-restricted
+(internal / staging only) until the Supabase Auth migration (`docs/auth-migration.md`).
+
+## Email sending (Phase 3 — internal SMTP)
+
+Approved drafts are sent via the shared **internal MGRNZ SMTP mailer** (`MGRNZ_SMTP_*`) from
+`POST /opportunities/:id/outreach/:draftId/send` — operator-gated (approved-only, explicit confirm,
+no auto-send), idempotent, and staging-safe. **No third-party email provider.** On SMTP failure the
+draft stays `approved` and can be retried. See [`docs/email-sending.md`](docs/email-sending.md) for
+the secrets and recipient-resolution rules; by default it only sends to a configured test override
+and never emails a real prospect until `OUTREACH_SEND_MODE=live`.
+
+## Outcome tracking (Phase 4)
+
+After a send, operators track the business outcome on the detail page and the `/pipeline` board:
+`sent → awaiting_response → replied → meeting_booked → converted → closed`. Each action logs an
+audit event (`outreach_awaiting_response`, `outreach_replied`, `meeting_booked`,
+`opportunity_converted`, `opportunity_closed`). Outcome state is **derived** from the audit log —
+no schema change (the DB `status` CHECK is unchanged). `POST /opportunities/:id/outcome` records a
+transition (requires a sent outreach); `GET /opportunities/pipeline` returns the Kanban buckets +
+summary metrics (total / audited / drafts / emails sent / replies / meetings / conversions) from
+existing data.
+
 ## Roadmap
 - **Phase 1 — API layer** ✅ deployed
-- **Phase 2 — Dashboard**: React/Vite/Tailwind board + detail + outreach review→approve
-- **Phase 3 — Email**: Resend send on approved draft (reuse Swanson worker pattern) + emit events
+- **Phase 2 — Operator console** ✅ built (board + detail + review workflow + outreach review→approve)
+- **Phase 3 — Email sending** ✅ built (internal SMTP send on approved drafts; operator-gated; staging-safe; retry on failure)
+- **Phase 4 — Outcome tracking** ✅ built (outcome lifecycle + `/pipeline` Kanban + summary metrics)
