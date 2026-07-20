@@ -237,3 +237,86 @@ export interface ApiErrorBody {
   allowed?: string[];
   [key: string]: unknown;
 }
+
+export type DiscoveryRunStatus =
+  | "queued" | "discovering" | "enriching" | "scoring" | "auditing"
+  | "completed" | "partially_completed" | "failed" | "cancelled";
+
+export interface DiscoverySearchInput {
+  location: string;
+  industry: string;
+  keywords: string;
+  radius_m: number | null;
+  result_limit: number;
+}
+
+export interface DiscoveryRun extends DiscoverySearchInput {
+  id: string;
+  status: DiscoveryRunStatus;
+  current_stage: string;
+  businesses_discovered: number;
+  candidates_enriched: number;
+  candidates_scored: number;
+  audits_generated: number;
+  failures: number;
+  error_summary: unknown[];
+  created_by: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+}
+
+export interface DiscoveryEvent {
+  id: string;
+  event_type: string;
+  status: string;
+  payload: unknown;
+  created_at: string;
+  entity_id: string;
+}
+
+export interface DiscoveryCandidate {
+  id: string;
+  run_id: string;
+  source: string;
+  source_identifier: string;
+  business_name: string;
+  normalized_identity: string;
+  location: string | null;
+  address: string | null;
+  industry: string | null;
+  website_url: string | null;
+  phone: string | null;
+  email: string | null;
+  google_maps_url: string | null;
+  source_payload: Record<string, unknown>;
+  enrichment_evidence: unknown;
+  preliminary_signals: unknown[];
+  preliminary_score: string | null;
+  duplicate_lead_id: string | null;
+  imported_lead_id: string | null;
+  enrichment_status: string;
+  assessment_status: string;
+  audit_status: string;
+  import_status: string;
+  error_info: Record<string, unknown>;
+  events: DiscoveryEvent[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DiscoveryRunResponse { run: DiscoveryRun; }
+export interface DiscoveryCandidatesResponse { candidates: DiscoveryCandidate[]; }
+export interface BatchActionResult {
+  candidate_id: string;
+  lead_id?: string;
+  ok: boolean;
+  error?: string;
+}
+export interface BatchActionResponse {
+  results: BatchActionResult[];
+  succeeded: number;
+  failed: number;
+  partial: boolean;
+}
