@@ -282,16 +282,23 @@ interface PlacesResult {
 async function refreshRunCounts(runId: string): Promise<void> {
   const { data, error } = await supabase.from("opportunity_discovery_candidates")
     .select("enrichment_status, assessment_status, audit_status, error_info").eq("run_id", runId);
-  if (error) throw error;
+  if (error) throw new Error(`candidate_count_refresh_failed: ${error.message}`);
+
   const rows = data ?? [];
   const failures = rows.filter((row) =>
-    row.enrichment_status === "failed" || row.assessment_status === "failed" || row.audit_status === "failed" ||
+    row.enrichment_status === "failed" ||
+    row.assessment_status === "failed" ||
+    row.audit_status === "failed" ||
     Object.keys((row.error_info as JsonObject | null) ?? {}).length > 0
   ).length;
-  const terminal = rows.every((row) => !["queued", "enriching", "scoring", "auditing"].includes(
-    row.audit_status === "auditing" ? row.audit_status : row.assessment_status === "scoring" ? row.assessment_status : row.enrichment_status,
-  ));
-  await supabase.from("opportunity_discovery_runs").update({
+  const activeStatuses = new Set(["queued", "enriching", "scoring", "auditing"]);
+  const terminal = rows.every((row) =>
+    !activeStatuses.has(String(row.enrichment_status ?? "")) &&
+    !activeStatuses.has(String(row.assessment_status ?? "")) &&
+    !activeStatuses.has(String(row.audit_status ?? ""))
+  );
+
+  const { error: updateError } = await supabase.from("opportunity_discovery_runs").update({
     businesses_discovered: rows.length,
     candidates_enriched: rows.filter((r) => ["enriched", "partial"].includes(r.enrichment_status)).length,
     candidates_scored: rows.filter((r) => r.assessment_status === "scored").length,
@@ -299,6 +306,7 @@ async function refreshRunCounts(runId: string): Promise<void> {
     failures,
     ...(terminal && failures > 0 ? { status: "partially_completed" } : {}),
   }).eq("id", runId);
+  if (updateError) throw new Error(`run_count_update_failed: ${updateError.message}`);
 }
 
 async function findDuplicateLead(candidate: {
@@ -452,29 +460,152 @@ async function importCandidates(runId: string, payload: JsonObject): Promise<Res
   return json({ results, succeeded: results.length - failed, failed, partial: failed > 0 }, failed === results.length ? 422 : 200);
 }
 
-async function assessOpportunity(leadId: string, retry = false): Promise<{ ok: boolean; assessment?: JsonObject; evidence?: unknown; error?: string }> {
-  const { data: existing } = await supabase.from("local_business_lead_assessments").select("*").eq("lead_id", leadId).order("assessed_at", { ascending: false }).limit(1).maybeSingle();
-  if (existing && !retry) {
-    const { data: lead } = await supabase.from("local_business_leads").select("enrichment_diagnostics").eq("id", leadId).maybeSingle();
-    return { ok: true, assessment: existing as JsonObject, evidence: (lead?.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {} };
+async function assessOpportunity(
+  leadId: string,
+  retry = false,
+): Promise<{ ok: boolean; assessment?: JsonObject; evidence?: unknown; error?: string; diagnostics?: JsonObject }> {
+  const { data: existing, error: existingError } = await supabase
+    .from("local_business_lead_assessments")
+    .select("*")
+    .eq("lead_id", leadId)
+    .order("assessed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingError) {
+    return {
+      ok: false,
+      error: `assessment_lookup_failed: ${existingError.message}`,
+      diagnostics: { stage: "existing_assessment_lookup", lead_id: leadId },
+    };
   }
-  await supabase.rpc("emit_local_business_event", { p_lead_id: leadId, p_event_type: "local_business.assessment_requested", p_status: "started", p_payload: { source: "opportunity-engine" } });
+
+  if (existing && !retry) {
+    const { data: lead, error: leadError } = await supabase
+      .from("local_business_leads")
+      .select("enrichment_diagnostics")
+      .eq("id", leadId)
+      .maybeSingle();
+    if (leadError) {
+      return {
+        ok: false,
+        error: `lead_diagnostics_lookup_failed: ${leadError.message}`,
+        diagnostics: { stage: "existing_assessment_evidence_lookup", lead_id: leadId },
+      };
+    }
+    return {
+      ok: true,
+      assessment: existing as JsonObject,
+      evidence: (lead?.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {},
+    };
+  }
+
+  const { error: requestedEventError } = await supabase.rpc("emit_local_business_event", {
+    p_lead_id: leadId,
+    p_event_type: "local_business.assessment_requested",
+    p_status: "started",
+    p_payload: { source: "opportunity-engine", retry },
+  });
+  if (requestedEventError) {
+    return {
+      ok: false,
+      error: `assessment_requested_event_failed: ${requestedEventError.message}`,
+      diagnostics: { stage: "assessment_requested_event", lead_id: leadId },
+    };
+  }
+
+  let responseStatus: number | null = null;
+  let responseBody: JsonObject = {};
+  let responseText = "";
+
   try {
     const response = await fetch(`${SUPABASE_URL}/functions/v1/local-business-enrich`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${SERVICE_ROLE_KEY}`, apikey: SERVICE_ROLE_KEY, "content-type": "application/json" },
-      body: JSON.stringify({ lead_id: leadId, action: retry ? "reenrich" : "enrich", source: "opportunity-engine" }),
+      headers: {
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+        apikey: SERVICE_ROLE_KEY,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        lead_id: leadId,
+        action: retry ? "reenrich" : "enrich",
+        source: "opportunity-engine",
+      }),
     });
-    const body = await response.json().catch(() => ({})) as JsonObject;
-    if (!response.ok || body.ok === false) throw new Error(String(body.error ?? body.status ?? `enrichment_http_${response.status}`));
-    const { data: assessment, error } = await supabase.from("local_business_lead_assessments").select("*").eq("lead_id", leadId).order("assessed_at", { ascending: false }).limit(1).maybeSingle();
-    if (error || !assessment) throw new Error(error?.message ?? "canonical assessment was not created");
-    const { data: lead } = await supabase.from("local_business_leads").select("enrichment_diagnostics").eq("id", leadId).maybeSingle();
-    return { ok: true, assessment: assessment as JsonObject, evidence: (lead?.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {} };
+
+    responseStatus = response.status;
+    responseText = await response.text();
+    if (responseText) {
+      try {
+        responseBody = JSON.parse(responseText) as JsonObject;
+      } catch {
+        responseBody = { raw_response: responseText.slice(0, 1000) };
+      }
+    }
+
+    if (!response.ok || responseBody.ok === false) {
+      const providerDetail = cleanText(
+        responseBody.detail ?? responseBody.error ?? responseBody.message ?? responseBody.status,
+        500,
+      ) ?? `enrichment_http_${response.status}`;
+      throw new Error(providerDetail);
+    }
+
+    const { data: assessment, error: assessmentError } = await supabase
+      .from("local_business_lead_assessments")
+      .select("*")
+      .eq("lead_id", leadId)
+      .order("assessed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (assessmentError) {
+      throw new Error(`canonical_assessment_lookup_failed: ${assessmentError.message}`);
+    }
+    if (!assessment) {
+      throw new Error("canonical_assessment_missing_after_enrichment");
+    }
+
+    const { data: lead, error: leadError } = await supabase
+      .from("local_business_leads")
+      .select("enrichment_diagnostics")
+      .eq("id", leadId)
+      .maybeSingle();
+    if (leadError) throw new Error(`lead_diagnostics_lookup_failed: ${leadError.message}`);
+
+    return {
+      ok: true,
+      assessment: assessment as JsonObject,
+      evidence: (lead?.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {},
+      diagnostics: {
+        stage: "completed",
+        lead_id: leadId,
+        enrichment_http_status: responseStatus,
+        enrichment_response: responseBody,
+      },
+    };
   } catch (error) {
-    const detail = String((error as Error).message).slice(0, 300);
-    await supabase.rpc("emit_local_business_event", { p_lead_id: leadId, p_event_type: "local_business.assessment_failed", p_status: "failed", p_payload: { source: "opportunity-engine", detail } });
-    return { ok: false, error: detail };
+    const detail = String(error instanceof Error ? error.message : error).slice(0, 500);
+    const diagnostics: JsonObject = {
+      stage: "assessment",
+      lead_id: leadId,
+      retry,
+      enrichment_http_status: responseStatus,
+      enrichment_response: responseBody,
+      enrichment_raw_response: responseText ? responseText.slice(0, 1000) : null,
+      detail,
+    };
+
+    const { error: eventError } = await supabase.rpc("emit_local_business_event", {
+      p_lead_id: leadId,
+      p_event_type: "local_business.assessment_failed",
+      p_status: "failed",
+      p_payload: { source: "opportunity-engine", ...diagnostics },
+    });
+    if (eventError) {
+      console.error("Failed to emit assessment_failed event for lead", leadId, eventError.message);
+    }
+
+    return { ok: false, error: detail, diagnostics };
   }
 }
 
@@ -529,41 +660,137 @@ async function auditOpportunity(leadId: string, retry = false): Promise<{ ok: bo
 async function processCandidateBatch(runId: string, payload: JsonObject, operation: "assess" | "audit"): Promise<Response> {
   const ids = uuidList(payload.candidate_ids);
   if (!ids) return json({ error: "validation_failed", detail: `candidate_ids must contain 1-${MAX_BATCH_SIZE} UUIDs.` }, 422);
-  const { data: candidates, error } = await supabase.from("opportunity_discovery_candidates").select("*").eq("run_id", runId).in("id", ids);
+
+  const { data: candidates, error } = await supabase
+    .from("opportunity_discovery_candidates")
+    .select("*")
+    .eq("run_id", runId)
+    .in("id", ids);
   if (error) throw error;
   if ((candidates ?? []).length !== ids.length) return json({ error: "candidate_scope_mismatch" }, 422);
-  await supabase.from("opportunity_discovery_runs").update({ status: operation === "assess" ? "scoring" : "auditing", current_stage: operation === "assess" ? "scoring" : "auditing", completed_at: null }).eq("id", runId);
-  const results = [];
+
+  const runPatch = {
+    status: operation === "assess" ? "scoring" : "auditing",
+    current_stage: operation === "assess" ? "scoring" : "auditing",
+    completed_at: null,
+  };
+  const { error: runStartError } = await supabase.from("opportunity_discovery_runs").update(runPatch).eq("id", runId);
+  if (runStartError) throw new Error(`run_start_update_failed: ${runStartError.message}`);
+
+  const results: Array<Record<string, unknown>> = [];
   for (const candidate of candidates ?? []) {
     const leadId = candidate.imported_lead_id ?? candidate.duplicate_lead_id;
     if (!leadId) {
       const detail = "Import the candidate before processing.";
       const statusPatch = operation === "assess" ? { assessment_status: "failed" } : { audit_status: "failed" };
-      await supabase.from("opportunity_discovery_candidates").update({ ...statusPatch, error_info: { stage: operation, detail } }).eq("id", candidate.id);
-      results.push({ candidate_id: candidate.id, ok: false, error: detail });
+      const errorInfo = { stage: operation, detail, candidate_id: candidate.id, run_id: runId };
+      const { error: candidateError } = await supabase
+        .from("opportunity_discovery_candidates")
+        .update({ ...statusPatch, error_info: errorInfo })
+        .eq("id", candidate.id);
+      results.push({
+        candidate_id: candidate.id,
+        ok: false,
+        error: candidateError ? `${detail} Candidate update also failed: ${candidateError.message}` : detail,
+        diagnostics: errorInfo,
+      });
       continue;
     }
-    const runningPatch = operation === "assess" ? { enrichment_status: "enriching", assessment_status: "scoring" } : { audit_status: "auditing" };
-    await supabase.from("opportunity_discovery_candidates").update(runningPatch).eq("id", candidate.id);
-    const result: { ok: boolean; assessment?: JsonObject; audit?: JsonObject; evidence?: unknown; error?: string } = operation === "assess"
+
+    const runningPatch = operation === "assess"
+      ? { enrichment_status: "enriching", assessment_status: "scoring", error_info: {} }
+      : { audit_status: "auditing", error_info: {} };
+    const { error: runningError } = await supabase
+      .from("opportunity_discovery_candidates")
+      .update(runningPatch)
+      .eq("id", candidate.id);
+    if (runningError) {
+      results.push({
+        candidate_id: candidate.id,
+        lead_id: leadId,
+        ok: false,
+        error: `candidate_running_status_update_failed: ${runningError.message}`,
+      });
+      continue;
+    }
+
+    const result: {
+      ok: boolean;
+      assessment?: JsonObject;
+      audit?: JsonObject;
+      evidence?: unknown;
+      error?: string;
+      diagnostics?: JsonObject;
+    } = operation === "assess"
       ? await assessOpportunity(leadId, payload.retry === true)
       : await auditOpportunity(leadId, payload.retry === true);
-    if (result.ok) {
-      const successPatch = operation === "assess"
-        ? { enrichment_status: "enriched", assessment_status: "scored", preliminary_score: result.assessment?.opportunity_score ?? null, enrichment_evidence: result.evidence ?? {}, error_info: {} }
-        : { audit_status: "audited", error_info: {} };
-      await supabase.from("opportunity_discovery_candidates").update(successPatch).eq("id", candidate.id);
-    } else {
-      const failurePatch = operation === "assess" ? { enrichment_status: "failed", assessment_status: "failed" } : { audit_status: "failed" };
-      await supabase.from("opportunity_discovery_candidates").update({ ...failurePatch, error_info: { stage: operation, detail: result.error } }).eq("id", candidate.id);
-    }
-    await emitWorkflowEvent({ eventType: `opportunity.discovery_candidate.${operation}.${result.ok ? "completed" : "failed"}`, entityType: "opportunity_discovery_candidate", entityId: candidate.id, entityRef: candidate.business_name, status: result.ok ? "completed" : "failed", payload: { run_id: runId, lead_id: leadId, error: result.error ?? null } });
-    results.push({ candidate_id: candidate.id, lead_id: leadId, ...result });
+
+    const errorInfo = result.ok ? {} : {
+      stage: operation,
+      detail: result.error ?? `${operation}_failed`,
+      lead_id: leadId,
+      candidate_id: candidate.id,
+      run_id: runId,
+      diagnostics: result.diagnostics ?? {},
+      failed_at: new Date().toISOString(),
+    };
+    const finalPatch = result.ok
+      ? operation === "assess"
+        ? {
+          enrichment_status: "enriched",
+          assessment_status: "scored",
+          preliminary_score: result.assessment?.opportunity_score ?? null,
+          enrichment_evidence: result.evidence ?? {},
+          error_info: {},
+        }
+        : { audit_status: "audited", error_info: {} }
+      : operation === "assess"
+        ? { enrichment_status: "failed", assessment_status: "failed", error_info: errorInfo }
+        : { audit_status: "failed", error_info: errorInfo };
+
+    const { error: finalUpdateError } = await supabase
+      .from("opportunity_discovery_candidates")
+      .update(finalPatch)
+      .eq("id", candidate.id);
+
+    const workflowPayload: JsonObject = {
+      run_id: runId,
+      lead_id: leadId,
+      error: result.error ?? null,
+      diagnostics: result.diagnostics ?? {},
+      candidate_update_error: finalUpdateError?.message ?? null,
+    };
+    await emitWorkflowEvent({
+      eventType: `opportunity.discovery_candidate.${operation}.${result.ok && !finalUpdateError ? "completed" : "failed"}`,
+      entityType: "opportunity_discovery_candidate",
+      entityId: candidate.id,
+      entityRef: candidate.business_name,
+      status: result.ok && !finalUpdateError ? "completed" : "failed",
+      payload: workflowPayload,
+    }).catch(() => undefined);
+
+    results.push({
+      candidate_id: candidate.id,
+      lead_id: leadId,
+      ...result,
+      ok: result.ok && !finalUpdateError,
+      error: finalUpdateError ? `candidate_final_status_update_failed: ${finalUpdateError.message}` : result.error,
+    });
   }
-  const failed = results.filter((r) => !r.ok).length;
+
+  const failed = results.filter((result) => result.ok !== true).length;
   await refreshRunCounts(runId);
-  await supabase.from("opportunity_discovery_runs").update({ status: failed ? "partially_completed" : "completed", current_stage: operation === "assess" ? "scoring_complete" : "auditing_complete", completed_at: new Date().toISOString() }).eq("id", runId);
-  return json({ results, succeeded: results.length - failed, failed, partial: failed > 0 }, failed === results.length ? 422 : 200);
+  const { error: runCompleteError } = await supabase.from("opportunity_discovery_runs").update({
+    status: failed ? "partially_completed" : "completed",
+    current_stage: operation === "assess" ? "scoring_complete" : "auditing_complete",
+    completed_at: new Date().toISOString(),
+  }).eq("id", runId);
+  if (runCompleteError) throw new Error(`run_completion_update_failed: ${runCompleteError.message}`);
+
+  return json(
+    { results, succeeded: results.length - failed, failed, partial: failed > 0 },
+    failed === results.length ? 422 : 200,
+  );
 }
 
 async function singleIntelligenceAction(leadId: string, payload: JsonObject, operation: "assess" | "audit"): Promise<Response> {

@@ -18,6 +18,25 @@ function failureBranchBlock(): string {
   return end !== -1 ? enrichSource.slice(catchIdx, end) : enrichSource.slice(catchIdx);
 }
 
+/**
+ * Verify the Edge Function never chains .catch() directly on supabase.rpc().
+ * Supabase JS v2 returns a PostgrestFilterBuilder that is thenable (.then()) but
+ * does NOT implement .catch() — chaining .catch() on the builder throws
+ * "supabase.rpc(...).catch is not a function".
+ */
+function findRPCDotCatch(source: string): string[] {
+  const results: string[] = [];
+  let idx = 0;
+  while (idx < source.length) {
+    const rpcStart = source.indexOf("supabase.rpc", idx);
+    if (rpcStart === -1) break;
+    const tail = source.slice(rpcStart, Math.min(rpcStart + 200, source.length));
+    if (tail.includes(".catch(")) results.push(`line ${source.slice(0, rpcStart).split("\n").length}: ...${tail.slice(tail.length - 80)}...`);
+    idx = rpcStart + 1;
+  }
+  return results;
+}
+
 describe("Phase 5 backend contract", () => {
   it("authenticates before all data routes", () => {
     expect(edgeSource.indexOf("if (!authorized(req))")).toBeLessThan(edgeSource.indexOf("if (req.method === \"GET\" && parts.length === 0)"));
@@ -41,6 +60,35 @@ describe("Phase 5 backend contract", () => {
     const phase5Block = edgeSource.slice(edgeSource.indexOf("Discovery / intelligence orchestration"), edgeSource.indexOf("Existing opportunity / outreach handlers"));
     expect(phase5Block).not.toContain("sendSmtpEmail");
     expect(phase5Block).not.toContain("local_business_outreach_drafts");
+  });
+});
+
+describe("edge function RPC error handling", () => {
+  it("never chains .catch() directly on supabase.rpc()", () => {
+    const violations = findRPCDotCatch(edgeSource);
+    expect(violations).toEqual([]);
+  });
+
+  it("assessOpportunity catch block uses const { error } = await supabase.rpc(...)", () => {
+    // Locate the console.error message we added and verify the surrounding pattern
+    const failEventLine = edgeSource.indexOf("Failed to emit assessment_failed event for lead");
+    expect(failEventLine).toBeGreaterThan(-1);
+
+    // Walk backwards to find the nearest supabase.rpc call before this message
+    const blockBefore = edgeSource.slice(Math.max(0, failEventLine - 300), failEventLine);
+    expect(blockBefore).toContain("supabase.rpc");
+    // Must NOT contain .catch(
+    expect(blockBefore).not.toContain(".catch(");
+  });
+
+  it("emitWorkflowEvent .catch() chains on a Promise (safe pattern)", () => {
+    // These use .catch() on an async function's return value, which IS a Promise — safe
+    const lines = edgeSource.split("\n");
+    const unsafeLines = lines.filter((l) => l.includes("emitWorkflowEvent") && l.includes(".catch("));
+    // They exist and that's OK — emitWorkflowEvent is async, returns a Promise
+    expect(unsafeLines.length).toBeGreaterThan(0);
+    // No emitWorkflowEvent call uses .catch() in a way that would fail
+    // (emitWorkflowEvent returns a Promise, so .catch() works)
   });
 });
 
