@@ -1,14 +1,13 @@
 // Supabase Edge Function: `opportunities`
-// Standalone Local Business Opportunity Engine — the API boundary (Phase 1-4).
+// Standalone Local Business Opportunity Engine — the API boundary (Phase 1-5).
 //
 // Architecture:  Browser (React/Vite)  ->  THIS function (service role)  ->  existing local_business_* tables
 //
 // The browser NEVER receives privileged database access. It calls these endpoints with an
 // operator bearer token; the function uses the Supabase service role (auto-injected).
 //
-// Standalone only: touches ONLY the local_business_* family + the app-owned
-// opportunity_console_audit_log. No MGRNZ cockpit / event-routing / auth / CRM / FMF / FYV.
-// The opportunity-intelligence backend (discovery/scoring/audit) is NOT modified.
+// Standalone only: no MGRNZ Cockpit / CRM / FMF / FYV UI integration. Phase 5
+// orchestrates Google Places plus the canonical local-business-enrich scorer.
 //
 // Email transport = the shared internal MGRNZ SMTP mailer (raw SMTP over Deno TLS).
 //
@@ -17,6 +16,11 @@
 //   GET   /opportunities                              -> board list
 //   GET   /opportunities/pipeline                     -> outcome pipeline buckets + summary metrics
 //   GET   /opportunities/:id                          -> full detail (+ review_state + outcome_state + console_events)
+//   POST  /opportunities/discovery-runs               -> queue provider discovery
+//   GET   /opportunities/discovery-runs/:runId        -> durable run status
+//   GET   /opportunities/discovery-runs/:runId/candidates
+//   POST  /opportunities/discovery-runs/:runId/candidates/{import|assess|audit}
+//   POST  /opportunities/:id/{assess|audit}           -> canonical single-record intelligence action
 //   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
 //   PATCH /opportunities/:id/outreach/:draftId        -> edit/save or approve a draft (never sends)
 //   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via SMTP (operator-gated)
@@ -31,6 +35,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPERATOR_TOKEN = Deno.env.get("OPERATOR_TOKEN") ?? "";
 const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
+const GOOGLE_PLACES_API_KEY = Deno.env.get("GOOGLE_PLACES_API_KEY") ?? "";
+const MAX_DISCOVERY_RESULTS = 20;
+const MAX_BATCH_SIZE = 25;
+const AUDIT_REPORT_VERSION = "opportunity-engine-v1";
 
 const cors = {
   "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
@@ -53,6 +61,45 @@ function authorized(req: Request): boolean {
   const bearer = h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
   const alt = req.headers.get("x-operator-token") ?? "";
   return (bearer.length > 0 && bearer === OPERATOR_TOKEN) || (alt.length > 0 && alt === OPERATOR_TOKEN);
+}
+
+type JsonObject = Record<string, unknown>;
+
+function cleanText(value: unknown, max = 200): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim().replace(/\s+/g, " ");
+  return cleaned ? cleaned.slice(0, max) : null;
+}
+
+function normalizeBusinessIdentity(name: string, location: string | null): string {
+  const part = (value: string) => value.toLowerCase().normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
+  return `${part(name)}|${part(location ?? "")}`;
+}
+
+function uuidList(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_BATCH_SIZE) return null;
+  const ids = [...new Set(value.map(String))];
+  return ids.every((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) ? ids : null;
+}
+
+async function emitWorkflowEvent(args: {
+  eventType: string; entityType: string; entityId: string; entityRef?: string | null;
+  status: string; payload?: JsonObject;
+}): Promise<void> {
+  const { error } = await supabase.from("events").insert({
+    source_system: "opportunity-engine",
+    event_type: args.eventType,
+    entity_type: args.entityType,
+    entity_id: args.entityId,
+    entity_ref: args.entityRef ?? null,
+    status: args.status,
+    payload: args.payload ?? {},
+    risk_category: "business_process",
+    risk_assertions: ["processing"],
+    risk_version: "risk-map-v1",
+  });
+  if (error) throw new Error(`event_insert_failed: ${error.message}`);
 }
 
 // ---- Operator review workflow (app-owned; derived from the audit log) -------
@@ -191,7 +238,7 @@ async function connectSmtp(host: string, port: number): Promise<Deno.Conn | Deno
   await readSmtpGreeting(conn);
   await smtpCommand(conn, `EHLO ${EHLO_DOMAIN}`, [250]);
   await smtpCommand(conn, "STARTTLS", [220]);
-  conn = await Deno.startTls(conn, { hostname: host });
+  conn = await Deno.startTls(conn as Deno.TcpConn, { hostname: host });
   return conn;
 }
 async function sendSmtpEmail(cfg: SmtpConfig, email: { subject: string; text: string; html: string }, tag: string, recipient: string): Promise<void> {
@@ -218,7 +265,541 @@ async function sendSmtpEmail(cfg: SmtpConfig, email: { subject: string; text: st
   }
 }
 
-// ---- Handlers ---------------------------------------------------------------
+// ---- Discovery / intelligence orchestration (Phase 5) ----------------------
+
+interface PlacesResult {
+  id?: string;
+  displayName?: { text?: string };
+  formattedAddress?: string;
+  shortFormattedAddress?: string;
+  nationalPhoneNumber?: string;
+  websiteUri?: string;
+  googleMapsUri?: string;
+  primaryTypeDisplayName?: { text?: string };
+  types?: string[];
+}
+
+async function refreshRunCounts(runId: string): Promise<void> {
+  const { data, error } = await supabase.from("opportunity_discovery_candidates")
+    .select("enrichment_status, assessment_status, audit_status, error_info").eq("run_id", runId);
+  if (error) throw new Error(`candidate_count_refresh_failed: ${error.message}`);
+
+  const rows = data ?? [];
+  const failures = rows.filter((row) =>
+    row.enrichment_status === "failed" ||
+    row.assessment_status === "failed" ||
+    row.audit_status === "failed" ||
+    Object.keys((row.error_info as JsonObject | null) ?? {}).length > 0
+  ).length;
+  const activeStatuses = new Set(["queued", "enriching", "scoring", "auditing"]);
+  const terminal = rows.every((row) =>
+    !activeStatuses.has(String(row.enrichment_status ?? "")) &&
+    !activeStatuses.has(String(row.assessment_status ?? "")) &&
+    !activeStatuses.has(String(row.audit_status ?? ""))
+  );
+
+  const { error: updateError } = await supabase.from("opportunity_discovery_runs").update({
+    businesses_discovered: rows.length,
+    candidates_enriched: rows.filter((r) => ["enriched", "partial"].includes(r.enrichment_status)).length,
+    candidates_scored: rows.filter((r) => r.assessment_status === "scored").length,
+    audits_generated: rows.filter((r) => r.audit_status === "audited").length,
+    failures,
+    ...(terminal && failures > 0 ? { status: "partially_completed" } : {}),
+  }).eq("id", runId);
+  if (updateError) throw new Error(`run_count_update_failed: ${updateError.message}`);
+}
+
+async function findDuplicateLead(candidate: {
+  businessName: string; location: string | null; website: string | null; mapsUrl: string | null;
+}): Promise<string | null> {
+  if (candidate.mapsUrl) {
+    const { data } = await supabase.from("local_business_leads").select("id").eq("google_maps_url", candidate.mapsUrl).limit(1).maybeSingle();
+    if (data?.id) return data.id;
+  }
+  if (candidate.website) {
+    const canonical = candidate.website.replace(/\/+$/, "");
+    const { data } = await supabase.from("local_business_leads").select("id,website_url").ilike("website_url", `${canonical}%`).limit(5);
+    const match = (data ?? []).find((lead) => String(lead.website_url ?? "").replace(/\/+$/, "").toLowerCase() === canonical.toLowerCase());
+    if (match?.id) return match.id;
+  }
+  const { data } = await supabase.from("local_business_leads").select("id,business_name,suburb,region").ilike("business_name", candidate.businessName).limit(20);
+  const identity = normalizeBusinessIdentity(candidate.businessName, candidate.location);
+  const match = (data ?? []).find((lead) => normalizeBusinessIdentity(
+    String(lead.business_name), cleanText(lead.suburb) ?? cleanText(lead.region),
+  ) === identity);
+  return match?.id ?? null;
+}
+
+async function executeDiscoveryRun(runId: string, input: { location: string; industry: string; keywords: string | null; resultLimit: number }): Promise<void> {
+  const { location, industry, keywords, resultLimit } = input;
+  try {
+    const { error: startError } = await supabase.from("opportunity_discovery_runs").update({ status: "discovering", current_stage: "discovering", started_at: new Date().toISOString() }).eq("id", runId);
+    if (startError) throw startError;
+    await emitWorkflowEvent({ eventType: "opportunity.discovery.started", entityType: "opportunity_discovery_run", entityId: runId, entityRef: `${industry} in ${location}`, status: "started", payload: { ...input } });
+    const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.primaryTypeDisplayName,places.types",
+      },
+      body: JSON.stringify({ textQuery: [keywords, industry, location].filter(Boolean).join(" "), maxResultCount: resultLimit, languageCode: "en" }),
+    });
+    const providerBody = await response.json().catch(() => ({})) as { places?: PlacesResult[]; error?: { message?: string } };
+    if (!response.ok) throw new Error(`google_places_${response.status}: ${providerBody.error?.message ?? "request failed"}`);
+    const candidates = [];
+    for (const place of providerBody.places ?? []) {
+      const businessName = cleanText(place.displayName?.text, 200);
+      const sourceIdentifier = cleanText(place.id, 200);
+      if (!businessName || !sourceIdentifier) continue;
+      const website = cleanText(place.websiteUri, 500);
+      const mapsUrl = cleanText(place.googleMapsUri, 500);
+      const phone = cleanText(place.nationalPhoneNumber, 80);
+      const duplicateLeadId = await findDuplicateLead({ businessName, location, website, mapsUrl });
+      candidates.push({
+        run_id: runId, source: "google_places", source_identifier: sourceIdentifier,
+        business_name: businessName, normalized_identity: normalizeBusinessIdentity(businessName, location),
+        location, address: cleanText(place.formattedAddress, 500),
+        industry: cleanText(place.primaryTypeDisplayName?.text, 120) ?? industry,
+        website_url: website, phone, google_maps_url: mapsUrl,
+        source_payload: place,
+        preliminary_signals: [website ? "website_present" : "website_missing", phone ? "phone_present" : "phone_missing", mapsUrl ? "google_profile_present" : "google_profile_missing"],
+        duplicate_lead_id: duplicateLeadId,
+        import_status: duplicateLeadId ? "existing" : "not_imported",
+      });
+    }
+    if (candidates.length) {
+      const { data: inserted, error } = await supabase.from("opportunity_discovery_candidates").insert(candidates).select("id,business_name");
+      if (error) throw error;
+      const { error: eventError } = await supabase.from("events").insert((inserted ?? []).map((candidate) => ({
+        source_system: "opportunity-engine", event_type: "opportunity.discovery_candidate.discovered",
+        entity_type: "opportunity_discovery_candidate", entity_id: candidate.id, entity_ref: candidate.business_name,
+        status: "completed", payload: { run_id: runId }, risk_category: "business_process",
+        risk_assertions: ["input"], risk_version: "risk-map-v1",
+      })));
+      if (eventError) throw new Error(`candidate_event_insert_failed: ${eventError.message}`);
+    }
+    const { error } = await supabase.from("opportunity_discovery_runs").update({
+      status: "completed", current_stage: "discovery_complete", businesses_discovered: candidates.length, completed_at: new Date().toISOString(),
+    }).eq("id", runId);
+    if (error) throw error;
+    await emitWorkflowEvent({ eventType: "opportunity.discovery.completed", entityType: "opportunity_discovery_run", entityId: runId, status: "completed", payload: { businesses_discovered: candidates.length } });
+  } catch (error) {
+    const detail = String((error as Error).message).slice(0, 500);
+    await supabase.from("opportunity_discovery_runs").update({ status: "failed", current_stage: "discovery_failed", failures: 1, error_summary: [{ stage: "discovering", detail }], completed_at: new Date().toISOString() }).eq("id", runId);
+    await emitWorkflowEvent({ eventType: "opportunity.discovery.failed", entityType: "opportunity_discovery_run", entityId: runId, status: "failed", payload: { detail } }).catch(() => undefined);
+  }
+}
+
+async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
+  const location = cleanText(payload.location, 120);
+  const industry = cleanText(payload.industry ?? payload.category, 120);
+  const keywords = cleanText(payload.keywords, 200);
+  const radius = payload.radius_m == null || payload.radius_m === "" ? null : Number(payload.radius_m);
+  const resultLimit = Number(payload.result_limit ?? 20);
+  const validation: Record<string, string> = {};
+  if (!location) validation.location = "Location is required.";
+  if (!industry) validation.industry = "Industry or category is required.";
+  if (!Number.isInteger(resultLimit) || resultLimit < 1 || resultLimit > MAX_DISCOVERY_RESULTS) validation.result_limit = `Maximum results must be between 1 and ${MAX_DISCOVERY_RESULTS}.`;
+  if (radius !== null && (!Number.isInteger(radius) || radius < 100 || radius > 50000)) validation.radius_m = "Radius must be between 100 and 50,000 metres.";
+  if (Object.keys(validation).length) return json({ error: "validation_failed", fields: validation }, 422);
+  if (!GOOGLE_PLACES_API_KEY) return json({ error: "provider_not_configured", detail: "GOOGLE_PLACES_API_KEY is not configured server-side." }, 503);
+
+  const { data: run, error: runError } = await supabase.from("opportunity_discovery_runs").insert({
+    location, industry, keywords, radius_m: radius, result_limit: resultLimit,
+    status: "queued", current_stage: "queued",
+  }).select("*").single();
+  if (runError) throw runError;
+  const work = executeDiscoveryRun(run.id, { location: location!, industry: industry!, keywords, resultLimit });
+  const runtime = globalThis as typeof globalThis & { EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void } };
+  if (runtime.EdgeRuntime) runtime.EdgeRuntime.waitUntil(work);
+  else await work;
+  return json({ run }, 202);
+}
+
+async function getDiscoveryRun(runId: string): Promise<Response> {
+  const { data, error } = await supabase.from("opportunity_discovery_runs").select("*").eq("id", runId).maybeSingle();
+  if (error) throw error;
+  return data ? json({ run: data }) : json({ error: "not_found" }, 404);
+}
+
+async function listDiscoveryCandidates(runId: string): Promise<Response> {
+  const { data: run } = await supabase.from("opportunity_discovery_runs").select("id").eq("id", runId).maybeSingle();
+  if (!run) return json({ error: "not_found" }, 404);
+  const { data, error } = await supabase.from("opportunity_discovery_candidates").select("*").eq("run_id", runId).order("created_at");
+  if (error) throw error;
+  const ids = (data ?? []).map((candidate) => candidate.id);
+  const { data: events } = ids.length
+    ? await supabase.from("events").select("id,event_type,status,payload,created_at,entity_id").eq("entity_type", "opportunity_discovery_candidate").in("entity_id", ids).order("created_at", { ascending: false })
+    : { data: [] };
+  return json({ candidates: (data ?? []).map((candidate) => ({
+    ...candidate,
+    events: (events ?? []).filter((event) => event.entity_id === candidate.id),
+  })) });
+}
+
+async function importCandidates(runId: string, payload: JsonObject): Promise<Response> {
+  const ids = uuidList(payload.candidate_ids);
+  if (!ids) return json({ error: "validation_failed", detail: `candidate_ids must contain 1-${MAX_BATCH_SIZE} UUIDs.` }, 422);
+  const { data: candidates, error } = await supabase.from("opportunity_discovery_candidates").select("id,business_name,run_id").eq("run_id", runId).in("id", ids);
+  if (error) throw error;
+  if ((candidates ?? []).length !== ids.length) return json({ error: "candidate_scope_mismatch" }, 422);
+  const results = [];
+  for (const candidate of candidates ?? []) {
+    try {
+      const { data, error: rpcError } = await supabase.rpc("opportunity_import_discovery_candidate", { p_candidate_id: candidate.id });
+      if (rpcError) throw rpcError;
+      results.push({ candidate_id: candidate.id, ok: true, ...data as JsonObject });
+    } catch (error) {
+      const detail = String((error as Error).message).slice(0, 300);
+      await supabase.from("opportunity_discovery_candidates").update({ import_status: "failed", error_info: { stage: "import", detail } }).eq("id", candidate.id);
+      results.push({ candidate_id: candidate.id, ok: false, error: detail });
+    }
+  }
+  await refreshRunCounts(runId);
+  const failed = results.filter((r) => !r.ok).length;
+  return json({ results, succeeded: results.length - failed, failed, partial: failed > 0 }, failed === results.length ? 422 : 200);
+}
+
+async function assessOpportunity(
+  leadId: string,
+  retry = false,
+): Promise<{ ok: boolean; assessment?: JsonObject; evidence?: unknown; error?: string; diagnostics?: JsonObject }> {
+  const { data: existing, error: existingError } = await supabase
+    .from("local_business_lead_assessments")
+    .select("*")
+    .eq("lead_id", leadId)
+    .order("assessed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existingError) {
+    return {
+      ok: false,
+      error: `assessment_lookup_failed: ${existingError.message}`,
+      diagnostics: { stage: "existing_assessment_lookup", lead_id: leadId },
+    };
+  }
+
+  if (existing && !retry) {
+    const { data: lead, error: leadError } = await supabase
+      .from("local_business_leads")
+      .select("enrichment_diagnostics")
+      .eq("id", leadId)
+      .maybeSingle();
+    if (leadError) {
+      return {
+        ok: false,
+        error: `lead_diagnostics_lookup_failed: ${leadError.message}`,
+        diagnostics: { stage: "existing_assessment_evidence_lookup", lead_id: leadId },
+      };
+    }
+    return {
+      ok: true,
+      assessment: existing as JsonObject,
+      evidence: (lead?.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {},
+    };
+  }
+
+  const { error: requestedEventError } = await supabase.rpc("emit_local_business_event", {
+    p_lead_id: leadId,
+    p_event_type: "local_business.assessment_requested",
+    p_status: "started",
+    p_payload: { source: "opportunity-engine", retry },
+  });
+  if (requestedEventError) {
+    return {
+      ok: false,
+      error: `assessment_requested_event_failed: ${requestedEventError.message}`,
+      diagnostics: { stage: "assessment_requested_event", lead_id: leadId },
+    };
+  }
+
+  let responseStatus: number | null = null;
+  let responseBody: JsonObject = {};
+  let responseText = "";
+
+  try {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/local-business-enrich`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+        apikey: SERVICE_ROLE_KEY,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        lead_id: leadId,
+        action: retry ? "reenrich" : "enrich",
+        source: "opportunity-engine",
+      }),
+    });
+
+    responseStatus = response.status;
+    responseText = await response.text();
+    if (responseText) {
+      try {
+        responseBody = JSON.parse(responseText) as JsonObject;
+      } catch {
+        responseBody = { raw_response: responseText.slice(0, 1000) };
+      }
+    }
+
+    if (!response.ok || responseBody.ok === false) {
+      const providerDetail = cleanText(
+        responseBody.detail ?? responseBody.error ?? responseBody.message ?? responseBody.status,
+        500,
+      ) ?? `enrichment_http_${response.status}`;
+      throw new Error(providerDetail);
+    }
+
+    const { data: assessment, error: assessmentError } = await supabase
+      .from("local_business_lead_assessments")
+      .select("*")
+      .eq("lead_id", leadId)
+      .order("assessed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (assessmentError) {
+      throw new Error(`canonical_assessment_lookup_failed: ${assessmentError.message}`);
+    }
+    if (!assessment) {
+      throw new Error("canonical_assessment_missing_after_enrichment");
+    }
+
+    const { data: lead, error: leadError } = await supabase
+      .from("local_business_leads")
+      .select("enrichment_diagnostics")
+      .eq("id", leadId)
+      .maybeSingle();
+    if (leadError) throw new Error(`lead_diagnostics_lookup_failed: ${leadError.message}`);
+
+    return {
+      ok: true,
+      assessment: assessment as JsonObject,
+      evidence: (lead?.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {},
+      diagnostics: {
+        stage: "completed",
+        lead_id: leadId,
+        enrichment_http_status: responseStatus,
+        enrichment_response: responseBody,
+      },
+    };
+  } catch (error) {
+    const detail = String(error instanceof Error ? error.message : error).slice(0, 500);
+    const diagnostics: JsonObject = {
+      stage: "assessment",
+      lead_id: leadId,
+      retry,
+      enrichment_http_status: responseStatus,
+      enrichment_response: responseBody,
+      enrichment_raw_response: responseText ? responseText.slice(0, 1000) : null,
+      detail,
+    };
+
+    const { error: eventError } = await supabase.rpc("emit_local_business_event", {
+      p_lead_id: leadId,
+      p_event_type: "local_business.assessment_failed",
+      p_status: "failed",
+      p_payload: { source: "opportunity-engine", ...diagnostics },
+    });
+    if (eventError) {
+      console.error("Failed to emit assessment_failed event for lead", leadId, eventError.message);
+    }
+
+    return { ok: false, error: detail, diagnostics };
+  }
+}
+
+function reportBand(score: number): string {
+  if (score >= 100) return "high";
+  if (score >= 60) return "medium";
+  return "low";
+}
+
+async function auditOpportunity(leadId: string, retry = false): Promise<{ ok: boolean; audit?: JsonObject; error?: string }> {
+  const [{ data: lead }, { data: assessment }] = await Promise.all([
+    supabase.from("local_business_leads").select("*").eq("id", leadId).maybeSingle(),
+    supabase.from("local_business_lead_assessments").select("*").eq("lead_id", leadId).order("assessed_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (!lead) return { ok: false, error: "opportunity_not_found" };
+  if (!assessment) return { ok: false, error: "assessment_required" };
+  const { data: existing } = await supabase.from("local_business_audit_reports").select("*").eq("lead_id", leadId).eq("assessment_id", assessment.id).eq("report_version", AUDIT_REPORT_VERSION).limit(1).maybeSingle();
+  if (existing && !retry) return { ok: true, audit: existing as JsonObject };
+  await supabase.rpc("emit_local_business_event", { p_lead_id: leadId, p_event_type: "local_business.audit_generation_started", p_status: "started", p_payload: { assessment_id: assessment.id } });
+  try {
+    const score = Number(assessment.opportunity_score ?? 0);
+    const enrichment = ((lead.enrichment_diagnostics as JsonObject | null)?.enrichment_result ?? {}) as JsonObject;
+    const reportModel = {
+      business: { name: lead.business_name, category: lead.category, location: lead.suburb ?? lead.region, websiteUrl: lead.website_url, source: lead.source },
+      scoreBand: reportBand(score),
+      metrics: [
+        { id: "opportunity", label: "Opportunity", value: score, band: reportBand(score), sourceField: "opportunity_score" },
+        { id: "demand", label: "Demand signal", value: assessment.demand_signal_score, band: reportBand(Number(assessment.demand_signal_score)), sourceField: "demand_signal_score" },
+        { id: "trust", label: "Trust leakage", value: assessment.trust_leakage_score, band: reportBand(Number(assessment.trust_leakage_score)), sourceField: "trust_leakage_score" },
+        { id: "conversion", label: "Conversion maturity", value: assessment.conversion_maturity_score, band: reportBand(Number(assessment.conversion_maturity_score)), sourceField: "conversion_maturity_score" },
+        { id: "ai", label: "AI readiness", value: assessment.ai_readiness_score, band: reportBand(Number(assessment.ai_readiness_score)), sourceField: "ai_readiness_score" },
+      ],
+      summary: assessment.assessment_summary,
+      sections: [{ id: "evidence", title: "Observed evidence", summary: lead.trust_summary, items: Array.isArray(enrichment.evidence) ? enrichment.evidence : [] }],
+      riskFlags: enrichment.risk_flags ?? lead.risk_flags ?? [],
+      metadata: { generatedAt: new Date().toISOString(), assessmentId: assessment.id, generatedBy: "opportunity-engine", scoringSource: assessment.assessed_by },
+    };
+    const insert = { lead_id: leadId, assessment_id: assessment.id, report_version: AUDIT_REPORT_VERSION, generated_by: "opportunity-engine", generated_at: new Date().toISOString(), metadata_json: { report_model: reportModel, validation: { customer_ready: true } } };
+    const { data: audit, error } = existing
+      ? await supabase.from("local_business_audit_reports").update(insert).eq("id", existing.id).select("*").single()
+      : await supabase.from("local_business_audit_reports").insert(insert).select("*").single();
+    if (error) throw error;
+    await supabase.rpc("emit_local_business_event", { p_lead_id: leadId, p_event_type: "local_business.audit_generated", p_status: "completed", p_payload: { audit_report_id: audit.id, assessment_id: assessment.id, report_version: AUDIT_REPORT_VERSION } });
+    return { ok: true, audit: audit as JsonObject };
+  } catch (error) {
+    const detail = String((error as Error).message).slice(0, 300);
+    await supabase.rpc("emit_local_business_event", { p_lead_id: leadId, p_event_type: "local_business.audit_generation_failed", p_status: "failed", p_payload: { assessment_id: assessment.id, detail } });
+    return { ok: false, error: detail };
+  }
+}
+
+async function processCandidateBatch(runId: string, payload: JsonObject, operation: "assess" | "audit"): Promise<Response> {
+  const ids = uuidList(payload.candidate_ids);
+  if (!ids) return json({ error: "validation_failed", detail: `candidate_ids must contain 1-${MAX_BATCH_SIZE} UUIDs.` }, 422);
+
+  const { data: candidates, error } = await supabase
+    .from("opportunity_discovery_candidates")
+    .select("*")
+    .eq("run_id", runId)
+    .in("id", ids);
+  if (error) throw error;
+  if ((candidates ?? []).length !== ids.length) return json({ error: "candidate_scope_mismatch" }, 422);
+
+  const runPatch = {
+    status: operation === "assess" ? "scoring" : "auditing",
+    current_stage: operation === "assess" ? "scoring" : "auditing",
+    completed_at: null,
+  };
+  const { error: runStartError } = await supabase.from("opportunity_discovery_runs").update(runPatch).eq("id", runId);
+  if (runStartError) throw new Error(`run_start_update_failed: ${runStartError.message}`);
+
+  const results: Array<Record<string, unknown>> = [];
+  for (const candidate of candidates ?? []) {
+    const leadId = candidate.imported_lead_id ?? candidate.duplicate_lead_id;
+    if (!leadId) {
+      const detail = "Import the candidate before processing.";
+      const statusPatch = operation === "assess" ? { assessment_status: "failed" } : { audit_status: "failed" };
+      const errorInfo = { stage: operation, detail, candidate_id: candidate.id, run_id: runId };
+      const { error: candidateError } = await supabase
+        .from("opportunity_discovery_candidates")
+        .update({ ...statusPatch, error_info: errorInfo })
+        .eq("id", candidate.id);
+      results.push({
+        candidate_id: candidate.id,
+        ok: false,
+        error: candidateError ? `${detail} Candidate update also failed: ${candidateError.message}` : detail,
+        diagnostics: errorInfo,
+      });
+      continue;
+    }
+
+    const runningPatch = operation === "assess"
+      ? { enrichment_status: "enriching", assessment_status: "scoring", error_info: {} }
+      : { audit_status: "auditing", error_info: {} };
+    const { error: runningError } = await supabase
+      .from("opportunity_discovery_candidates")
+      .update(runningPatch)
+      .eq("id", candidate.id);
+    if (runningError) {
+      results.push({
+        candidate_id: candidate.id,
+        lead_id: leadId,
+        ok: false,
+        error: `candidate_running_status_update_failed: ${runningError.message}`,
+      });
+      continue;
+    }
+
+    const result: {
+      ok: boolean;
+      assessment?: JsonObject;
+      audit?: JsonObject;
+      evidence?: unknown;
+      error?: string;
+      diagnostics?: JsonObject;
+    } = operation === "assess"
+      ? await assessOpportunity(leadId, payload.retry === true)
+      : await auditOpportunity(leadId, payload.retry === true);
+
+    const errorInfo = result.ok ? {} : {
+      stage: operation,
+      detail: result.error ?? `${operation}_failed`,
+      lead_id: leadId,
+      candidate_id: candidate.id,
+      run_id: runId,
+      diagnostics: result.diagnostics ?? {},
+      failed_at: new Date().toISOString(),
+    };
+    const finalPatch = result.ok
+      ? operation === "assess"
+        ? {
+          enrichment_status: "enriched",
+          assessment_status: "scored",
+          preliminary_score: result.assessment?.opportunity_score ?? null,
+          enrichment_evidence: result.evidence ?? {},
+          error_info: {},
+        }
+        : { audit_status: "audited", error_info: {} }
+      : operation === "assess"
+        ? { enrichment_status: "failed", assessment_status: "failed", error_info: errorInfo }
+        : { audit_status: "failed", error_info: errorInfo };
+
+    const { error: finalUpdateError } = await supabase
+      .from("opportunity_discovery_candidates")
+      .update(finalPatch)
+      .eq("id", candidate.id);
+
+    const workflowPayload: JsonObject = {
+      run_id: runId,
+      lead_id: leadId,
+      error: result.error ?? null,
+      diagnostics: result.diagnostics ?? {},
+      candidate_update_error: finalUpdateError?.message ?? null,
+    };
+    await emitWorkflowEvent({
+      eventType: `opportunity.discovery_candidate.${operation}.${result.ok && !finalUpdateError ? "completed" : "failed"}`,
+      entityType: "opportunity_discovery_candidate",
+      entityId: candidate.id,
+      entityRef: candidate.business_name,
+      status: result.ok && !finalUpdateError ? "completed" : "failed",
+      payload: workflowPayload,
+    }).catch(() => undefined);
+
+    results.push({
+      candidate_id: candidate.id,
+      lead_id: leadId,
+      ...result,
+      ok: result.ok && !finalUpdateError,
+      error: finalUpdateError ? `candidate_final_status_update_failed: ${finalUpdateError.message}` : result.error,
+    });
+  }
+
+  const failed = results.filter((result) => result.ok !== true).length;
+  await refreshRunCounts(runId);
+  const { error: runCompleteError } = await supabase.from("opportunity_discovery_runs").update({
+    status: failed ? "partially_completed" : "completed",
+    current_stage: operation === "assess" ? "scoring_complete" : "auditing_complete",
+    completed_at: new Date().toISOString(),
+  }).eq("id", runId);
+  if (runCompleteError) throw new Error(`run_completion_update_failed: ${runCompleteError.message}`);
+
+  return json(
+    { results, succeeded: results.length - failed, failed, partial: failed > 0 },
+    failed === results.length ? 422 : 200,
+  );
+}
+
+async function singleIntelligenceAction(leadId: string, payload: JsonObject, operation: "assess" | "audit"): Promise<Response> {
+  const result = operation === "assess" ? await assessOpportunity(leadId, payload.retry === true) : await auditOpportunity(leadId, payload.retry === true);
+  if (!result.ok) return json({ error: `${operation}_failed`, detail: result.error }, result.error === "opportunity_not_found" ? 404 : 422);
+  return json(result);
+}
+
+// ---- Existing opportunity / outreach handlers ------------------------------
 
 async function listOpportunities(): Promise<Response> {
   const { data, error } = await supabase
@@ -495,7 +1076,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
   try {
     if (req.method === "GET" && parts.length === 0) return await listOpportunities();
     if (req.method === "GET" && parts.length === 1 && parts[0] === "pipeline") return await pipelineView();
+    if (req.method === "POST" && parts.length === 1 && parts[0] === "discovery-runs") {
+      return await createDiscoveryRun(await req.json().catch(() => ({})));
+    }
+    if (req.method === "GET" && parts.length === 2 && parts[0] === "discovery-runs") {
+      return await getDiscoveryRun(parts[1]);
+    }
+    if (req.method === "GET" && parts.length === 3 && parts[0] === "discovery-runs" && parts[2] === "candidates") {
+      return await listDiscoveryCandidates(parts[1]);
+    }
+    if (req.method === "POST" && parts.length === 4 && parts[0] === "discovery-runs" && parts[2] === "candidates" && parts[3] === "import") {
+      return await importCandidates(parts[1], await req.json().catch(() => ({})));
+    }
+    if (req.method === "POST" && parts.length === 4 && parts[0] === "discovery-runs" && parts[2] === "candidates" && parts[3] === "assess") {
+      return await processCandidateBatch(parts[1], await req.json().catch(() => ({})), "assess");
+    }
+    if (req.method === "POST" && parts.length === 4 && parts[0] === "discovery-runs" && parts[2] === "candidates" && parts[3] === "audit") {
+      return await processCandidateBatch(parts[1], await req.json().catch(() => ({})), "audit");
+    }
     if (req.method === "GET" && parts.length === 1) return await getOpportunity(parts[0]);
+
+    if (req.method === "POST" && parts.length === 2 && parts[1] === "assess") {
+      return await singleIntelligenceAction(parts[0], await req.json().catch(() => ({})), "assess");
+    }
+    if (req.method === "POST" && parts.length === 2 && parts[1] === "audit") {
+      return await singleIntelligenceAction(parts[0], await req.json().catch(() => ({})), "audit");
+    }
 
     if (req.method === "POST" && parts.length === 2 && parts[1] === "outreach") {
       return await createOutreach(parts[0], await req.json().catch(() => ({})));

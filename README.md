@@ -1,10 +1,11 @@
 # Opportunity Engine
 
-Standalone operator console that turns **existing** AI-discovered local-business opportunities
-(already scored and audited in Supabase) into reviewed audits and outbound conversations.
+Standalone operator console that discovers local businesses and moves selected candidates through
+canonical enrichment, opportunity scoring, audit review, outreach and outcome tracking.
 
 > Standalone by design. No MGRNZ Cockpit / event-routing / CRM / FMF / FYV coupling.
-> It **consumes** the existing intelligence layer — it does not rebuild discovery, scoring, or auditing.
+> It orchestrates the existing MGRNZ local-business intelligence layer; scoring remains owned by
+> `local-business-enrich` and is never implemented in React.
 
 ## Architecture
 
@@ -121,3 +122,84 @@ existing data.
 - **Phase 2 — Operator console** ✅ built (board + detail + review workflow + outreach review→approve)
 - **Phase 3 — Email sending** ✅ built (internal SMTP send on approved drafts; operator-gated; staging-safe; retry on failure)
 - **Phase 4 — Outcome tracking** ✅ built (outcome lifecycle + `/pipeline` Kanban + summary metrics)
+- **Phase 5 — Discovery intake** — implemented locally (deployment steps below)
+
+## Phase 5 — Discovery, scoring and audits
+
+The primary workflow is `Discovery → Opportunities → Pipeline`. The `/discovery` page starts durable
+runs, polls progress, presents provider evidence and duplicate matches, and exposes deliberate batch
+actions for import, assessment and audit generation. Imported canonical UUIDs appear automatically in
+Opportunities. Discovery and intelligence operations never create, approve or send outreach drafts.
+
+### API routes
+
+All routes except health require the existing operator bearer token.
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/opportunities/discovery-runs` | Validate and queue provider discovery |
+| GET | `/opportunities/discovery-runs/:runId` | Read durable progress/counts |
+| GET | `/opportunities/discovery-runs/:runId/candidates` | Candidates, evidence and candidate events |
+| POST | `/opportunities/discovery-runs/:runId/candidates/import` | Duplicate-safe canonical import |
+| POST | `/opportunities/discovery-runs/:runId/candidates/assess` | Batch canonical enrichment/scoring |
+| POST | `/opportunities/discovery-runs/:runId/candidates/audit` | Batch idempotent audit generation |
+| POST | `/opportunities/:id/assess` | Score one canonical opportunity |
+| POST | `/opportunities/:id/audit` | Audit one canonical opportunity |
+
+Batch bodies are `{ "candidate_ids": ["<uuid>"] }`, limited to 25 records. Responses include
+per-record results, succeeded/failed totals and `partial: true` for partial completion.
+
+### Backend secrets and provider configuration
+
+- `OPERATOR_TOKEN` — existing shared operator credential.
+- `GOOGLE_PLACES_API_KEY` — required for Text Search discovery and canonical enrichment.
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` — injected by Supabase; never expose the secret key to the SPA.
+- `ALLOWED_ORIGIN` — deployed console origin.
+- `EXA_API_KEY` — optional canonical enrichment fallback.
+- Existing `MGRNZ_SMTP_*` secrets remain required only for Phase 3 sending.
+
+No provider credential belongs in a `VITE_*` variable.
+
+### Local development and tests
+
+```bash
+npm install
+npm test
+npm run build
+supabase functions serve opportunities --env-file supabase/functions/.env
+```
+
+The uncommitted function env file should contain operator/provider secrets. Local discovery also
+requires the canonical local-business schema and `local-business-enrich` function.
+
+### Deployment
+
+```bash
+# This standalone repo intentionally does not mirror mgrnz-web's full migration history.
+# Apply only supabase/migrations/20260720052820_phase_5_discovery.sql through the
+# Supabase SQL editor/approved migration runner. Do not run a blind db push.
+supabase secrets set GOOGLE_PLACES_API_KEY=<key> --project-ref jqfodlzcsgfocyuawzyx
+supabase functions deploy opportunities --project-ref jqfodlzcsgfocyuawzyx --no-verify-jwt
+```
+
+The migration creates `opportunity_discovery_runs`, `opportunity_discovery_candidates`, indexes/RLS,
+and a service-role-only transactional import RPC. The API calls the separately deployed
+`local-business-enrich`; deploy canonical scorer changes from the MGRNZ source repository.
+The linked project contains a broader migration history than this standalone repository, so a direct
+`supabase db push` first requires an intentional history reconciliation; applying the one Phase 5 SQL
+file avoids falsely repairing or replaying unrelated MGRNZ migrations.
+
+### Example workflow
+
+Open Discovery, enter `Helensville, Auckland` and `Electricians`, optionally add `emergency`, choose
+up to 20 results, and start. Review candidates, select eligible new businesses, import them, score
+them, generate audits, then Open the resulting opportunities for review/outreach.
+
+### Known limitations
+
+- Google Places Text Search returns at most 20 candidates per run.
+- Radius is persisted and validated, but the provider query currently uses textual location bias;
+  exact radial filtering needs a future geocoding/location-restriction step.
+- Canonical enrichment can be partial/failed when provider keys, evidence or trusted identity matches
+  are unavailable; explicit retries and per-item errors remain visible.
+- Audit output is structured JSON; PDF rendering/storage remains out of scope.
