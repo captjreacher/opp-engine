@@ -2879,36 +2879,58 @@ export async function handler(req: Request) {
       const partialReason = meaningfulSignals === 0 ? "no_meaningful_enrichment_signal" : "strong_anchor_required";
 
       // ── Partial: create assessment so callers (opportunities engine) can discover it ──
-      const partialScoring = score(effective, result);
-      let partialAssessmentId: string | null = null;
-      try {
-        const { error: paError, data: paData } = await supabase.from("local_business_lead_assessments").insert({
-          lead_id: leadId,
-          ...partialScoring,
-          assessed_by: "local-business-enrich",
-          assessed_at: now,
-        }).select("id").single();
-        if (paError || !paData) throw new Error(`partial_assessment_insert_failed: ${paError?.message ?? "no inserted row"}`);
-        partialAssessmentId = paData.id as string;
-      } catch (assessmentErr) {
-        const assessmentErrMsg = errorMessage(assessmentErr);
-        log("partial_assessment_insert_failed", { lead_id: leadId, enrichment_outcome: "partial", error: assessmentErrMsg });
-        return jsonResponse({
-          ok: false,
-          status: "partial",
-          lead_id: leadId,
-          requested_event_id: startedEventId,
-          error: assessmentErrMsg,
-        }, 500);
-      }
+const partialScoring = score(effective, result);
 
-      log("enrichment_partial_assessment", {
-        lead_id: leadId,
-        enrichment_outcome: "partial",
-        assessment_id: partialAssessmentId,
-        opportunity_score: partialScoring.opportunity_score,
-      });
+const {
+  opportunity_score: _generatedOpportunityScore,
+  ...partialAssessmentInsert
+} = partialScoring;
 
+let partialAssessmentId: string | null = null;
+let partialOpportunityScore: number | null = null;
+
+try {
+  const { error: paError, data: paData } = await supabase
+    .from("local_business_lead_assessments")
+    .insert({
+      lead_id: leadId,
+      ...partialAssessmentInsert,
+      assessed_by: "local-business-enrich",
+      assessed_at: now,
+    })
+    .select("id, opportunity_score")
+    .single();
+
+  if (paError || !paData) {
+    throw new Error(
+      `partial_assessment_insert_failed: ${paError?.message ?? "no inserted row"}`
+    );
+  }
+
+  partialAssessmentId = paData.id as string;
+  partialOpportunityScore =
+    typeof paData.opportunity_score === "number"
+      ? paData.opportunity_score
+      : null;
+   const assessmentErrMsg = errorMessage(assessmentErr);
+
+  log("partial_assessment_insert_failed", {
+    lead_id: leadId,
+    enrichment_outcome: "partial",
+    error: assessmentErrMsg,
+  });
+
+  return jsonResponse(
+    {
+      ok: false,
+      status: "partial",
+      lead_id: leadId,
+      requested_event_id: startedEventId,
+      error: assessmentErrMsg,
+    },
+    500,
+  );
+}
       const { error: partialUpdateError } = await supabase.from("local_business_leads").update(leadPatch).eq("id", leadId);
       if (partialUpdateError) throw new Error(`partial_update_failed: ${partialUpdateError.message}`);
 
@@ -3027,15 +3049,29 @@ export async function handler(req: Request) {
       },
     });
 
-    const scoring = score(effective, result);
-    const { error: assessmentError, data: assessmentData } = await supabase.from("local_business_lead_assessments").insert({
-      lead_id: leadId,
-      ...scoring,
-      assessed_by: "local-business-enrich",
-      assessed_at: now,
-    }).select("id").single();
-    if (assessmentError || !assessmentData) throw new Error(`assessment_insert_failed: ${assessmentError?.message ?? "no inserted row"}`);
+const scoring = score(effective, result);
 
+const {
+  opportunity_score: _generatedOpportunityScore,
+  ...assessmentInsert
+} = scoring;
+
+const { error: assessmentError, data: assessmentData } = await supabase
+  .from("local_business_lead_assessments")
+  .insert({
+    lead_id: leadId,
+    ...assessmentInsert,
+    assessed_by: "local-business-enrich",
+    assessed_at: now,
+  })
+  .select("id, opportunity_score")
+  .single();
+
+if (assessmentError || !assessmentData) {
+  throw new Error(
+    `assessment_insert_failed: ${assessmentError?.message ?? "no inserted row"}`,
+  );
+}
     const { error: assessedStatusError } = await supabase
       .from("local_business_leads")
       .update({ enrichment_status: "assessed", status: resolved.lead.status === "discovered" || resolved.lead.status === "enriched" ? "assessed" : resolved.lead.status })
