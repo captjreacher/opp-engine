@@ -100,7 +100,8 @@ export interface Draft {
   sent_at: string | null;
 }
 
-export type ReviewState = "detected" | "reviewed" | "approved" | "contact_ready";
+export type ReviewState =
+  "detected" | "reviewed" | "approved" | "contact_ready";
 
 /** Ordered review-state pipeline, used to derive which "next" action(s) to enable. */
 export const REVIEW_STATE_ORDER: ReviewState[] = [
@@ -129,7 +130,10 @@ export const OUTCOME_STATE_ORDER: OutcomeState[] = [
 ];
 
 /** Operator-selectable outcome transitions (excludes the derived "sent" entry state). */
-export const OUTCOME_ACTIONS: { toState: Exclude<OutcomeState, "sent">; label: string }[] = [
+export const OUTCOME_ACTIONS: {
+  toState: Exclude<OutcomeState, "sent">;
+  label: string;
+}[] = [
   { toState: "awaiting_response", label: "Mark Awaiting Response" },
   { toState: "replied", label: "Mark Replied" },
   { toState: "meeting_booked", label: "Mark Meeting Booked" },
@@ -166,6 +170,8 @@ export interface Lead {
   source_platform: string | null;
   address: string | null;
   trust_summary: string | null;
+  enrichment_diagnostics?: unknown;
+  updated_at?: string | null;
 }
 
 // ── Visual evidence (Phase 5.1) ─────────────────────────────────────────────
@@ -185,13 +191,10 @@ export type VisualEvidenceSource =
 export type VisualEvidenceMediaType = "image" | "video" | "panorama";
 
 export type VisualEvidenceStatus =
-  | "available"
-  | "unavailable"
-  | "expired"
-  | "superseded"
-  | "rejected";
+  "available" | "unavailable" | "expired" | "superseded" | "rejected";
 
-export type VisualEvidenceStorageMode = "reference_only" | "temporary" | "managed";
+export type VisualEvidenceStorageMode =
+  "reference_only" | "temporary" | "managed";
 
 export type CaptureDatePrecision = "exact" | "month" | "year" | "unknown";
 
@@ -251,6 +254,28 @@ export interface DraftResponse {
   draft: Draft;
 }
 
+export interface EnrichmentResponse {
+  ok: boolean;
+  status?: string;
+  evidence?: unknown;
+  assessmentId?: string | null;
+  error?: string;
+}
+
+export interface AnalysisResponse {
+  ok: boolean;
+  assessment?: Assessment;
+  evidence?: unknown;
+  error?: string;
+  promoted_existing?: boolean;
+}
+
+export interface AuditRunResponse {
+  ok: boolean;
+  audit?: AuditReport;
+  error?: string;
+}
+
 /** Response from POST {VITE_API_BASE}/{id}/outreach/{draftId}/send. */
 export interface SendResponse {
   draft: Draft;
@@ -303,8 +328,15 @@ export interface ApiErrorBody {
 }
 
 export type DiscoveryRunStatus =
-  | "queued" | "discovering" | "enriching" | "scoring" | "auditing"
-  | "completed" | "partially_completed" | "failed" | "cancelled";
+  | "queued"
+  | "discovering"
+  | "enriching"
+  | "scoring"
+  | "auditing"
+  | "completed"
+  | "partially_completed"
+  | "failed"
+  | "cancelled";
 
 export interface DiscoverySearchInput {
   location: string;
@@ -370,8 +402,12 @@ export interface DiscoveryCandidate {
   updated_at: string;
 }
 
-export interface DiscoveryRunResponse { run: DiscoveryRun; }
-export interface DiscoveryCandidatesResponse { candidates: DiscoveryCandidate[]; }
+export interface DiscoveryRunResponse {
+  run: DiscoveryRun;
+}
+export interface DiscoveryCandidatesResponse {
+  candidates: DiscoveryCandidate[];
+}
 export interface BatchActionResult {
   candidate_id: string;
   lead_id?: string;

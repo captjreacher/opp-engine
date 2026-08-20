@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  analyzeOpportunity,
   ApiError,
   ApiNotConfiguredError,
+  auditOpportunity,
   createOutreachDraft,
+  enrichOpportunity,
   fetchOpportunityDetail,
   isApiConfigured,
   sendOutreachDraft,
@@ -17,7 +20,9 @@ import Badge, { toneForStatus } from "../components/Badge";
 
 import AuditReportDisplay from "../components/AuditReport";
 import DraftEditor from "../components/DraftEditor";
-import GuidedWorkflow, { type WorkflowState } from "../components/GuidedWorkflow";
+import GuidedWorkflow, {
+  type WorkflowState,
+} from "../components/GuidedWorkflow";
 import ExecutiveSummary from "../components/ExecutiveSummary";
 import ColorMeter from "../components/ColorMeter";
 import AssessmentCard from "../components/AssessmentCard";
@@ -25,11 +30,16 @@ import EvidencePanel, { deriveEvidence } from "../components/EvidencePanel";
 import EventTimeline from "../components/EventTimeline";
 import VisualEvidencePanel from "../components/VisualEvidencePanel";
 
+type IntelligenceAction = "enrich" | "analyze" | "audit";
+
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 function errorMessage(err: unknown): string {
@@ -39,12 +49,33 @@ function errorMessage(err: unknown): string {
   return "Unknown error.";
 }
 
+function latestConsoleAction(detail: OppDetail, actions: string[]) {
+  return detail.console_events.find((event) => actions.includes(event.action));
+}
+
+function hasEnrichmentDiagnostics(detail: OppDetail): boolean {
+  const diagnostics =
+    detail.lead.enrichment_diagnostics as
+      | { enrichment_result?: unknown }
+      | null
+      | undefined;
+  return Boolean(diagnostics?.enrichment_result);
+}
+
 /** Compact inline detail row for the Business Details section. */
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+function DetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="grid grid-cols-1 gap-x-3 gap-y-0.5 text-sm sm:grid-cols-[5rem_1fr] sm:gap-y-0">
       <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-200 break-words sm:truncate">{children}</dd>
+      <dd className="text-sm text-slate-200 break-words sm:truncate">
+        {children}
+      </dd>
     </div>
   );
 }
@@ -59,7 +90,10 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 }
 
 /** Action bar for the outcome tracking pipeline. */
-const REVIEW_ACTIONS: { toState: Exclude<ReviewState, "detected">; label: string }[] = [
+const REVIEW_ACTIONS: {
+  toState: Exclude<ReviewState, "detected">;
+  label: string;
+}[] = [
   { toState: "reviewed", label: "Start review" },
   { toState: "approved", label: "Complete review" },
   { toState: "contact_ready", label: "Mark contact ready" },
@@ -74,7 +108,9 @@ export default function OpportunityDetail() {
   const [reviewPending, setReviewPending] = useState<ReviewState | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
-  const [outcomePending, setOutcomePending] = useState<OutcomeState | null>(null);
+  const [outcomePending, setOutcomePending] = useState<OutcomeState | null>(
+    null,
+  );
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
 
   const [generatingDraft, setGeneratingDraft] = useState(false);
@@ -83,7 +119,17 @@ export default function OpportunityDetail() {
   const [approvingDraft, setApprovingDraft] = useState(false);
   const [sendingDraft, setSendingDraft] = useState(false);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
-  const [draftMutationError, setDraftMutationError] = useState<string | null>(null);
+  const [draftMutationError, setDraftMutationError] = useState<string | null>(
+    null,
+  );
+  const [intelligencePending, setIntelligencePending] =
+    useState<IntelligenceAction | null>(null);
+  const [intelligenceError, setIntelligenceError] = useState<string | null>(
+    null,
+  );
+  const [intelligenceNotice, setIntelligenceNotice] = useState<string | null>(
+    null,
+  );
 
   async function load() {
     if (!id || !isApiConfigured) return;
@@ -104,7 +150,9 @@ export default function OpportunityDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  async function handleReviewTransition(toState: Exclude<ReviewState, "detected">) {
+  async function handleReviewTransition(
+    toState: Exclude<ReviewState, "detected">,
+  ) {
     if (!id) return;
     setReviewPending(toState);
     setReviewError(null);
@@ -118,7 +166,9 @@ export default function OpportunityDetail() {
     }
   }
 
-  async function handleOutcomeTransition(toState: Exclude<OutcomeState, "sent">) {
+  async function handleOutcomeTransition(
+    toState: Exclude<OutcomeState, "sent">,
+  ) {
     if (!id) return;
     setOutcomePending(toState);
     setOutcomeError(null);
@@ -134,6 +184,17 @@ export default function OpportunityDetail() {
 
   async function handleGenerateDraft() {
     if (!id) return;
+    if (!detail) return;
+    if (!detail.audit_report) {
+      setGenerateError("Generate an audit report before creating outreach.");
+      return;
+    }
+    if (detail.review_state !== "contact_ready") {
+      setGenerateError(
+        "Complete review and mark this opportunity contact ready before outreach.",
+      );
+      return;
+    }
     setGeneratingDraft(true);
     setGenerateError(null);
     try {
@@ -146,7 +207,10 @@ export default function OpportunityDetail() {
     }
   }
 
-  async function handleSaveDraft(draftId: string, fields: { subject: string; body: string }) {
+  async function handleSaveDraft(
+    draftId: string,
+    fields: { subject: string; body: string },
+  ) {
     if (!id) return;
     setSavingDraft(true);
     setDraftMutationError(null);
@@ -189,6 +253,64 @@ export default function OpportunityDetail() {
     } finally {
       setSendingDraft(false);
       await load();
+    }
+  }
+
+  async function handleEnrich(retry = false) {
+    if (!id) return;
+    setIntelligencePending("enrich");
+    setIntelligenceError(null);
+    setIntelligenceNotice(null);
+    try {
+      const res = await enrichOpportunity(id, retry);
+      setIntelligenceNotice(
+        res.status
+          ? `Enrichment ${retry ? "re-run" : "completed"} with status: ${res.status}. Analysis remains operator-triggered.`
+          : `Enrichment ${retry ? "re-run" : "completed"}. Analysis remains operator-triggered.`,
+      );
+      await load();
+    } catch (err) {
+      setIntelligenceError(errorMessage(err));
+    } finally {
+      setIntelligencePending(null);
+    }
+  }
+
+  async function handleAnalyze(retry = false) {
+    if (!id) return;
+    setIntelligencePending("analyze");
+    setIntelligenceError(null);
+    setIntelligenceNotice(null);
+    try {
+      const res = await analyzeOpportunity(id, retry);
+      setIntelligenceNotice(
+        res.promoted_existing
+          ? "Analysis promoted the latest enriched assessment into the operator-visible workflow."
+          : `Analysis ${retry ? "re-ran" : "completed"} successfully.`,
+      );
+      await load();
+    } catch (err) {
+      setIntelligenceError(errorMessage(err));
+    } finally {
+      setIntelligencePending(null);
+    }
+  }
+
+  async function handleAudit(retry = false) {
+    if (!id) return;
+    setIntelligencePending("audit");
+    setIntelligenceError(null);
+    setIntelligenceNotice(null);
+    try {
+      await auditOpportunity(id, retry);
+      setIntelligenceNotice(
+        `Audit ${retry ? "re-generated" : "generated"} successfully.`,
+      );
+      await load();
+    } catch (err) {
+      setIntelligenceError(errorMessage(err));
+    } finally {
+      setIntelligencePending(null);
     }
   }
 
@@ -251,7 +373,10 @@ export default function OpportunityDetail() {
   if (loadError) {
     return (
       <div className="space-y-3">
-        <Link to="/opportunities" className="text-sm text-accent-400 hover:underline">
+        <Link
+          to="/opportunities"
+          className="text-sm text-accent-400 hover:underline"
+        >
           ← Back to opportunities
         </Link>
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
@@ -288,12 +413,26 @@ export default function OpportunityDetail() {
   const latestDraftSendFailed =
     latestDraft?.status === "approved" &&
     latestDraftSendEvent?.action === "outreach_send_failed";
-
-  const opportunityScore: number =
+  const latestEnrichmentEvent = latestConsoleAction(detail, [
+    "enrichment_completed",
+    "enrichment_failed",
+  ]);
+  const latestAnalysisEvent = latestConsoleAction(detail, [
+    "analysis_completed",
+  ]);
+  const hasEnrichment =
+    latestEnrichmentEvent?.action === "enrichment_completed" ||
+    hasEnrichmentDiagnostics(detail);
+  const opportunityScore =
     latest_assessment?.opportunity_score !== null &&
     latest_assessment?.opportunity_score !== undefined
       ? parseFloat(latest_assessment.opportunity_score)
-      : 0;
+      : null;
+  const outreachBlockedReason = !audit_report
+    ? "Generate an audit report before creating outreach."
+    : review_state !== "contact_ready"
+      ? "Complete review and mark this opportunity contact ready before outreach."
+      : null;
 
   // Derive workflow state for the GuidedWorkflow component
   const workflowState: WorkflowState = {
@@ -314,16 +453,33 @@ export default function OpportunityDetail() {
     { label: "Business", value: lead.business_name },
     lead.email && { label: "Email", value: lead.email },
     lead.phone && { label: "Phone", value: lead.phone },
-    latestDraft && { label: "Template", value: latestDraft.subject ?? "(no subject)" },
+    latestDraft && {
+      label: "Template",
+      value: latestDraft.subject ?? "(no subject)",
+    },
     latestDraft && { label: "Status", value: latestDraft.status },
   ].filter(Boolean) as { label: string; value: string }[];
 
   return (
     <div className="space-y-5">
       {/* ── Back link ── */}
-      <Link to="/opportunities" className="inline-flex items-center gap-1 text-sm text-accent-400 hover:text-accent-300 hover:underline transition-colors">
-        <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
-          <path d="M19 12H5M12 19L5 12L12 5" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+      <Link
+        to="/opportunities"
+        className="inline-flex items-center gap-1 text-sm text-accent-400 hover:text-accent-300 hover:underline transition-colors"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          className="h-3.5 w-3.5"
+          aria-hidden="true"
+        >
+          <path
+            d="M19 12H5M12 19L5 12L12 5"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
         Back to opportunities
       </Link>
@@ -332,19 +488,161 @@ export default function OpportunityDetail() {
       <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-slate-100 truncate">{lead.business_name}</h1>
+            <h1 className="text-xl font-semibold text-slate-100 truncate">
+              {lead.business_name}
+            </h1>
             <p className="text-sm text-slate-500 mt-0.5">
-              {[lead.category, lead.suburb ?? lead.region].filter(Boolean).join(" · ") || "—"}
+              {[lead.category, lead.suburb ?? lead.region]
+                .filter(Boolean)
+                .join(" · ") || "—"}
             </p>
           </div>
-          <Badge tone={lead.status ? "info" : "neutral"}>{lead.status ?? "unknown"}</Badge>
+          <Badge tone={lead.status ? "info" : "neutral"}>
+            {lead.status ?? "unknown"}
+          </Badge>
         </div>
 
         {/* Guided workflow — replaces the old 4-step ReviewStepper */}
         <div className="border-t border-slate-800 pt-3">
-          <GuidedWorkflow state={workflowState} onStepAction={handleWorkflowStep} />
+          <GuidedWorkflow
+            state={workflowState}
+            onStepAction={handleWorkflowStep}
+          />
         </div>
       </div>
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <SectionHeading>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="h-4 w-4 text-slate-400"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 3L4 7V12C4 16.4183 7.58172 20 12 20C16.4183 20 20 16.4183 20 12V7L12 3Z"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M9 12L11 14L15 10"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Intelligence Workflow
+          </SectionHeading>
+          <p className="text-xs text-slate-500">
+            Operator-triggered only: enrich, analyze, and audit stay explicit.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Enrichment
+            </p>
+            <p className="mt-1 text-sm text-slate-200">
+              {hasEnrichment ? "Ready" : "Not enriched"}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {latestEnrichmentEvent
+                ? `${latestEnrichmentEvent.action === "enrichment_failed" ? "Last attempt failed" : "Last completed"} ${formatTimestamp(latestEnrichmentEvent.created_at)}`
+                : "Run enrichment before analysis."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleEnrich(false)}
+                disabled={intelligencePending !== null}
+                className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {intelligencePending === "enrich"
+                  ? "Working…"
+                  : hasEnrichment
+                    ? "Refresh enrichment"
+                    : "Run enrichment"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Analysis
+            </p>
+            <p className="mt-1 text-sm text-slate-200">
+              {latest_assessment ? "Assessed" : "Not assessed"}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {latestAnalysisEvent
+                ? `Last completed ${formatTimestamp(latestAnalysisEvent.created_at)}`
+                : hasEnrichment
+                  ? "Enrichment is ready. Analysis must be triggered separately."
+                  : "Enrichment is required first."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleAnalyze(Boolean(latest_assessment))}
+                disabled={intelligencePending !== null || !hasEnrichment}
+                className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {intelligencePending === "analyze"
+                  ? "Working…"
+                  : latest_assessment
+                    ? "Re-run analysis"
+                    : "Run analysis"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Audit
+            </p>
+            <p className="mt-1 text-sm text-slate-200">
+              {audit_report ? "Visible" : "Not generated"}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {audit_report
+                ? `Current report generated ${formatTimestamp(audit_report.generated_at)}`
+                : latest_assessment
+                  ? "Generate an audit report before outreach."
+                  : "Analysis is required before audit generation."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleAudit(Boolean(audit_report))}
+                disabled={intelligencePending !== null || latest_assessment === null}
+                className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {intelligencePending === "audit"
+                  ? "Working…"
+                  : audit_report
+                    ? "Re-generate audit"
+                    : "Generate audit"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {intelligenceNotice && (
+          <p className="rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+            {intelligenceNotice}
+          </p>
+        )}
+        {intelligenceError && (
+          <p className="rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+            {intelligenceError}
+          </p>
+        )}
+      </section>
 
       {/* ── Executive Summary ── */}
       <ExecutiveSummary assessment={latest_assessment} />
@@ -356,15 +654,28 @@ export default function OpportunityDetail() {
           {/* Business Details (condensed) */}
           <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
             <SectionHeading>
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-                <path d="M3 9L12 2L21 9V20C21 20.5304 20.7893 21.0391 20.4142 21.4142C20.0391 21.7893 19.5304 22 19 22H5C4.46957 22 3.96086 21.7893 3.58579 21.4142C3.21071 21.0391 3 20.5304 3 20V9Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-4 w-4 text-slate-400"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 9L12 2L21 9V20C21 20.5304 20.7893 21.0391 20.4142 21.4142C20.0391 21.7893 19.5304 22 19 22H5C4.46957 22 3.96086 21.7893 3.58579 21.4142C3.21071 21.0391 3 20.5304 3 20V9Z"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
               </svg>
               Business Details
             </SectionHeading>
             <dl className="space-y-2">
               <DetailRow label="Name">{lead.business_name}</DetailRow>
               <DetailRow label="Location">
-                {[lead.address, lead.suburb, lead.region, lead.country].filter(Boolean).join(", ") || "—"}
+                {[lead.address, lead.suburb, lead.region, lead.country]
+                  .filter(Boolean)
+                  .join(", ") || "—"}
               </DetailRow>
               <DetailRow label="Category">
                 {lead.category ?? "—"}
@@ -375,43 +686,76 @@ export default function OpportunityDetail() {
                 )}
               </DetailRow>
               <DetailRow label="Source">
-                {[lead.source, lead.source_platform].filter(Boolean).join(" · ") || "—"}
+                {[lead.source, lead.source_platform]
+                  .filter(Boolean)
+                  .join(" · ") || "—"}
               </DetailRow>
               {lead.trust_summary && (
-                <DetailRow label="Trust Summary">{lead.trust_summary}</DetailRow>
+                <DetailRow label="Trust Summary">
+                  {lead.trust_summary}
+                </DetailRow>
               )}
             </dl>
 
             {/* Contact links */}
             <div className="flex flex-wrap gap-1.5 pt-1">
               {lead.website_url && (
-                <a href={lead.website_url} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors">
+                <a
+                  href={lead.website_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                >
                   Website
-                  <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3" aria-hidden="true"><path d="M18 13V19C18 19.5304 17.7893 20.0391 17.4142 20.4142C17.0391 20.7893 16.5304 21 16 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V8C3 7.46957 3.21071 6.96086 3.58579 6.58579C3.96086 6.21071 4.46957 6 5 6H11M15 3H21V9M21 3L10 14" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="h-3 w-3"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M18 13V19C18 19.5304 17.7893 20.0391 17.4142 20.4142C17.0391 20.7893 16.5304 21 16 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V8C3 7.46957 3.21071 6.96086 3.58579 6.58579C3.96086 6.21071 4.46957 6 5 6H11M15 3H21V9M21 3L10 14"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                 </a>
               )}
               {lead.facebook_url && (
-                <a href={lead.facebook_url} target="_blank" rel="noopener noreferrer"
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors">
+                <a
+                  href={lead.facebook_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                >
                   Facebook ↗
                 </a>
               )}
               {lead.google_maps_url && (
-                <a href={lead.google_maps_url} target="_blank" rel="noopener noreferrer"
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors">
+                <a
+                  href={lead.google_maps_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                >
                   Google Maps ↗
                 </a>
               )}
               {lead.phone && (
-                <a href={`tel:${lead.phone}`}
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors">
+                <a
+                  href={`tel:${lead.phone}`}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                >
                   Call {lead.phone}
                 </a>
               )}
               {lead.email && (
-                <a href={`mailto:${lead.email}`}
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors">
+                <a
+                  href={`mailto:${lead.email}`}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                >
                   Email {lead.email}
                 </a>
               )}
@@ -422,27 +766,62 @@ export default function OpportunityDetail() {
           {evidenceItems.length > 0 && (
             <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
               <SectionHeading>
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-                  <path d="M9 12L11 14L15 10M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  className="h-4 w-4 text-slate-400"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M9 12L11 14L15 10M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
                 Business Evidence
               </SectionHeading>
               <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {evidenceItems.slice(0, 6).map((item) => {
                   const statusColor =
-                    item.status === "found" ? "text-emerald-400" :
-                    item.status === "missing" ? "text-rose-400" :
-                    item.status === "partial" ? "text-amber-400" : "text-slate-500";
+                    item.status === "found"
+                      ? "text-emerald-400"
+                      : item.status === "missing"
+                        ? "text-rose-400"
+                        : item.status === "partial"
+                          ? "text-amber-400"
+                          : "text-slate-500";
                   const dotColor =
-                    item.status === "found" ? "bg-emerald-500" :
-                    item.status === "missing" ? "bg-rose-500" :
-                    item.status === "partial" ? "bg-amber-500" : "bg-slate-600";
+                    item.status === "found"
+                      ? "bg-emerald-500"
+                      : item.status === "missing"
+                        ? "bg-rose-500"
+                        : item.status === "partial"
+                          ? "bg-amber-500"
+                          : "bg-slate-600";
                   return (
-                    <div key={item.label} className="flex items-center gap-2 rounded-md bg-slate-950/40 px-3 py-2 border border-slate-800/60">
-                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} aria-hidden="true" />
-                      <span className="text-xs text-slate-300">{item.label}</span>
-                      <span className={`ml-auto text-xs font-medium ${statusColor}`}>
-                        {item.status === "found" ? "✓" : item.status === "missing" ? "✗" : item.status === "partial" ? "~" : "?"}
+                    <div
+                      key={item.label}
+                      className="flex items-center gap-2 rounded-md bg-slate-950/40 px-3 py-2 border border-slate-800/60"
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`}
+                        aria-hidden="true"
+                      />
+                      <span className="text-xs text-slate-300">
+                        {item.label}
+                      </span>
+                      <span
+                        className={`ml-auto text-xs font-medium ${statusColor}`}
+                      >
+                        {item.status === "found"
+                          ? "✓"
+                          : item.status === "missing"
+                            ? "✗"
+                            : item.status === "partial"
+                              ? "~"
+                              : "?"}
                       </span>
                     </div>
                   );
@@ -455,32 +834,82 @@ export default function OpportunityDetail() {
           {(lead.website_url || lead.google_maps_url) && (
             <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
               <SectionHeading>
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-                  <path d="M21 10C21 17 12 23 12 23C12 23 3 17 3 10C3 7.61305 3.94821 5.32387 5.63604 3.63604C7.32387 1.94821 9.61305 1 12 1C14.3869 1 16.6761 1.94821 18.364 3.63604C20.0518 5.32387 21 7.61305 21 10Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M12 13C13.6569 13 15 11.6569 15 10C15 8.34315 13.6569 7 12 7C10.3431 7 9 8.34315 9 10C9 11.6569 10.3431 13 12 13Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  className="h-4 w-4 text-slate-400"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M21 10C21 17 12 23 12 23C12 23 3 17 3 10C3 7.61305 3.94821 5.32387 5.63604 3.63604C7.32387 1.94821 9.61305 1 12 1C14.3869 1 16.6761 1.94821 18.364 3.63604C20.0518 5.32387 21 7.61305 21 10Z"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M12 13C13.6569 13 15 11.6569 15 10C15 8.34315 13.6569 7 12 7C10.3431 7 9 8.34315 9 10C9 11.6569 10.3431 13 12 13Z"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
                 Location &amp; Online Presence
               </SectionHeading>
               <div className="space-y-2 text-sm">
                 {lead.website_url && (
                   <div className="flex items-start gap-2 rounded-md bg-slate-950/40 px-3 py-2.5 border border-slate-800/60">
-                    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 mt-0.5 shrink-0 text-sky-400" aria-hidden="true">
-                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="currentColor"/>
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="h-4 w-4 mt-0.5 shrink-0 text-sky-400"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"
+                        fill="currentColor"
+                      />
                     </svg>
-                    <a href={lead.website_url} target="_blank" rel="noopener noreferrer"
-                      className="text-accent-400 hover:text-accent-300 hover:underline truncate">
+                    <a
+                      href={lead.website_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent-400 hover:text-accent-300 hover:underline truncate"
+                    >
                       {lead.website_url}
                     </a>
                   </div>
                 )}
                 {lead.google_maps_url && (
                   <div className="flex items-start gap-2 rounded-md bg-slate-950/40 px-3 py-2.5 border border-slate-800/60">
-                    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 mt-0.5 shrink-0 text-emerald-400" aria-hidden="true">
-                      <path d="M21 10C21 17 12 23 12 23C12 23 3 17 3 10C3 7.61305 3.94821 5.32387 5.63604 3.63604C7.32387 1.94821 9.61305 1 12 1C14.3869 1 16.6761 1.94821 18.364 3.63604C20.0518 5.32387 21 7.61305 21 10Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-                      <path d="M12 13C13.6569 13 15 11.6569 15 10C15 8.34315 13.6569 7 12 7C10.3431 7 9 8.34315 9 10C9 11.6569 10.3431 13 12 13Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="h-4 w-4 mt-0.5 shrink-0 text-emerald-400"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M21 10C21 17 12 23 12 23C12 23 3 17 3 10C3 7.61305 3.94821 5.32387 5.63604 3.63604C7.32387 1.94821 9.61305 1 12 1C14.3869 1 16.6761 1.94821 18.364 3.63604C20.0518 5.32387 21 7.61305 21 10Z"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M12 13C13.6569 13 15 11.6569 15 10C15 8.34315 13.6569 7 12 7C10.3431 7 9 8.34315 9 10C9 11.6569 10.3431 13 12 13Z"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
-                    <a href={lead.google_maps_url} target="_blank" rel="noopener noreferrer"
-                      className="text-accent-400 hover:text-accent-300 hover:underline truncate">
+                    <a
+                      href={lead.google_maps_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent-400 hover:text-accent-300 hover:underline truncate"
+                    >
                       {lead.address || lead.suburb || "View on Google Maps"}
                     </a>
                   </div>
@@ -493,8 +922,19 @@ export default function OpportunityDetail() {
           {latest_assessment?.recommended_outreach_angle && (
             <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-2">
               <SectionHeading>
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-                  <path d="M9.66347 17H4C2.89543 17 2 16.1046 2 15V5C2 3.89543 2.89543 3 4 3H20C21.1046 3 22 3.89543 22 5V15C22 16.1046 21.1046 17 20 17H14.3365L11.4545 19.8819C10.6125 20.7239 9.16347 20.1239 9.16347 18.9519L9.66347 17Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  className="h-4 w-4 text-slate-400"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M9.66347 17H4C2.89543 17 2 16.1046 2 15V5C2 3.89543 2.89543 3 4 3H20C21.1046 3 22 3.89543 22 5V15C22 16.1046 21.1046 17 20 17H14.3365L11.4545 19.8819C10.6125 20.7239 9.16347 20.1239 9.16347 18.9519L9.66347 17Z"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
                 AI Reasoning
               </SectionHeading>
@@ -510,17 +950,42 @@ export default function OpportunityDetail() {
           {/* Opportunity Overview — color-coded meter replacing plain score */}
           <section className="space-y-3">
             <SectionHeading>
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-                <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-4 w-4 text-slate-400"
+                aria-hidden="true"
+              >
+                <path
+                  d="M13 2L3 14H12L11 22L21 10H12L13 2Z"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
               </svg>
               Opportunity Overview
             </SectionHeading>
-            <ColorMeter
-              score={opportunityScore}
-              max={200}
-              label="Opportunity Score"
-              subLabel={latest_assessment ? `Assessed ${formatTimestamp(latest_assessment.assessed_at)}` : undefined}
-            />
+            {opportunityScore !== null ? (
+              <ColorMeter
+                score={opportunityScore}
+                max={200}
+                label="Opportunity Score"
+                subLabel={`Assessed ${formatTimestamp(latest_assessment?.assessed_at)}`}
+              />
+            ) : (
+              <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
+                <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500">
+                  Opportunity Score
+                </p>
+                <p className="mt-2 text-lg font-semibold text-slate-100">
+                  Not assessed
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Run enrichment, then trigger analysis when you want this opportunity scored.
+                </p>
+              </div>
+            )}
           </section>
 
           {/* Assessment Cards — enhanced with interpretations */}
@@ -528,9 +993,25 @@ export default function OpportunityDetail() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <SectionHeading>
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-                    <path d="M9 5L5 9L9 13" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M5 9H13C15.2091 9 17 10.7909 17 13V19" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"/>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="h-4 w-4 text-slate-400"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M9 5L5 9L9 13"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M5 9H13C15.2091 9 17 10.7909 17 13V19"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                    />
                   </svg>
                   Assessment Metrics
                 </SectionHeading>
@@ -564,7 +1045,7 @@ export default function OpportunityDetail() {
             </div>
           ) : (
             <p className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-500">
-              No assessment yet.
+              Not assessed yet. Enrichment and analysis stay operator-triggered.
             </p>
           )}
         </div>
@@ -583,10 +1064,32 @@ export default function OpportunityDetail() {
       {/* ── Audit Report (existing, unchanged) ── */}
       <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
         <SectionHeading>
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-            <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M14 2V8H20" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M16 13H8M16 17H8M10 9H8" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"/>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            className="h-4 w-4 text-slate-400"
+            aria-hidden="true"
+          >
+            <path
+              d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M14 2V8H20"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M16 13H8M16 17H8M10 9H8"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+            />
           </svg>
           Audit Report
         </SectionHeading>
@@ -596,8 +1099,19 @@ export default function OpportunityDetail() {
       {/* ── Event Timeline (vertical, replaces old EventHistory) ── */}
       <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
         <SectionHeading>
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-            <path d="M12 8V12L15 15M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            className="h-4 w-4 text-slate-400"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 8V12L15 15M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
           Timeline
         </SectionHeading>
@@ -617,8 +1131,19 @@ export default function OpportunityDetail() {
         {/* Left: Operator Review Actions */}
         <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
           <SectionHeading>
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-              <path d="M9 11L12 14L22 4M21 12V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H16" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="h-4 w-4 text-slate-400"
+              aria-hidden="true"
+            >
+              <path
+                d="M9 11L12 14L22 4M21 12V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H16"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
             Review Actions
           </SectionHeading>
@@ -655,8 +1180,19 @@ export default function OpportunityDetail() {
         {/* Right: Outreach Workspace — redesigned with contact header */}
         <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-4">
           <SectionHeading>
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-              <path d="M22 2L11 13M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="h-4 w-4 text-slate-400"
+              aria-hidden="true"
+            >
+              <path
+                d="M22 2L11 13M22 2L15 22L11 13L2 9L22 2Z"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
             Outreach
           </SectionHeading>
@@ -672,7 +1208,12 @@ export default function OpportunityDetail() {
                   <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
                     {info.label}
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-200 break-words" title={info.value}>{info.value}</p>
+                  <p
+                    className="mt-0.5 text-xs text-slate-200 break-words"
+                    title={info.value}
+                  >
+                    {info.value}
+                  </p>
                 </div>
               ))}
             </div>
@@ -682,14 +1223,30 @@ export default function OpportunityDetail() {
           {!latestDraft ? (
             <div className="space-y-3">
               <p className="text-sm text-slate-500">No outreach drafts yet.</p>
+              {outreachBlockedReason && (
+                <p className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+                  {outreachBlockedReason}
+                </p>
+              )}
               <button
                 type="button"
                 onClick={handleGenerateDraft}
-                disabled={generatingDraft}
+                disabled={generatingDraft || Boolean(outreachBlockedReason)}
                 className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center gap-1.5"
               >
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
-                  <path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 5V19M5 12H19"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
                 {generatingDraft ? "Generating…" : "Generate draft"}
               </button>
@@ -726,13 +1283,40 @@ export default function OpportunityDetail() {
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 rounded border border-slate-700 px-3 py-2 text-xs text-accent-400 transition-colors hover:border-accent-600 hover:text-accent-300"
                 >
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 shrink-0" aria-hidden="true">
-                    <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M16 18H8M16 13H8M10 9H8" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"/>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="h-4 w-4 shrink-0"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M16 18H8M16 13H8M10 9H8"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                    />
                   </svg>
                   Audit PDF
-                  <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 ml-auto" aria-hidden="true">
-                    <path d="M18 13V19C18 19.5304 17.7893 20.0391 17.4142 20.4142C17.0391 20.7893 16.5304 21 16 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V8C3 7.46957 3.21071 6.96086 3.58579 6.58579C3.96086 6.21071 4.46957 6 5 6H11M15 3H21V9M21 3L10 14" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="h-3 w-3 ml-auto"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M18 13V19C18 19.5304 17.7893 20.0391 17.4142 20.4142C17.0391 20.7893 16.5304 21 16 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V8C3 7.46957 3.21071 6.96086 3.58579 6.58579C3.96086 6.21071 4.46957 6 5 6H11M15 3H21V9M21 3L10 14"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                 </a>
               )}
@@ -757,7 +1341,9 @@ export default function OpportunityDetail() {
                     key={d.id}
                     className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/40 px-3 py-1.5 text-xs text-slate-400"
                   >
-                    <span className="truncate">{d.subject ?? "(no subject)"}</span>
+                    <span className="truncate">
+                      {d.subject ?? "(no subject)"}
+                    </span>
                     <span className="flex items-center gap-2 shrink-0">
                       <Badge tone={toneForStatus(d.status)}>{d.status}</Badge>
                       <span>{formatTimestamp(d.created_at)}</span>
@@ -774,13 +1360,32 @@ export default function OpportunityDetail() {
       <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SectionHeading>
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
-              <path d="M22 11.08V12C21.9988 14.1564 21.3005 16.2547 20.0093 17.9818C18.7182 19.709 16.9033 20.9725 14.8354 21.5839C12.7674 22.1953 10.5573 22.1219 8.53447 21.3746C6.51168 20.6273 4.78465 19.2461 3.61096 17.4371C2.43727 15.628 1.87979 13.4881 2.02168 11.3363C2.16356 9.18455 2.99721 7.13631 4.39828 5.49706C5.79935 3.85781 7.69279 2.71537 9.79619 2.24013C11.8996 1.7649 14.1003 1.98232 16.07 2.85999" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M22 4L12 14.01L9 11.01" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              className="h-4 w-4 text-slate-400"
+              aria-hidden="true"
+            >
+              <path
+                d="M22 11.08V12C21.9988 14.1564 21.3005 16.2547 20.0093 17.9818C18.7182 19.709 16.9033 20.9725 14.8354 21.5839C12.7674 22.1953 10.5573 22.1219 8.53447 21.3746C6.51168 20.6273 4.78465 19.2461 3.61096 17.4371C2.43727 15.628 1.87979 13.4881 2.02168 11.3363C2.16356 9.18455 2.99721 7.13631 4.39828 5.49706C5.79935 3.85781 7.69279 2.71537 9.79619 2.24013C11.8996 1.7649 14.1003 1.98232 16.07 2.85999"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M22 4L12 14.01L9 11.01"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
             Outcome Tracking
           </SectionHeading>
-          <Badge tone={outcome_state ? toneForStatus(outcome_state) : "neutral"}>
+          <Badge
+            tone={outcome_state ? toneForStatus(outcome_state) : "neutral"}
+          >
             {outcome_state ? outcome_state.replace(/_/g, " ") : "Not started"}
           </Badge>
         </div>
@@ -799,7 +1404,9 @@ export default function OpportunityDetail() {
                     disabled={disabled}
                     className="rounded bg-slate-700 px-3 py-1.5 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {outcomePending === action.toState ? "Working…" : action.label}
+                    {outcomePending === action.toState
+                      ? "Working…"
+                      : action.label}
                   </button>
                 );
               })}
@@ -812,7 +1419,8 @@ export default function OpportunityDetail() {
           </>
         ) : (
           <p className="text-sm text-slate-500">
-            Send an approved outreach email to start tracking outcomes for this opportunity.
+            Send an approved outreach email to start tracking outcomes for this
+            opportunity.
           </p>
         )}
       </section>

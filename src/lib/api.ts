@@ -7,11 +7,12 @@
 import type {
   ApiErrorBody,
   AddAnalysableEvidenceInput,
-  Assessment,
-  AuditReport,
+  AnalysisResponse,
+  AuditRunResponse,
   Draft,
   DraftResponse,
   DraftStatus,
+  EnrichmentResponse,
   OppDetail,
   OppListResponse,
   OutcomeResponse,
@@ -31,7 +32,8 @@ const API_BASE = (import.meta.env.VITE_API_BASE ?? "").trim();
 const OPERATOR_TOKEN = (import.meta.env.VITE_OPERATOR_TOKEN ?? "").trim();
 
 /** True when both required env vars are present. Used to drive the in-app config banner. */
-export const isApiConfigured: boolean = API_BASE.length > 0 && OPERATOR_TOKEN.length > 0;
+export const isApiConfigured: boolean =
+  API_BASE.length > 0 && OPERATOR_TOKEN.length > 0;
 
 export const envStatus = {
   hasApiBase: API_BASE.length > 0,
@@ -145,7 +147,11 @@ export function createOutreachDraft(
 export function updateOutreachDraft(
   id: string,
   draftId: string,
-  payload: { subject?: string; body?: string; status?: Exclude<DraftStatus, "sent"> },
+  payload: {
+    subject?: string;
+    body?: string;
+    status?: Exclude<DraftStatus, "sent">;
+  },
 ): Promise<DraftResponse> {
   return request<DraftResponse>(
     `/${encodeURIComponent(id)}/outreach/${encodeURIComponent(draftId)}`,
@@ -162,7 +168,10 @@ export function updateOutreachDraft(
  * if the draft is not approved or already sent, 422 for a bad recipient, 502 on SMTP failure
  * (draft stays approved → retryable), and 503 if SMTP is not configured.
  */
-export function sendOutreachDraft(id: string, draftId: string): Promise<SendResponse> {
+export function sendOutreachDraft(
+  id: string,
+  draftId: string,
+): Promise<SendResponse> {
   return request<SendResponse>(
     `/${encodeURIComponent(id)}/outreach/${encodeURIComponent(draftId)}/send`,
     { method: "POST", body: JSON.stringify({}) },
@@ -203,10 +212,13 @@ export function addAnalysableEvidence(
   id: string,
   input: AddAnalysableEvidenceInput,
 ): Promise<{ evidence: VisualEvidence }> {
-  return request<{ evidence: VisualEvidence }>(`/${encodeURIComponent(id)}/visual-evidence`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return request<{ evidence: VisualEvidence }>(
+    `/${encodeURIComponent(id)}/visual-evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 /** GET {VITE_API_BASE}/pipeline -> { metrics, opportunities } */
@@ -214,34 +226,94 @@ export function fetchPipeline(): Promise<PipelineResponse> {
   return request<PipelineResponse>("/pipeline");
 }
 
-export function startDiscoveryRun(input: DiscoverySearchInput): Promise<DiscoveryRunResponse> {
-  return request<DiscoveryRunResponse>("/discovery-runs", { method: "POST", body: JSON.stringify(input) });
-}
-
-export function fetchDiscoveryRun(runId: string): Promise<DiscoveryRunResponse> {
-  return request<DiscoveryRunResponse>(`/discovery-runs/${encodeURIComponent(runId)}`);
-}
-
-export function fetchDiscoveryCandidates(runId: string): Promise<DiscoveryCandidatesResponse> {
-  return request<DiscoveryCandidatesResponse>(`/discovery-runs/${encodeURIComponent(runId)}/candidates`);
-}
-
-function discoveryBatch(runId: string, action: "import" | "assess" | "audit", candidateIds: string[], retry = false): Promise<BatchActionResponse> {
-  return request<BatchActionResponse>(`/discovery-runs/${encodeURIComponent(runId)}/candidates/${action}`, {
-    method: "POST", body: JSON.stringify({ candidate_ids: candidateIds, retry }),
+export function startDiscoveryRun(
+  input: DiscoverySearchInput,
+): Promise<DiscoveryRunResponse> {
+  return request<DiscoveryRunResponse>("/discovery-runs", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
-export const importDiscoveryCandidates = (runId: string, ids: string[]) => discoveryBatch(runId, "import", ids);
-export const assessDiscoveryCandidates = (runId: string, ids: string[], retry = false) => discoveryBatch(runId, "assess", ids, retry);
-export const auditDiscoveryCandidates = (runId: string, ids: string[], retry = false) => discoveryBatch(runId, "audit", ids, retry);
-
-export function assessOpportunity(id: string, retry = false): Promise<{ assessment: Assessment }> {
-  return request(`/${encodeURIComponent(id)}/assess`, { method: "POST", body: JSON.stringify({ retry }) });
+export function fetchDiscoveryRun(
+  runId: string,
+): Promise<DiscoveryRunResponse> {
+  return request<DiscoveryRunResponse>(
+    `/discovery-runs/${encodeURIComponent(runId)}`,
+  );
 }
 
-export function auditOpportunity(id: string, retry = false): Promise<{ audit: AuditReport }> {
-  return request(`/${encodeURIComponent(id)}/audit`, { method: "POST", body: JSON.stringify({ retry }) });
+export function fetchDiscoveryCandidates(
+  runId: string,
+): Promise<DiscoveryCandidatesResponse> {
+  return request<DiscoveryCandidatesResponse>(
+    `/discovery-runs/${encodeURIComponent(runId)}/candidates`,
+  );
+}
+
+function discoveryBatch(
+  runId: string,
+  action: "import" | "assess" | "audit",
+  candidateIds: string[],
+  retry = false,
+): Promise<BatchActionResponse> {
+  return request<BatchActionResponse>(
+    `/discovery-runs/${encodeURIComponent(runId)}/candidates/${action}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ candidate_ids: candidateIds, retry }),
+    },
+  );
+}
+
+export const importDiscoveryCandidates = (runId: string, ids: string[]) =>
+  discoveryBatch(runId, "import", ids);
+export const assessDiscoveryCandidates = (
+  runId: string,
+  ids: string[],
+  retry = false,
+) => discoveryBatch(runId, "assess", ids, retry);
+export const auditDiscoveryCandidates = (
+  runId: string,
+  ids: string[],
+  retry = false,
+) => discoveryBatch(runId, "audit", ids, retry);
+
+export function enrichOpportunity(
+  id: string,
+  retry = false,
+): Promise<EnrichmentResponse> {
+  return request(`/${encodeURIComponent(id)}/enrich`, {
+    method: "POST",
+    body: JSON.stringify({ retry }),
+  });
+}
+
+export function analyzeOpportunity(
+  id: string,
+  retry = false,
+): Promise<AnalysisResponse> {
+  return request(`/${encodeURIComponent(id)}/assess`, {
+    method: "POST",
+    body: JSON.stringify({ retry }),
+  });
+}
+
+export function assessOpportunity(
+  id: string,
+  retry = false,
+): Promise<AnalysisResponse> {
+  return analyzeOpportunity(id, retry);
+}
+
+export function auditOpportunity(
+  id: string,
+  retry = false,
+): Promise<AuditRunResponse> {
+  return request(`/${encodeURIComponent(id)}/audit`, {
+    method: "POST",
+    body: JSON.stringify({ retry }),
+  });
 }
 
 /** Re-exported for convenience so components can type draft state without importing types directly. */
