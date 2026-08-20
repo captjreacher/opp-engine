@@ -6,6 +6,7 @@
 
 import type {
   ApiErrorBody,
+  AddAnalysableEvidenceInput,
   Assessment,
   AuditReport,
   Draft,
@@ -23,6 +24,7 @@ import type {
   DiscoveryRunResponse,
   DiscoveryCandidatesResponse,
   BatchActionResponse,
+  VisualEvidence,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").trim();
@@ -186,6 +188,24 @@ export function setOutcomeState(
   return request<OutcomeResponse>(`/${encodeURIComponent(id)}/outcome`, {
     method: "POST",
     body: JSON.stringify({ to_state: toState }),
+  });
+}
+
+/**
+ * POST {VITE_API_BASE}/{id}/visual-evidence -> { evidence } (201)
+ *
+ * Operator entry point for analysable imagery (operator-supplied or licensed).
+ * The API creates a MANAGED evidence row flagged analysis_allowed = true — it
+ * never converts reference-only evidence (e.g. Google Street View) into
+ * analysable evidence.
+ */
+export function addAnalysableEvidence(
+  id: string,
+  input: AddAnalysableEvidenceInput,
+): Promise<{ evidence: VisualEvidence }> {
+  return request<{ evidence: VisualEvidence }>(`/${encodeURIComponent(id)}/visual-evidence`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

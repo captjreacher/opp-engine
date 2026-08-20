@@ -168,6 +168,69 @@ export interface Lead {
   trust_summary: string | null;
 }
 
+// ── Visual evidence (Phase 5.1) ─────────────────────────────────────────────
+//
+// Mirrors the canonical `local_business_visual_evidence` table served by the
+// `opportunities` Edge Function. Google Street View evidence is REFERENCE-ONLY:
+// analysis_allowed=false and storage_mode="reference_only" — the SPA never
+// downloads, persists, proxies or forwards Street View imagery anywhere.
+
+export type VisualEvidenceSource =
+  | "google_street_view"
+  | "google_places_photo"
+  | "operator_upload"
+  | "licensed_external"
+  | "public_web";
+
+export type VisualEvidenceMediaType = "image" | "video" | "panorama";
+
+export type VisualEvidenceStatus =
+  | "available"
+  | "unavailable"
+  | "expired"
+  | "superseded"
+  | "rejected";
+
+export type VisualEvidenceStorageMode = "reference_only" | "temporary" | "managed";
+
+export type CaptureDatePrecision = "exact" | "month" | "year" | "unknown";
+
+/** One row of canonical location-linked visual evidence for a lead. */
+export interface VisualEvidence {
+  id: string;
+  source: VisualEvidenceSource;
+  media_type: VisualEvidenceMediaType;
+  provider_reference: string | null;
+  source_url: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  heading: number | null;
+  pitch: number | null;
+  captured_at: string | null;
+  capture_date_precision: CaptureDatePrecision | null;
+  discovered_at: string;
+  analysis_allowed: boolean;
+  storage_mode: VisualEvidenceStorageMode;
+  metadata: Record<string, unknown>;
+  status: VisualEvidenceStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Input contract for operator-supplied/licensed analysable imagery
+ * (POST {VITE_API_BASE}/{id}/visual-evidence). The operator references a hosted
+ * image URL; direct file upload is not yet supported (see Visual Evidence panel).
+ */
+export interface AddAnalysableEvidenceInput {
+  source_url: string;
+  source?: "operator_upload" | "licensed_external";
+  captured_at?: string | null;
+  capture_date_precision?: CaptureDatePrecision | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
 /** Full detail response (GET {VITE_API_BASE}/{id}). */
 export interface OppDetail {
   lead: Lead;
@@ -180,6 +243,7 @@ export interface OppDetail {
   review_state: ReviewState;
   outcome_state: OutcomeState | null;
   console_events: ConsoleEvent[];
+  visual_evidence: VisualEvidence[];
 }
 
 /** Response from POST {VITE_API_BASE}/{id}/outreach and PATCH .../outreach/{draftId}. */

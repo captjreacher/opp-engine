@@ -23,6 +23,7 @@ import ColorMeter from "../components/ColorMeter";
 import AssessmentCard from "../components/AssessmentCard";
 import EvidencePanel, { deriveEvidence } from "../components/EvidencePanel";
 import EventTimeline from "../components/EventTimeline";
+import VisualEvidencePanel from "../components/VisualEvidencePanel";
 
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -568,6 +569,13 @@ export default function OpportunityDetail() {
           )}
         </div>
       </div>
+
+      {/* ── Visual Evidence (Phase 5.1 — street view reference evidence + analysable image entry point) ── */}
+      <VisualEvidencePanel
+        leadId={lead.id}
+        evidence={detail.visual_evidence ?? []}
+        onAdded={load}
+      />
 
       {/* ── Evidence Panel (collapsible, full width) ── */}
       <EvidencePanel items={evidenceItems} />

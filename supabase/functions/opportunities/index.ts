@@ -815,15 +815,16 @@ async function getOpportunity(id: string): Promise<Response> {
   if (leadErr) throw leadErr;
   if (!lead) return json({ error: "not_found" }, 404);
 
-  const [assessments, reports, events, drafts, review_state, cEvents] = await Promise.all([
+  const [assessments, reports, events, drafts, visualEvidence, review_state, cEvents] = await Promise.all([
     supabase.from("local_business_lead_assessments").select("*").eq("lead_id", id).order("assessed_at", { ascending: false }),
     supabase.from("local_business_audit_reports").select("*").eq("lead_id", id).order("generated_at", { ascending: false }),
     supabase.from("local_business_lead_events").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
     supabase.from("local_business_outreach_drafts").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
+    supabase.from("local_business_visual_evidence").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
     deriveReviewState(id),
     consoleEvents(id),
   ]);
-  for (const r of [assessments, reports, events, drafts]) {
+  for (const r of [assessments, reports, events, drafts, visualEvidence]) {
     if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
   }
 
@@ -844,6 +845,7 @@ async function getOpportunity(id: string): Promise<Response> {
     review_state,
     outcome_state,
     console_events: cEvents,
+    visual_evidence: visualEvidence.data ?? [],
   });
 }
 
@@ -1055,6 +1057,67 @@ async function setOutcome(id: string, payload: Record<string, unknown>): Promise
   return json({ outcome_state: to, event: action }, 201);
 }
 
+// POST /:id/visual-evidence — operator entry point for analysable imagery.
+//
+// Google Street View evidence is reference-only and must NEVER be converted to
+// analysable evidence here. This endpoint only creates NEW managed evidence
+// rows (source = operator_upload | licensed_external) from an operator-supplied
+// hosted image URL, explicitly flagged analysis_allowed = true and
+// storage_mode = managed. No image bytes are uploaded, downloaded or proxied.
+async function addVisualEvidence(id: string, payload: Record<string, unknown>): Promise<Response> {
+  const { data: lead } = await supabase.from("local_business_leads").select("id").eq("id", id).maybeSingle();
+  if (!lead) return json({ error: "not_found" }, 404);
+
+  const sourceUrl = cleanText(payload.source_url, 2000);
+  if (!sourceUrl) return json({ error: "validation_failed", detail: "source_url is required." }, 422);
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(sourceUrl);
+  } catch {
+    return json({ error: "validation_failed", detail: "source_url must be a valid http(s) URL." }, 422);
+  }
+  if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+    return json({ error: "validation_failed", detail: "source_url must be a valid http(s) URL." }, 422);
+  }
+
+  const source = payload.source === "licensed_external" ? "licensed_external" : "operator_upload";
+  const mediaType = payload.media_type === "video" ? "video" : payload.media_type === "panorama" ? "panorama" : "image";
+  const precision = payload.capture_date_precision === "exact" || payload.capture_date_precision === "month" || payload.capture_date_precision === "year" ? payload.capture_date_precision : null;
+  const capturedAt = typeof payload.captured_at === "string" && payload.captured_at ? payload.captured_at : null;
+  const latitude = typeof payload.latitude === "number" && Number.isFinite(payload.latitude) ? payload.latitude : null;
+  const longitude = typeof payload.longitude === "number" && Number.isFinite(payload.longitude) ? payload.longitude : null;
+
+  const { data: evidence, error } = await supabase
+    .from("local_business_visual_evidence")
+    .insert({
+      lead_id: id,
+      source,
+      media_type: mediaType,
+      source_url: sourceUrl,
+      captured_at: capturedAt,
+      capture_date_precision: precision,
+      latitude,
+      longitude,
+      analysis_allowed: true,
+      storage_mode: "managed",
+      status: "available",
+      metadata: {
+        submitted_by: "operator-console",
+        submitted_via: "opportunities-api",
+      },
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+
+  await supabase.from("opportunity_console_audit_log").insert({
+    action: "visual_evidence_added", lead_id: id, actor: "operator-console",
+    metadata: { evidence_id: evidence.id, source, source_url: sourceUrl, analysis_allowed: true, storage_mode: "managed" },
+  });
+
+  return json({ evidence }, 201);
+}
+
 // ---- Router -----------------------------------------------------------------
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -1111,6 +1174,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     if (req.method === "PATCH" && parts.length === 3 && parts[1] === "outreach") {
       return await updateOutreach(parts[0], parts[2], await req.json().catch(() => ({})));
+    }
+    if (req.method === "POST" && parts.length === 2 && parts[1] === "visual-evidence") {
+      return await addVisualEvidence(parts[0], await req.json().catch(() => ({})));
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "review") {
       return await setReview(parts[0], await req.json().catch(() => ({})));
