@@ -1,25 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiError, ApiNotConfiguredError, fetchOpportunities, isApiConfigured } from "../lib/api";
+import {
+  ApiError,
+  ApiNotConfiguredError,
+  fetchOpportunities,
+  isApiConfigured,
+} from "../lib/api";
 import type { OppRow } from "../lib/types";
 import Badge, { toneForStatus } from "../components/Badge";
 import ScoreBar from "../components/ScoreBar";
-import Filters, { DEFAULT_FILTER_STATE, type FilterState } from "../components/Filters";
+import Filters, {
+  DEFAULT_FILTER_STATE,
+  type FilterState,
+} from "../components/Filters";
 
-function parseOpportunityScore(row: OppRow): number {
-  const parsed = row.opportunity_score !== null ? parseFloat(row.opportunity_score) : NaN;
-  return Number.isFinite(parsed) ? parsed : 0;
+function parseOpportunityScore(row: OppRow): number | null {
+  const parsed =
+    row.opportunity_score !== null ? parseFloat(row.opportunity_score) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function assessmentStatus(row: OppRow): "Assessed" | "Pending" {
-  return row.assessed_at ? "Assessed" : "Pending";
+function assessmentStatus(row: OppRow): "Assessed" | "Not assessed" {
+  return row.assessed_at ? "Assessed" : "Not assessed";
 }
 
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return d.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 export default function OpportunityList() {
@@ -30,6 +42,7 @@ export default function OpportunityList() {
 
   async function load() {
     if (!isApiConfigured) return;
+
     setLoading(true);
     setError(null);
     try {
@@ -49,7 +62,7 @@ export default function OpportunityList() {
   }
 
   useEffect(() => {
-    load();
+    void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -57,23 +70,36 @@ export default function OpportunityList() {
     () => Array.from(new Set(rows.map((r) => r.pipeline_status))).sort(),
     [rows],
   );
+
   const outreachStatusOptions = useMemo(
     () =>
-      Array.from(new Set(rows.map((r) => r.outreach_status ?? "None"))).sort((a, b) =>
-        a === "None" ? -1 : b === "None" ? 1 : a.localeCompare(b),
+      Array.from(new Set(rows.map((r) => r.outreach_status ?? "None"))).sort(
+        (a, b) =>
+          a === "None" ? -1 : b === "None" ? 1 : a.localeCompare(b),
       ),
     [rows],
   );
+
   const maxScore = useMemo(
-    () => rows.reduce((max, r) => Math.max(max, parseOpportunityScore(r)), 0),
+    () =>
+      rows.reduce(
+        (max, row) => Math.max(max, parseOpportunityScore(row) ?? 0),
+        0,
+      ),
     [rows],
   );
 
   const filteredSortedRows = useMemo(() => {
     return rows
-      .filter((row) => parseOpportunityScore(row) >= filters.scoreThreshold)
+      .filter(
+        (row) =>
+          (parseOpportunityScore(row) ?? Number.NEGATIVE_INFINITY) >=
+          filters.scoreThreshold,
+      )
       .filter((row) =>
-        filters.pipelineStatus ? row.pipeline_status === filters.pipelineStatus : true,
+        filters.pipelineStatus
+          ? row.pipeline_status === filters.pipelineStatus
+          : true,
       )
       .filter((row) => {
         if (filters.auditAvailability === "available") return row.has_audit;
@@ -85,23 +111,30 @@ export default function OpportunityList() {
         const outreach = row.outreach_status ?? "None";
         return outreach === filters.outreachStatus;
       })
-      .sort((a, b) => parseOpportunityScore(b) - parseOpportunityScore(a));
+      .sort(
+        (a, b) =>
+          (parseOpportunityScore(b) ?? Number.NEGATIVE_INFINITY) -
+          (parseOpportunityScore(a) ?? Number.NEGATIVE_INFINITY),
+      );
   }, [rows, filters]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Opportunities</h1>
+          <h1 className="text-lg font-semibold text-slate-100">
+            Opportunities
+          </h1>
           <p className="text-sm text-slate-500">
             {loading
               ? "Loading…"
               : `${filteredSortedRows.length} of ${rows.length} opportunit${rows.length === 1 ? "y" : "ies"}`}
           </p>
         </div>
+
         <button
           type="button"
-          onClick={load}
+          onClick={() => void load()}
           disabled={loading || !isApiConfigured}
           className="flex items-center gap-1.5 rounded border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -143,9 +176,15 @@ export default function OpportunityList() {
         <table className="min-w-full divide-y divide-slate-800 text-sm">
           <thead className="bg-slate-900/80">
             <tr>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">Business</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">Location</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">Industry</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-400">
+                Business
+              </th>
+              <th className="px-3 py-2 text-left font-medium text-slate-400">
+                Location
+              </th>
+              <th className="px-3 py-2 text-left font-medium text-slate-400">
+                Industry
+              </th>
               <th className="px-3 py-2 text-left font-medium text-slate-400">
                 Opportunity Score
               </th>
@@ -155,14 +194,19 @@ export default function OpportunityList() {
               <th className="px-3 py-2 text-left font-medium text-slate-400">
                 Assessment
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">Audit</th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">Outreach</th>
+              <th className="px-3 py-2 text-left font-medium text-slate-400">
+                Audit
+              </th>
+              <th className="px-3 py-2 text-left font-medium text-slate-400">
+                Outreach
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/70 bg-slate-950/40">
             {filteredSortedRows.map((row) => {
               const score = parseOpportunityScore(row);
               const status = assessmentStatus(row);
+
               return (
                 <tr key={row.id} className="hover:bg-slate-900/50">
                   <td className="px-3 py-2.5">
@@ -176,20 +220,30 @@ export default function OpportunityList() {
                       updated {formatTimestamp(row.updated_at)}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-slate-300">{row.location ?? "—"}</td>
-                  <td className="px-3 py-2.5 text-slate-300">{row.industry ?? "—"}</td>
+                  <td className="px-3 py-2.5 text-slate-300">
+                    {row.location ?? "—"}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-300">
+                    {row.industry ?? "—"}
+                  </td>
                   <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <span className="w-14 font-mono text-sm font-semibold text-slate-100">
-                        {score.toFixed(2)}
+                    {score !== null ? (
+                      <div className="flex items-center gap-2">
+                        <span className="w-14 font-mono text-sm font-semibold text-slate-100">
+                          {score.toFixed(2)}
+                        </span>
+                        <ScoreBar
+                          value={score}
+                          max={Math.max(maxScore, 1)}
+                          compact
+                          showValue={false}
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-sm text-slate-500">
+                        Not assessed
                       </span>
-                      <ScoreBar
-                        value={score}
-                        max={Math.max(maxScore, 1)}
-                        compact
-                        showValue={false}
-                      />
-                    </div>
+                    )}
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge tone={toneForStatus(row.pipeline_status)}>
@@ -222,9 +276,10 @@ export default function OpportunityList() {
             No opportunities found.
           </div>
         )}
+
         {!loading && rows.length > 0 && filteredSortedRows.length === 0 && (
           <div className="p-8 text-center text-sm text-slate-500">
-            No opportunities match the current filters.
+            No opportunities match current filters.
           </div>
         )}
       </div>

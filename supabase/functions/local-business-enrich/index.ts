@@ -2112,25 +2112,82 @@ function buildEnrichmentResult(args: {
 // Scoring
 // ─────────────────────────────────────────────────────────────────────────────
 
-function score(fields: Record<Exclude<PatchableFieldKey, "opening_hours">, string | null>, result: EnrichmentResult) {
+type AssessmentComponentScores = {
+  demand_signal_score: number;
+  trust_leakage_score: number;
+  conversion_maturity_score: number;
+  ai_readiness_score: number;
+  recommended_outreach_angle: string;
+  assessment_summary: string;
+};
+
+type PersistedAssessment = AssessmentComponentScores & {
+  id: string;
+  opportunity_score: number | null;
+};
+
+function parseOpportunityScore(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function score(fields: Record<Exclude<PatchableFieldKey, "opening_hours">, string | null>, result: EnrichmentResult): AssessmentComponentScores {
   const signals = meaningfulSignalCount(fields);
   const demand = fields.category ? 72 : 52;
   const trustLeakage = clamp(100 - result.trust_score + (fields.website_url?.startsWith("https://") ? 0 : 6), 10, 90);
   const conversion = fields.website_url ? (result.trust_signals.includes("clear_contact_pathway") ? 74 : 62) : fields.facebook_url || fields.google_maps_url ? 48 : 34;
   const aiReadiness = fields.website_url && result.confidence_score >= 75 ? 70 : fields.website_url ? 60 : fields.facebook_url || fields.google_maps_url ? 48 : 32;
-  const opportunity = Math.round((demand + (100 - trustLeakage) + conversion + aiReadiness) / 4);
 
   return {
     demand_signal_score: demand,
     trust_leakage_score: trustLeakage,
     conversion_maturity_score: conversion,
     ai_readiness_score: aiReadiness,
-    opportunity_score: opportunity,
     recommended_outreach_angle:
       trustLeakage > 50 ? "Fix trust leakage: profile + proof + conversion path" : "Scale demand capture from current trust base",
     assessment_summary: `Assessed after enrichment found ${signals} operational signal(s). Alignment ${result.data_alignment_status}; trust ${result.trust_score}; website ${
       fields.website_url ? "present" : "missing"
     }; maps ${fields.google_maps_url ? "present" : "missing"}.`,
+  };
+}
+
+async function insertAssessment(
+  supabase: SupabaseClientLike,
+  args: {
+    leadId: string;
+    assessedAt: string;
+    scoring: AssessmentComponentScores;
+    errorLabel: "assessment_insert_failed" | "partial_assessment_insert_failed";
+  },
+): Promise<PersistedAssessment> {
+  const { data, error } = await supabase
+    .from("local_business_lead_assessments")
+    .insert({
+      lead_id: args.leadId,
+      demand_signal_score: args.scoring.demand_signal_score,
+      trust_leakage_score: args.scoring.trust_leakage_score,
+      conversion_maturity_score: args.scoring.conversion_maturity_score,
+      ai_readiness_score: args.scoring.ai_readiness_score,
+      assessment_summary: args.scoring.assessment_summary,
+      recommended_outreach_angle: args.scoring.recommended_outreach_angle,
+      assessed_by: "local-business-enrich",
+      assessed_at: args.assessedAt,
+    })
+    .select("id, opportunity_score")
+    .single();
+
+  if (error || !data) {
+    throw new Error(`${args.errorLabel}: ${error?.message ?? "no inserted row"}`);
+  }
+
+  return {
+    ...args.scoring,
+    id: data.id as string,
+    opportunity_score: parseOpportunityScore(data.opportunity_score),
   };
 }
 
@@ -2880,33 +2937,40 @@ export async function handler(req: Request) {
 
       // ── Partial: create assessment so callers (opportunities engine) can discover it ──
       const partialScoring = score(effective, result);
-      let partialAssessmentId: string | null = null;
+      let partialAssessment: PersistedAssessment;
+
       try {
-        const { error: paError, data: paData } = await supabase.from("local_business_lead_assessments").insert({
-          lead_id: leadId,
-          ...partialScoring,
-          assessed_by: "local-business-enrich",
-          assessed_at: now,
-        }).select("id").single();
-        if (paError || !paData) throw new Error(`partial_assessment_insert_failed: ${paError?.message ?? "no inserted row"}`);
-        partialAssessmentId = paData.id as string;
+        partialAssessment = await insertAssessment(supabase, {
+          leadId,
+          assessedAt: now,
+          scoring: partialScoring,
+          errorLabel: "partial_assessment_insert_failed",
+        });
       } catch (assessmentErr) {
         const assessmentErrMsg = errorMessage(assessmentErr);
-        log("partial_assessment_insert_failed", { lead_id: leadId, enrichment_outcome: "partial", error: assessmentErrMsg });
-        return jsonResponse({
-          ok: false,
-          status: "partial",
+
+        log("partial_assessment_insert_failed", {
           lead_id: leadId,
-          requested_event_id: startedEventId,
+          enrichment_outcome: "partial",
           error: assessmentErrMsg,
-        }, 500);
+        });
+
+        return jsonResponse(
+          {
+            ok: false,
+            status: "partial",
+            lead_id: leadId,
+            requested_event_id: startedEventId,
+            error: assessmentErrMsg,
+          },
+          500,
+        );
       }
 
       log("enrichment_partial_assessment", {
         lead_id: leadId,
-        enrichment_outcome: "partial",
-        assessment_id: partialAssessmentId,
-        opportunity_score: partialScoring.opportunity_score,
+        assessment_id: partialAssessment.id,
+        opportunity_score: partialAssessment.opportunity_score,
       });
 
       const { error: partialUpdateError } = await supabase.from("local_business_leads").update(leadPatch).eq("id", leadId);
@@ -2930,6 +2994,8 @@ export async function handler(req: Request) {
           diagnostics: leadPatch.enrichment_diagnostics as Json,
           enrichment_debug: finalEnrichmentDebug,
           reason: partialReason,
+          assessment_id: partialAssessment.id,
+          opportunity_score: partialAssessment.opportunity_score,
           started_event_id: startedEventId,
           source_event_id: resolved.sourceEventId ?? null,
         },
@@ -2946,12 +3012,22 @@ export async function handler(req: Request) {
           diagnostics: leadPatch.enrichment_diagnostics as Json,
           enrichment_debug: finalEnrichmentDebug,
           reason: partialReason,
+          assessment_id: partialAssessment.id,
+          opportunity_score: partialAssessment.opportunity_score,
           requested_event_id: startedEventId,
           source_event_id: resolved.sourceEventId ?? null,
         },
       });
 
-      log("enrichment_partial", { lead_id: leadId, started_event_id: startedEventId, partial_event_id: partialEventId, reason: partialReason, search_tier_reached: discovery.searchTierReached });
+      log("enrichment_partial", {
+        lead_id: leadId,
+        started_event_id: startedEventId,
+        partial_event_id: partialEventId,
+        assessment_id: partialAssessment.id,
+        opportunity_score: partialAssessment.opportunity_score,
+        reason: partialReason,
+        search_tier_reached: discovery.searchTierReached,
+      });
 
       return jsonResponse({
         ok: true,
@@ -2960,9 +3036,11 @@ export async function handler(req: Request) {
         requested_event_id: startedEventId,
         enriched_event_id: completedEventId,
         partial_event_id: partialEventId,
-        assessment_id: partialAssessmentId,
+        assessment_id: partialAssessment.id,
         search_tier_reached: discovery.searchTierReached,
         details: {
+          assessment_id: partialAssessment.id,
+          opportunity_score: partialAssessment.opportunity_score,
           meaningful_signal_count: meaningfulSignals,
           fields_found_now: foundNow,
           data_alignment_status: result.data_alignment_status,
@@ -3028,17 +3106,23 @@ export async function handler(req: Request) {
     });
 
     const scoring = score(effective, result);
-    const { error: assessmentError, data: assessmentData } = await supabase.from("local_business_lead_assessments").insert({
-      lead_id: leadId,
+    const assessment = await insertAssessment(supabase, {
+      leadId,
+      assessedAt: now,
+      scoring,
+      errorLabel: "assessment_insert_failed",
+    });
+    const persistedScoring = {
       ...scoring,
-      assessed_by: "local-business-enrich",
-      assessed_at: now,
-    }).select("id").single();
-    if (assessmentError || !assessmentData) throw new Error(`assessment_insert_failed: ${assessmentError?.message ?? "no inserted row"}`);
+      opportunity_score: assessment.opportunity_score,
+    };
 
     const { error: assessedStatusError } = await supabase
       .from("local_business_leads")
-      .update({ enrichment_status: "assessed", status: resolved.lead.status === "discovered" || resolved.lead.status === "enriched" ? "assessed" : resolved.lead.status })
+      .update({
+        enrichment_status: "assessed",
+        status: resolved.lead.status === "discovered" || resolved.lead.status === "enriched" ? "assessed" : resolved.lead.status,
+      })
       .eq("id", leadId);
     if (assessedStatusError) throw new Error(`assessed_status_update_failed: ${assessedStatusError.message}`);
 
@@ -3053,7 +3137,8 @@ export async function handler(req: Request) {
         trust_signals: result.trust_signals,
         risk_flags: result.risk_flags,
         data_alignment_status: result.data_alignment_status,
-        scoring,
+        scoring: persistedScoring,
+        assessment_id: assessment.id,
         meaningful_signal_count: meaningfulSignals,
         search_tier_reached: discovery.searchTierReached,
         started_event_id: startedEventId,
@@ -3068,7 +3153,8 @@ export async function handler(req: Request) {
       businessName,
       status: "completed",
       payload: {
-        ...scoring,
+        ...persistedScoring,
+        assessment_id: assessment.id,
         meaningful_signal_count: meaningfulSignals,
         trust_assessed_event_id: trustAssessedEventId,
         requested_event_id: startedEventId,
@@ -3081,8 +3167,8 @@ export async function handler(req: Request) {
       started_event_id: startedEventId,
       completed_event_id: completedEventId,
       trust_assessed_event_id: trustAssessedEventId,
-      assessment_id: assessmentData.id,
-      opportunity_score: scoring.opportunity_score,
+      assessment_id: assessment.id,
+      opportunity_score: assessment.opportunity_score,
       search_tier_reached: discovery.searchTierReached,
       fields_updated: fieldsUpdated,
     });
@@ -3094,8 +3180,11 @@ export async function handler(req: Request) {
       requested_event_id: startedEventId,
       enriched_event_id: completedEventId,
       assessed_event_id: trustAssessedEventId,
+      assessment_id: assessment.id,
       search_tier_reached: discovery.searchTierReached,
       details: {
+        assessment_id: assessment.id,
+        opportunity_score: assessment.opportunity_score,
         meaningful_signal_count: meaningfulSignals,
         fields_found_now: foundNow,
         data_alignment_status: result.data_alignment_status,
@@ -3169,6 +3258,5 @@ export async function handler(req: Request) {
       500,
     );
   }
-}
+if (import.meta.main) Deno.serve(handler);}
 
-if (import.meta.main) Deno.serve(handler);
