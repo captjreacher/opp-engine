@@ -170,6 +170,7 @@ export interface Lead {
   source_platform: string | null;
   address: string | null;
   trust_summary: string | null;
+  enrichment_status: string | null;
   enrichment_diagnostics?: unknown;
   updated_at?: string | null;
 }
@@ -257,6 +258,8 @@ export interface DraftResponse {
 export interface EnrichmentResponse {
   ok: boolean;
   status?: string;
+  lead_id?: string;
+  enrichment_status?: string;
   evidence?: unknown;
   assessmentId?: string | null;
   error?: string;

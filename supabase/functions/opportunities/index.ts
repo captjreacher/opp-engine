@@ -55,6 +55,21 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function runInBackground(work: Promise<unknown>): void {
+  const runtime = globalThis as typeof globalThis & {
+    EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
+  };
+
+  if (runtime.EdgeRuntime) {
+    runtime.EdgeRuntime.waitUntil(work);
+    return;
+  }
+
+  void work.catch((error) => {
+    console.error("Background task failed", error);
+  });
+}
+
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -1244,6 +1259,76 @@ async function runOpportunityEnrichment(
     });
     return { ok: false, error: detail };
   }
+}
+
+async function requestOpportunityEnrichment(
+  leadId: string,
+  retry = false,
+): Promise<Response> {
+  const { data: lead, error: leadError } = await supabase
+    .from("local_business_leads")
+    .select("id,enrichment_status")
+    .eq("id", leadId)
+    .maybeSingle();
+
+  if (leadError) {
+    throw new Error(`lead_lookup_failed: ${leadError.message}`);
+  }
+
+  if (!lead) {
+    return json({ error: "not_found" }, 404);
+  }
+
+  if (lead.enrichment_status === "enriching") {
+    return json(
+      {
+        ok: false,
+        error: "enrichment_in_progress",
+        detail: "Enrichment is already running.",
+        lead_id: leadId,
+        enrichment_status: "enriching",
+      },
+      409,
+    );
+  }
+
+  const { error: updateError } = await supabase
+    .from("local_business_leads")
+    .update({ enrichment_status: "enriching" })
+    .eq("id", leadId);
+
+  if (updateError) {
+    throw new Error(`enrichment_request_update_failed: ${updateError.message}`);
+  }
+
+  const { error: auditError } = await supabase
+    .from("opportunity_console_audit_log")
+    .insert({
+      action: "enrichment_requested",
+      lead_id: leadId,
+      actor: "operator-console",
+      metadata: { retry, enrichment_status: "enriching" },
+    });
+
+  if (auditError) {
+    console.error(
+      "Failed to persist enrichment_requested audit row",
+      leadId,
+      auditError.message,
+    );
+  }
+
+  runInBackground(runOpportunityEnrichment(leadId, retry));
+
+  return json(
+    {
+      ok: true,
+      status: "accepted",
+      lead_id: leadId,
+      enrichment_status: "enriching",
+    },
+    202,
+  );
 }
 
 async function runOpportunityAnalysis(
@@ -2502,9 +2587,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "enrich") {
       const payload = (await req.json().catch(() => ({}))) as JsonObject;
-      return json(
-        await runOpportunityEnrichment(parts[0], payload.retry === true),
-      );
+      return await requestOpportunityEnrichment(parts[0], payload.retry === true);
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "assess") {
       const payload = (await req.json().catch(() => ({}))) as JsonObject;

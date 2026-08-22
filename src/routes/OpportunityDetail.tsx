@@ -14,6 +14,11 @@ import {
   setReviewState,
   updateOutreachDraft,
 } from "../lib/api";
+import {
+  ENRICHMENT_POLL_INTERVAL_MS,
+  ENRICHMENT_POLL_TIMEOUT_MS,
+  isEnrichmentRunning,
+} from "../lib/enrichment";
 import type { OppDetail, OutcomeState, ReviewState } from "../lib/types";
 import { OUTCOME_ACTIONS, REVIEW_STATE_ORDER } from "../lib/types";
 import Badge, { toneForStatus } from "../components/Badge";
@@ -130,18 +135,27 @@ export default function OpportunityDetail() {
   const [intelligenceNotice, setIntelligenceNotice] = useState<string | null>(
     null,
   );
+  const [enrichmentPollNonce, setEnrichmentPollNonce] = useState(0);
 
-  async function load() {
+  async function load({ silent = false }: { silent?: boolean } = {}) {
     if (!id || !isApiConfigured) return;
-    setLoading(true);
-    setLoadError(null);
+    if (!silent) {
+      setLoading(true);
+      setLoadError(null);
+    }
     try {
       const res = await fetchOpportunityDetail(id);
       setDetail(res);
     } catch (err) {
-      setLoadError(errorMessage(err));
+      if (!silent) {
+        setLoadError(errorMessage(err));
+      } else {
+        throw err;
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }
 
@@ -149,6 +163,55 @@ export default function OpportunityDetail() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    if (!id || !isApiConfigured) return;
+    if (!detail || !isEnrichmentRunning(detail.lead.enrichment_status)) return;
+
+    let cancelled = false;
+    const startedAt = Date.now();
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const stopPolling = (notice?: string) => {
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (notice) setIntelligenceNotice(notice);
+    };
+
+    const refreshEnrichment = async () => {
+      if (cancelled) return;
+      if (Date.now() - startedAt >= ENRICHMENT_POLL_TIMEOUT_MS) {
+        stopPolling("Enrichment is still processing. Refresh to check status.");
+        return;
+      }
+
+      try {
+        await load({ silent: true });
+      } catch {
+        // Background polling must stay quiet and never convert transient poll
+        // failures into a backend enrichment failure.
+      }
+    };
+
+    timeoutId = setTimeout(() => {
+      if (cancelled) return;
+      stopPolling("Enrichment is still processing. Refresh to check status.");
+    }, ENRICHMENT_POLL_TIMEOUT_MS);
+
+    intervalId = setInterval(() => {
+      void refreshEnrichment();
+    }, ENRICHMENT_POLL_INTERVAL_MS);
+
+    void refreshEnrichment();
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.lead.enrichment_status, enrichmentPollNonce, id, isApiConfigured]);
 
   async function handleReviewTransition(
     toState: Exclude<ReviewState, "detected">,
@@ -258,21 +321,54 @@ export default function OpportunityDetail() {
 
   async function handleEnrich(retry = false) {
     if (!id) return;
+
+    if (isEnrichmentRunning(detail?.lead.enrichment_status ?? null)) {
+      await handleRefreshEnrichmentStatus();
+      return;
+    }
+
     setIntelligencePending("enrich");
     setIntelligenceError(null);
     setIntelligenceNotice(null);
     try {
       const res = await enrichOpportunity(id, retry);
       setIntelligenceNotice(
-        res.status
-          ? `Enrichment ${retry ? "re-run" : "completed"} with status: ${res.status}. Analysis remains operator-triggered.`
-          : `Enrichment ${retry ? "re-run" : "completed"}. Analysis remains operator-triggered.`,
+        res.status === "accepted"
+          ? "Enrichment accepted. Running in the background."
+          : res.status
+            ? `Enrichment ${retry ? "re-run" : "completed"} with status: ${res.status}. Analysis remains operator-triggered.`
+            : `Enrichment ${retry ? "re-run" : "completed"}. Analysis remains operator-triggered.`,
       );
-      await load();
+      if (res.enrichment_status === "enriching" || res.status === "accepted") {
+        setDetail((current) =>
+          current
+            ? {
+                ...current,
+                lead: {
+                  ...current.lead,
+                  enrichment_status: "enriching",
+                },
+              }
+            : current,
+        );
+        setEnrichmentPollNonce((value) => value + 1);
+      }
     } catch (err) {
       setIntelligenceError(errorMessage(err));
     } finally {
       setIntelligencePending(null);
+    }
+  }
+
+  async function handleRefreshEnrichmentStatus() {
+    if (!id) return;
+    setIntelligenceNotice("Enrichment is still processing. Refresh to check status.");
+    setEnrichmentPollNonce((value) => value + 1);
+    try {
+      await load({ silent: true });
+    } catch {
+      // Manual refresh while the job is still in flight should stay
+      // neutral if the detail fetch briefly fails.
     }
   }
 
@@ -400,6 +496,9 @@ export default function OpportunityDetail() {
     console_events,
   } = detail;
 
+  const enrichmentStatus = lead.enrichment_status ?? null;
+  const enrichmentRunning = isEnrichmentRunning(enrichmentStatus);
+
   const currentReviewIndex = REVIEW_STATE_ORDER.indexOf(review_state);
   const latestDraft = outreach_drafts[0] ?? null;
   const priorDrafts = outreach_drafts.slice(1);
@@ -421,8 +520,11 @@ export default function OpportunityDetail() {
     "analysis_completed",
   ]);
   const hasEnrichment =
-    latestEnrichmentEvent?.action === "enrichment_completed" ||
-    hasEnrichmentDiagnostics(detail);
+    !enrichmentRunning &&
+    (enrichmentStatus === "enriched" ||
+      enrichmentStatus === "partial" ||
+      latestEnrichmentEvent?.action === "enrichment_completed" ||
+      hasEnrichmentDiagnostics(detail));
   const opportunityScore =
     latest_assessment?.opportunity_score !== null &&
     latest_assessment?.opportunity_score !== undefined
@@ -542,33 +644,41 @@ export default function OpportunityDetail() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              Enrichment
-            </p>
-            <p className="mt-1 text-sm text-slate-200">
-              {hasEnrichment ? "Ready" : "Not enriched"}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              {latestEnrichmentEvent
-                ? `${latestEnrichmentEvent.action === "enrichment_failed" ? "Last attempt failed" : "Last completed"} ${formatTimestamp(latestEnrichmentEvent.created_at)}`
-                : "Run enrichment before analysis."}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void handleEnrich(false)}
-                disabled={intelligencePending !== null}
-                className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {intelligencePending === "enrich"
-                  ? "Working…"
-                  : hasEnrichment
-                    ? "Refresh enrichment"
-                    : "Run enrichment"}
-              </button>
-            </div>
+<div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+<div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+<p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+Enrichment
+</p>
+<p className="mt-1 text-sm text-slate-200">
+  {enrichmentRunning ? "Enrichment running…" : hasEnrichment ? "Ready" : "Not enriched"}
+</p>
+<p className="mt-1 text-xs text-slate-500">
+  {enrichmentRunning
+    ? "Enrichment is running in the background. The page will refresh automatically."
+    : latestEnrichmentEvent
+      ? `${latestEnrichmentEvent.action === "enrichment_failed" ? "Last attempt failed" : "Last completed"} ${formatTimestamp(latestEnrichmentEvent.created_at)}`
+      : "Run enrichment before analysis."}
+</p>
+<div className="mt-3 flex flex-wrap gap-2">
+  <button
+    type="button"
+    onClick={() =>
+      void (enrichmentRunning
+        ? handleRefreshEnrichmentStatus()
+        : handleEnrich(false))
+    }
+    disabled={intelligencePending !== null}
+    className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
+  >
+    {intelligencePending === "enrich"
+      ? "Working…"
+      : enrichmentRunning
+        ? "Refresh status"
+        : hasEnrichment
+        ? "Refresh enrichment"
+        : "Run enrichment"}
+  </button>
+</div>
           </div>
 
           <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
