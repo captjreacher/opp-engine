@@ -100,7 +100,8 @@ export interface Draft {
   sent_at: string | null;
 }
 
-export type ReviewState = "detected" | "reviewed" | "approved" | "contact_ready";
+export type ReviewState =
+  "detected" | "reviewed" | "approved" | "contact_ready";
 
 /** Ordered review-state pipeline, used to derive which "next" action(s) to enable. */
 export const REVIEW_STATE_ORDER: ReviewState[] = [
@@ -129,7 +130,10 @@ export const OUTCOME_STATE_ORDER: OutcomeState[] = [
 ];
 
 /** Operator-selectable outcome transitions (excludes the derived "sent" entry state). */
-export const OUTCOME_ACTIONS: { toState: Exclude<OutcomeState, "sent">; label: string }[] = [
+export const OUTCOME_ACTIONS: {
+  toState: Exclude<OutcomeState, "sent">;
+  label: string;
+}[] = [
   { toState: "awaiting_response", label: "Mark Awaiting Response" },
   { toState: "replied", label: "Mark Replied" },
   { toState: "meeting_booked", label: "Mark Meeting Booked" },
@@ -166,6 +170,68 @@ export interface Lead {
   source_platform: string | null;
   address: string | null;
   trust_summary: string | null;
+  enrichment_diagnostics?: unknown;
+  updated_at?: string | null;
+}
+
+// ── Visual evidence (Phase 5.1) ─────────────────────────────────────────────
+//
+// Mirrors the canonical `local_business_visual_evidence` table served by the
+// `opportunities` Edge Function. Google Street View evidence is REFERENCE-ONLY:
+// analysis_allowed=false and storage_mode="reference_only" — the SPA never
+// downloads, persists, proxies or forwards Street View imagery anywhere.
+
+export type VisualEvidenceSource =
+  | "google_street_view"
+  | "google_places_photo"
+  | "operator_upload"
+  | "licensed_external"
+  | "public_web";
+
+export type VisualEvidenceMediaType = "image" | "video" | "panorama";
+
+export type VisualEvidenceStatus =
+  "available" | "unavailable" | "expired" | "superseded" | "rejected";
+
+export type VisualEvidenceStorageMode =
+  "reference_only" | "temporary" | "managed";
+
+export type CaptureDatePrecision = "exact" | "month" | "year" | "unknown";
+
+/** One row of canonical location-linked visual evidence for a lead. */
+export interface VisualEvidence {
+  id: string;
+  source: VisualEvidenceSource;
+  media_type: VisualEvidenceMediaType;
+  provider_reference: string | null;
+  source_url: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  heading: number | null;
+  pitch: number | null;
+  captured_at: string | null;
+  capture_date_precision: CaptureDatePrecision | null;
+  discovered_at: string;
+  analysis_allowed: boolean;
+  storage_mode: VisualEvidenceStorageMode;
+  metadata: Record<string, unknown>;
+  status: VisualEvidenceStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Input contract for operator-supplied/licensed analysable imagery
+ * (POST {VITE_API_BASE}/{id}/visual-evidence). The operator references a hosted
+ * image URL; direct file upload is not yet supported (see Visual Evidence panel).
+ */
+export interface AddAnalysableEvidenceInput {
+  source_url: string;
+  source?: "operator_upload" | "licensed_external";
+  captured_at?: string | null;
+  capture_date_precision?: CaptureDatePrecision | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 /** Full detail response (GET {VITE_API_BASE}/{id}). */
@@ -180,11 +246,34 @@ export interface OppDetail {
   review_state: ReviewState;
   outcome_state: OutcomeState | null;
   console_events: ConsoleEvent[];
+  visual_evidence: VisualEvidence[];
 }
 
 /** Response from POST {VITE_API_BASE}/{id}/outreach and PATCH .../outreach/{draftId}. */
 export interface DraftResponse {
   draft: Draft;
+}
+
+export interface EnrichmentResponse {
+  ok: boolean;
+  status?: string;
+  evidence?: unknown;
+  assessmentId?: string | null;
+  error?: string;
+}
+
+export interface AnalysisResponse {
+  ok: boolean;
+  assessment?: Assessment;
+  evidence?: unknown;
+  error?: string;
+  promoted_existing?: boolean;
+}
+
+export interface AuditRunResponse {
+  ok: boolean;
+  audit?: AuditReport;
+  error?: string;
 }
 
 /** Response from POST {VITE_API_BASE}/{id}/outreach/{draftId}/send. */
@@ -239,8 +328,15 @@ export interface ApiErrorBody {
 }
 
 export type DiscoveryRunStatus =
-  | "queued" | "discovering" | "enriching" | "scoring" | "auditing"
-  | "completed" | "partially_completed" | "failed" | "cancelled";
+  | "queued"
+  | "discovering"
+  | "enriching"
+  | "scoring"
+  | "auditing"
+  | "completed"
+  | "partially_completed"
+  | "failed"
+  | "cancelled";
 
 export interface DiscoverySearchInput {
   location: string;
@@ -306,8 +402,12 @@ export interface DiscoveryCandidate {
   updated_at: string;
 }
 
-export interface DiscoveryRunResponse { run: DiscoveryRun; }
-export interface DiscoveryCandidatesResponse { candidates: DiscoveryCandidate[]; }
+export interface DiscoveryRunResponse {
+  run: DiscoveryRun;
+}
+export interface DiscoveryCandidatesResponse {
+  candidates: DiscoveryCandidate[];
+}
 export interface BatchActionResult {
   candidate_id: string;
   lead_id?: string;
