@@ -91,11 +91,19 @@ export default function OpportunityList() {
 
   const filteredSortedRows = useMemo(() => {
     return rows
-      .filter(
-        (row) =>
-          (parseOpportunityScore(row) ?? Number.NEGATIVE_INFINITY) >=
-          filters.scoreThreshold,
-      )
+.filter((row) => {
+  const score = parseOpportunityScore(row);
+
+  // A zero threshold means "no minimum score filter".
+  // Unassessed opportunities therefore remain visible.
+  if (filters.scoreThreshold <= 0) {
+    return true;
+  }
+
+  // When a real minimum is selected, only assessed
+  // opportunities meeting that threshold qualify.
+  return score !== null && score >= filters.scoreThreshold;
+})
       .filter((row) =>
         filters.pipelineStatus
           ? row.pipeline_status === filters.pipelineStatus
