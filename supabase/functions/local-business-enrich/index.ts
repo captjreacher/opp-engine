@@ -226,6 +226,17 @@ const GOOGLE_PLACES_FIELD_MASK = [
 // Minimum number of meaningful fields before we skip lower tiers.
 const SUFFICIENT_CANDIDATE_THRESHOLD = 2;
 
+// Hard execution budgets. Supabase terminated the previous implementation at
+// ~150s, so enrichment must finish well before the platform ceiling.
+const OVERALL_ENRICHMENT_BUDGET_MS = 95_000;
+const GOOGLE_PLACES_TIMEOUT_MS = 15_000;
+const EXA_TIER_BUDGET_MS = 24_000;
+const EXA_QUERY_TIMEOUT_MS = 7_000;
+const DIRECT_FETCH_TIER_BUDGET_MS = 24_000;
+const DIRECT_FETCH_TIMEOUT_MS = 3_500;
+const DUCKDUCKGO_TIER_BUDGET_MS = 12_000;
+const MIN_TIER_START_REMAINING_MS = 8_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitive helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -778,6 +789,29 @@ async function fetchText(url: string, timeoutMs = 4500) {
   }
 }
 
+async function fetchWithTimeout(
+  input: string | URL | Request,
+  init: RequestInit = {},
+  timeoutMs = 10_000,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function budgetRemaining(deadlineMs: number) {
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+function canStartTier(deadlineMs: number, minimumMs = MIN_TIER_START_REMAINING_MS) {
+  return budgetRemaining(deadlineMs) >= minimumMs;
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Content extraction from fetched pages
 // ─────────────────────────────────────────────────────────────────────────────
@@ -851,7 +885,7 @@ async function searchGooglePlaces(
   const startMs = Date.now();
 
   try {
-    const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const response = await fetchWithTimeout("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -859,7 +893,7 @@ async function searchGooglePlaces(
         "X-Goog-FieldMask": GOOGLE_PLACES_FIELD_MASK,
       },
       body: JSON.stringify({ textQuery: query }),
-    });
+    }, GOOGLE_PLACES_TIMEOUT_MS);
 
     const wallClockMs = Date.now() - startMs;
 
@@ -1072,10 +1106,10 @@ async function searchGooglePlaces(
     // If primary query found no accepted candidates, try fallback queries
     const executedQueries = [query];
     if (candidates.length === 0 && fallbackQueries.length > 0) {
-      for (const fbQuery of fallbackQueries.slice(0, 2)) {
+      for (const fbQuery of fallbackQueries.slice(0, 1)) {
         try {
           log("google_places_fallback_query", { query: fbQuery });
-          const fbResponse = await fetch("https://places.googleapis.com/v1/places:searchText", {
+          const fbResponse = await fetchWithTimeout("https://places.googleapis.com/v1/places:searchText", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -1083,7 +1117,7 @@ async function searchGooglePlaces(
               "X-Goog-FieldMask": GOOGLE_PLACES_FIELD_MASK,
             },
             body: JSON.stringify({ textQuery: fbQuery }),
-          });
+          }, GOOGLE_PLACES_TIMEOUT_MS);
           executedQueries.push(fbQuery);
           if (!fbResponse.ok) continue;
           const fbData = await fbResponse.json();
@@ -1231,10 +1265,14 @@ async function searchExa(
   const executedQueries: string[] = [];
 
   try {
-    for (const query of queries) {
+    for (const query of queries.slice(0, 3)) {
+      if (Date.now() - startMs >= EXA_TIER_BUDGET_MS) {
+        log("tier_budget_exhausted", { tier: "exa", elapsed_ms: Date.now() - startMs });
+        break;
+      }
       executedQueries.push(query);
 
-      const response = await fetch("https://api.exa.ai/search", {
+      const response = await fetchWithTimeout("https://api.exa.ai/search", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1247,7 +1285,7 @@ async function searchExa(
             highlights: { numSentences: 5 },
           },
         }),
-      });
+      }, EXA_QUERY_TIMEOUT_MS);
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "");
@@ -1461,10 +1499,10 @@ async function directFetchAndCrawl(
   const allBaseUrls = dedupe([...websitesFromTiers, ...generatedUrls]);
 
   // For each base URL, also try /contact, /about, /contact-us
-  const contactSubpages = ["/contact", "/about", "/contact-us"];
+  const contactSubpages = ["/contact", "/contact-us"];
   const urlsToProbe: string[] = [];
 
-  for (const baseUrl of allBaseUrls.slice(0, 10)) {
+  for (const baseUrl of allBaseUrls.slice(0, 4)) {
     urlsToProbe.push(baseUrl);
     try {
       const parsed = new URL(baseUrl);
@@ -1476,7 +1514,7 @@ async function directFetchAndCrawl(
     }
   }
 
-  const deduped = dedupe(urlsToProbe).slice(0, 30);
+  const deduped = dedupe(urlsToProbe).slice(0, 12);
   const candidates: FieldCandidate[] = [];
   const reviewSignals: Json[] = [];
   const operatingHistory: Json[] = [];
@@ -1485,9 +1523,8 @@ async function directFetchAndCrawl(
   let pagesReached = 0;
   let openingHours: OpeningHours | null = null;
 
-  await Promise.all(
-    deduped.map(async (url) => {
-      const result = await fetchText(url);
+  const processUrl = async (url: string) => {
+      const result = await fetchText(url, DIRECT_FETCH_TIMEOUT_MS);
       if (!result.ok) return;
       pagesReached++;
 
@@ -1596,8 +1633,24 @@ async function directFetchAndCrawl(
       const history = detectOperatingHistory(result.text);
       if (history) operatingHistory.push({ source_url: sourceUrl, ...history });
       contactPathways.push(...detectContactPathway(result.text));
-    }),
-  );
+  };
+
+  const concurrency = 4;
+  for (let index = 0; index < deduped.length; index += concurrency) {
+    if (Date.now() - startMs >= DIRECT_FETCH_TIER_BUDGET_MS) {
+      log("tier_budget_exhausted", {
+        tier: "direct_fetch",
+        elapsed_ms: Date.now() - startMs,
+        urls_processed: index,
+      });
+      break;
+    }
+    await Promise.all(
+      deduped
+        .slice(index, index + concurrency)
+        .map((url) => processUrl(url)),
+    );
+  }
 
   const wallClockMs = Date.now() - startMs;
 
@@ -1638,14 +1691,16 @@ async function discoverSearchCandidates(
     [context.strippedName, "reviews", context.suburb, context.country].filter(Boolean).join(" "),
   ]).filter(Boolean);
 
-  const attempted = queries.map((query) => `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
+  const attempted = queries
+    .slice(0, 3)
+    .map((query) => `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
   const candidates: FieldCandidate[] = [];
   const reviewSignals: Json[] = [];
   const rejectedUrls: RejectedUrl[] = [];
 
   await Promise.all(
     attempted.map(async (url) => {
-      const result = await fetchText(url);
+      const result = await fetchText(url, 3_500);
       if (!result.ok) return;
       reviewSignals.push(...extractReviewSignals(result.text, result.finalUrl));
 
@@ -2109,89 +2164,6 @@ function buildEnrichmentResult(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Scoring
-// ─────────────────────────────────────────────────────────────────────────────
-
-type AssessmentComponentScores = {
-  demand_signal_score: number;
-  trust_leakage_score: number;
-  conversion_maturity_score: number;
-  ai_readiness_score: number;
-  recommended_outreach_angle: string;
-  assessment_summary: string;
-};
-
-type PersistedAssessment = AssessmentComponentScores & {
-  id: string;
-  opportunity_score: number | null;
-};
-
-function parseOpportunityScore(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function score(fields: Record<Exclude<PatchableFieldKey, "opening_hours">, string | null>, result: EnrichmentResult): AssessmentComponentScores {
-  const signals = meaningfulSignalCount(fields);
-  const demand = fields.category ? 72 : 52;
-  const trustLeakage = clamp(100 - result.trust_score + (fields.website_url?.startsWith("https://") ? 0 : 6), 10, 90);
-  const conversion = fields.website_url ? (result.trust_signals.includes("clear_contact_pathway") ? 74 : 62) : fields.facebook_url || fields.google_maps_url ? 48 : 34;
-  const aiReadiness = fields.website_url && result.confidence_score >= 75 ? 70 : fields.website_url ? 60 : fields.facebook_url || fields.google_maps_url ? 48 : 32;
-
-  return {
-    demand_signal_score: demand,
-    trust_leakage_score: trustLeakage,
-    conversion_maturity_score: conversion,
-    ai_readiness_score: aiReadiness,
-    recommended_outreach_angle:
-      trustLeakage > 50 ? "Fix trust leakage: profile + proof + conversion path" : "Scale demand capture from current trust base",
-    assessment_summary: `Assessed after enrichment found ${signals} operational signal(s). Alignment ${result.data_alignment_status}; trust ${result.trust_score}; website ${
-      fields.website_url ? "present" : "missing"
-    }; maps ${fields.google_maps_url ? "present" : "missing"}.`,
-  };
-}
-
-async function insertAssessment(
-  supabase: SupabaseClientLike,
-  args: {
-    leadId: string;
-    assessedAt: string;
-    scoring: AssessmentComponentScores;
-    errorLabel: "assessment_insert_failed" | "partial_assessment_insert_failed";
-  },
-): Promise<PersistedAssessment> {
-  const { data, error } = await supabase
-    .from("local_business_lead_assessments")
-    .insert({
-      lead_id: args.leadId,
-      demand_signal_score: args.scoring.demand_signal_score,
-      trust_leakage_score: args.scoring.trust_leakage_score,
-      conversion_maturity_score: args.scoring.conversion_maturity_score,
-      ai_readiness_score: args.scoring.ai_readiness_score,
-      assessment_summary: args.scoring.assessment_summary,
-      recommended_outreach_angle: args.scoring.recommended_outreach_angle,
-      assessed_by: "local-business-enrich",
-      assessed_at: args.assessedAt,
-    })
-    .select("id, opportunity_score")
-    .single();
-
-  if (error || !data) {
-    throw new Error(`${args.errorLabel}: ${error?.message ?? "no inserted row"}`);
-  }
-
-  return {
-    ...args.scoring,
-    id: data.id as string,
-    opportunity_score: parseOpportunityScore(data.opportunity_score),
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Event emission
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2376,6 +2348,19 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
   let openingHours: OpeningHours | null = null;
   let searchTierReached = "payload";
   const totalStartMs = Date.now();
+  const deadlineMs = totalStartMs + OVERALL_ENRICHMENT_BUDGET_MS;
+  let budgetExhausted = false;
+  let budgetStopTier: string | null = null;
+
+  const stopForBudget = (tier: string) => {
+    budgetExhausted = true;
+    budgetStopTier = tier;
+    log("enrichment_budget_exhausted", {
+      tier,
+      elapsed_ms: Date.now() - totalStartMs,
+      remaining_ms: budgetRemaining(deadlineMs),
+    });
+  };
 
   // Tier debug accumulators
   const tierDebug: EnrichmentDebug["tiers"] = {
@@ -2386,9 +2371,18 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
   };
 
   // ── Tier 1: Google Places ──────────────────────────────────────────────
-  log("tier_start", { tier: "google_places", business_name: businessName });
-  const googleResult = await searchGooglePlaces(context, observedAt, raw);
-  tierDebug.google_places = googleResult.debug;
+  let googleResult: Awaited<ReturnType<typeof searchGooglePlaces>> = {
+    result: null,
+    debug: { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 },
+  };
+  if (canStartTier(deadlineMs)) {
+    log("tier_start", { tier: "google_places", business_name: businessName });
+    googleResult = await searchGooglePlaces(context, observedAt, raw);
+    tierDebug.google_places = googleResult.debug;
+  } else {
+    stopForBudget("google_places");
+    tierDebug.google_places = googleResult.debug;
+  }
 
   if (googleResult.result) {
     allCandidates.push(...googleResult.result.candidates);
@@ -2404,7 +2398,14 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
   // ── Tier 2: Exa Search ────────────────────────────────────────────────
   // Keep searching while priority audit fields are missing. Two fields are not
   // enough coverage for a credible trust audit.
-  if (missingCoverageFields(allCandidates).some((field) => ["website_url", "facebook_url", "email", "address"].includes(field))) {
+  if (
+    !budgetExhausted &&
+    missingCoverageFields(allCandidates).some((field) => ["website_url", "facebook_url", "email", "address"].includes(field))
+  ) {
+    if (!canStartTier(deadlineMs)) {
+      stopForBudget("exa");
+      tierDebug.exa = { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 };
+    } else {
     log("tier_start", { tier: "exa", business_name: businessName });
     const exaResult = await searchExa(context, observedAt);
     tierDebug.exa = exaResult.debug;
@@ -2420,16 +2421,24 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
         queries: exaResult.result.queries,
       });
     }
+    }
   } else {
     tierDebug.exa = { attempted: false, skip_reason: "sufficient_candidates_from_earlier_tiers", wall_clock_ms: 0 };
   }
 
   // ── Tier 3: Direct Fetch + Crawl ──────────────────────────────────────
   // Always run this tier to extract phone/email/hours from discovered websites
-  log("tier_start", { tier: "direct_fetch", business_name: businessName });
-  const directFetchResult = await directFetchAndCrawl(context, allCandidates, observedAt);
-  tierDebug.direct_fetch = directFetchResult.debug;
+  let directFetchResult: Awaited<ReturnType<typeof directFetchAndCrawl>> | null = null;
+  if (!budgetExhausted && canStartTier(deadlineMs)) {
+    log("tier_start", { tier: "direct_fetch", business_name: businessName });
+    directFetchResult = await directFetchAndCrawl(context, allCandidates, observedAt);
+    tierDebug.direct_fetch = directFetchResult.debug;
+  } else {
+    if (!budgetExhausted) stopForBudget("direct_fetch");
+    tierDebug.direct_fetch = { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 };
+  }
 
+  if (directFetchResult) {
   allCandidates.push(...directFetchResult.result.candidates);
   allReviewSignals.push(...directFetchResult.result.reviewSignals);
   allOperatingHistory.push(...directFetchResult.result.operatingHistory);
@@ -2446,11 +2455,19 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
     candidates: directFetchResult.result.candidates.length,
     pages_reached: directFetchResult.result.pagesReached,
   });
+  }
 
   // ── Tier 4: DuckDuckGo HTML (FALLBACK) ────────────────────────────────
   // Search for remaining canonical/contact gaps even when GBP already supplied
   // phone + Maps. This is the common path for finding Facebook and email.
-  if (missingCoverageFields(allCandidates).some((field) => ["website_url", "facebook_url", "google_maps_url", "phone", "email", "address"].includes(field))) {
+  if (
+    !budgetExhausted &&
+    missingCoverageFields(allCandidates).some((field) => ["website_url", "facebook_url", "google_maps_url", "phone", "email", "address"].includes(field))
+  ) {
+    if (!canStartTier(deadlineMs)) {
+      stopForBudget("duckduckgo");
+      tierDebug.duckduckgo = { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 };
+    } else {
     log("tier_start", { tier: "duckduckgo", business_name: businessName });
     const ddgStartMs = Date.now();
     const searchDiscovery = await discoverSearchCandidates(context, observedAt);
@@ -2492,8 +2509,13 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
         wall_clock_ms: tierDebug.direct_fetch.wall_clock_ms + fallbackCrawl.debug.wall_clock_ms,
       };
     }
+    }
   } else {
     tierDebug.duckduckgo = { attempted: false, skip_reason: "sufficient_candidates_from_earlier_tiers", wall_clock_ms: 0 };
+  }
+
+  if (!budgetExhausted && Date.now() - totalStartMs >= OVERALL_ENRICHMENT_BUDGET_MS) {
+    stopForBudget("finalize");
   }
 
   // Always append generated lookup candidates (low-confidence fallbacks)
@@ -2539,7 +2561,7 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
     selected_fields: selectedFields,
     search_tier_reached: searchTierReached,
     total_wall_clock_ms: totalWallClockMs,
-    status: "pending",
+    status: budgetExhausted ? "partial_budget_exhausted" : "pending",
   };
 
   // Legacy diagnostics shape (for backward compatibility with existing lead column)
@@ -2586,6 +2608,8 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
     openingHours,
     searchTierReached,
     enrichmentDebugCore,
+    budgetExhausted,
+    budgetStopTier,
   };
 }
 
@@ -2930,57 +2954,23 @@ export async function handler(req: Request) {
     leadPatch.data_alignment_status = result.confidence_score > 0 && result.confidence_score < 65 ? "low_confidence" : result.data_alignment_status;
 
     // ── Partial outcome: no meaningful signals after enrichment ──────────
-    if (meaningfulSignals === 0 || !strongAnchorPresent) {
+    if (meaningfulSignals === 0 || !strongAnchorPresent || discovery.budgetExhausted) {
       leadPatch.enrichment_status = "partial";
       if (resolved.lead.status === "discovered") leadPatch.status = "review_required";
-      const partialReason = meaningfulSignals === 0 ? "no_meaningful_enrichment_signal" : "strong_anchor_required";
+      const partialReason = discovery.budgetExhausted
+        ? `execution_budget_exhausted:${discovery.budgetStopTier ?? "unknown"}`
+        : meaningfulSignals === 0
+          ? "no_meaningful_enrichment_signal"
+          : "strong_anchor_required";
 
-      // ── Partial: create assessment so callers (opportunities engine) can discover it ──
-      const partialScoring = score(effective, result);
-      let partialAssessment: PersistedAssessment;
-
-      try {
-        partialAssessment = await insertAssessment(supabase, {
-          leadId,
-          assessedAt: now,
-          scoring: partialScoring,
-          errorLabel: "partial_assessment_insert_failed",
-        });
-      } catch (assessmentErr) {
-        const assessmentErrMsg = errorMessage(assessmentErr);
-
-        log("partial_assessment_insert_failed", {
-          lead_id: leadId,
-          enrichment_outcome: "partial",
-          error: assessmentErrMsg,
-        });
-
-        return jsonResponse(
-          {
-            ok: false,
-            status: "partial",
-            lead_id: leadId,
-            requested_event_id: startedEventId,
-            error: assessmentErrMsg,
-          },
-          500,
-        );
-      }
-
-      log("enrichment_partial_assessment", {
-        lead_id: leadId,
-        assessment_id: partialAssessment.id,
-        opportunity_score: partialAssessment.opportunity_score,
-      });
-
-      const { error: partialUpdateError } = await supabase.from("local_business_leads").update(leadPatch).eq("id", leadId);
-      if (partialUpdateError) throw new Error(`partial_update_failed: ${partialUpdateError.message}`);
-
-      const { error: partialAssessedStatusError } = await supabase
+      // Enrichment is intentionally separate from analysis. Persist whatever
+      // canonical evidence was found, mark the run partial, and let the operator
+      // decide whether to run analysis next.
+      const { error: partialUpdateError } = await supabase
         .from("local_business_leads")
-        .update({ enrichment_status: "assessed" })
+        .update(leadPatch)
         .eq("id", leadId);
-      if (partialAssessedStatusError) log("partial_assessed_status_update_failed", { lead_id: leadId, error: partialAssessedStatusError.message });
+      if (partialUpdateError) throw new Error(`partial_update_failed: ${partialUpdateError.message}`);
 
       const completedEventId = await insertEvent(supabase, {
         eventType: "local_business.enrichment.completed",
@@ -2994,8 +2984,6 @@ export async function handler(req: Request) {
           diagnostics: leadPatch.enrichment_diagnostics as Json,
           enrichment_debug: finalEnrichmentDebug,
           reason: partialReason,
-          assessment_id: partialAssessment.id,
-          opportunity_score: partialAssessment.opportunity_score,
           started_event_id: startedEventId,
           source_event_id: resolved.sourceEventId ?? null,
         },
@@ -3012,8 +3000,6 @@ export async function handler(req: Request) {
           diagnostics: leadPatch.enrichment_diagnostics as Json,
           enrichment_debug: finalEnrichmentDebug,
           reason: partialReason,
-          assessment_id: partialAssessment.id,
-          opportunity_score: partialAssessment.opportunity_score,
           requested_event_id: startedEventId,
           source_event_id: resolved.sourceEventId ?? null,
         },
@@ -3023,10 +3009,9 @@ export async function handler(req: Request) {
         lead_id: leadId,
         started_event_id: startedEventId,
         partial_event_id: partialEventId,
-        assessment_id: partialAssessment.id,
-        opportunity_score: partialAssessment.opportunity_score,
         reason: partialReason,
         search_tier_reached: discovery.searchTierReached,
+        total_wall_clock_ms: discovery.enrichmentDebugCore.total_wall_clock_ms,
       });
 
       return jsonResponse({
@@ -3036,15 +3021,14 @@ export async function handler(req: Request) {
         requested_event_id: startedEventId,
         enriched_event_id: completedEventId,
         partial_event_id: partialEventId,
-        assessment_id: partialAssessment.id,
         search_tier_reached: discovery.searchTierReached,
         details: {
-          assessment_id: partialAssessment.id,
-          opportunity_score: partialAssessment.opportunity_score,
+          reason: partialReason,
           meaningful_signal_count: meaningfulSignals,
           fields_found_now: foundNow,
           data_alignment_status: result.data_alignment_status,
           identity_alignment: result.identity_alignment,
+          total_wall_clock_ms: discovery.enrichmentDebugCore.total_wall_clock_ms,
           evidence_counts: Object.fromEntries(
             ["canonical", "supporting", "citation", "rejected"].map((evidenceClass) => [
               evidenceClass,
@@ -3105,70 +3089,12 @@ export async function handler(req: Request) {
       },
     });
 
-    const scoring = score(effective, result);
-    const assessment = await insertAssessment(supabase, {
-      leadId,
-      assessedAt: now,
-      scoring,
-      errorLabel: "assessment_insert_failed",
-    });
-    const persistedScoring = {
-      ...scoring,
-      opportunity_score: assessment.opportunity_score,
-    };
-
-    const { error: assessedStatusError } = await supabase
-      .from("local_business_leads")
-      .update({
-        enrichment_status: "assessed",
-        status: resolved.lead.status === "discovered" || resolved.lead.status === "enriched" ? "assessed" : resolved.lead.status,
-      })
-      .eq("id", leadId);
-    if (assessedStatusError) throw new Error(`assessed_status_update_failed: ${assessedStatusError.message}`);
-
-    const trustAssessedEventId = await insertEvent(supabase, {
-      eventType: "local_business.trust_assessed",
-      leadId,
-      businessName,
-      status: "completed",
-      payload: {
-        trust_score: result.trust_score,
-        trust_summary: result.trust_summary,
-        trust_signals: result.trust_signals,
-        risk_flags: result.risk_flags,
-        data_alignment_status: result.data_alignment_status,
-        scoring: persistedScoring,
-        assessment_id: assessment.id,
-        meaningful_signal_count: meaningfulSignals,
-        search_tier_reached: discovery.searchTierReached,
-        started_event_id: startedEventId,
-        completed_event_id: completedEventId,
-        source_event_id: resolved.sourceEventId ?? null,
-      },
-    });
-
-    await insertEvent(supabase, {
-      eventType: "local_business.assessed",
-      leadId,
-      businessName,
-      status: "completed",
-      payload: {
-        ...persistedScoring,
-        assessment_id: assessment.id,
-        meaningful_signal_count: meaningfulSignals,
-        trust_assessed_event_id: trustAssessedEventId,
-        requested_event_id: startedEventId,
-        source_event_id: resolved.sourceEventId ?? null,
-      },
-    });
-
+    // Do not create an assessment here. Enrichment and analysis are separate
+    // operator-controlled steps in Opp Engine.
     log("enrichment_success", {
       lead_id: leadId,
       started_event_id: startedEventId,
       completed_event_id: completedEventId,
-      trust_assessed_event_id: trustAssessedEventId,
-      assessment_id: assessment.id,
-      opportunity_score: assessment.opportunity_score,
       search_tier_reached: discovery.searchTierReached,
       fields_updated: fieldsUpdated,
     });
@@ -3179,12 +3105,8 @@ export async function handler(req: Request) {
       lead_id: leadId,
       requested_event_id: startedEventId,
       enriched_event_id: completedEventId,
-      assessed_event_id: trustAssessedEventId,
-      assessment_id: assessment.id,
       search_tier_reached: discovery.searchTierReached,
       details: {
-        assessment_id: assessment.id,
-        opportunity_score: assessment.opportunity_score,
         meaningful_signal_count: meaningfulSignals,
         fields_found_now: foundNow,
         data_alignment_status: result.data_alignment_status,
