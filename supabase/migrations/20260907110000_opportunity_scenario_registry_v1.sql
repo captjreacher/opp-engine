@@ -9,7 +9,7 @@ begin;
 
 create table if not exists public.opportunity_scenarios (
   id uuid primary key default gen_random_uuid(),
-  slug text not null unique,
+  slug text not null,
   name text not null,
   description text,
   status text not null default 'draft' check (status in ('draft', 'active', 'retired')),
@@ -25,7 +25,7 @@ create table if not exists public.opportunity_scenarios (
 );
 
 create index if not exists opportunity_scenarios_status_slug_idx
-  on public.opportunity_scenarios(status, slug);
+  on public.opportunity_scenarios(status, slug, version desc);
 
 drop trigger if exists trg_opportunity_scenarios_updated_at on public.opportunity_scenarios;
 create trigger trg_opportunity_scenarios_updated_at
@@ -49,7 +49,7 @@ insert into public.opportunity_scenarios (
   commercial_config
 )
 values (
-  'local-digital-presence-v1',
+  'local-digital-presence',
   'Local Digital Presence',
   'Find local service businesses with visible digital-presence, trust and conversion opportunities.',
   'active',
@@ -120,12 +120,11 @@ values (
     )
   )
 )
-on conflict (slug) do update
+on conflict (slug, version) do update
 set
   name = excluded.name,
   description = excluded.description,
   status = excluded.status,
-  version = excluded.version,
   discovery_config = excluded.discovery_config,
   assessment_config = excluded.assessment_config,
   report_config = excluded.report_config,
@@ -154,7 +153,8 @@ alter table public.local_business_outreach_drafts
 with default_scenario as (
   select *
   from public.opportunity_scenarios
-  where slug = 'local-digital-presence-v1'
+  where slug = 'local-digital-presence'
+    and version = 1
   limit 1
 )
 update public.opportunity_discovery_runs r
@@ -178,7 +178,8 @@ where r.scenario_id is null;
 with default_scenario as (
   select id, version
   from public.opportunity_scenarios
-  where slug = 'local-digital-presence-v1'
+  where slug = 'local-digital-presence'
+    and version = 1
   limit 1
 )
 update public.local_business_lead_assessments a
@@ -192,7 +193,8 @@ where a.scenario_id is null;
 with default_scenario as (
   select id, version
   from public.opportunity_scenarios
-  where slug = 'local-digital-presence-v1'
+  where slug = 'local-digital-presence'
+    and version = 1
   limit 1
 )
 update public.local_business_audit_reports r
@@ -205,7 +207,8 @@ where r.scenario_id is null;
 with default_scenario as (
   select id, version
   from public.opportunity_scenarios
-  where slug = 'local-digital-presence-v1'
+  where slug = 'local-digital-presence'
+    and version = 1
   limit 1
 )
 update public.local_business_outreach_drafts dft
