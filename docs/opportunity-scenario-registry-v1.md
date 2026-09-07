@@ -40,6 +40,8 @@ At this V1 compatibility point, the existing `opportunities` discovery handler d
 
 Before a second scenario is activated, the existing discovery handler must validate the requested active scenario and persist the selected scenario explicitly. This keeps the UI honest: scenario selection exists now, but multi-scenario execution is not claimed until routing is implemented.
 
+The new `opportunity-scenarios` function must be deployed with the same operator-token/CORS configuration as the existing `opportunities` function. No production deployment is part of this branch.
+
 ## Commercial CTA rules
 
 Scenario commercial configuration may contain one or more CTAs. A CTA can point to:
