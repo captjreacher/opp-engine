@@ -24,7 +24,7 @@ function scenarioEndpoint(): string {
   if (/\/opportunities$/i.test(trimmed)) {
     return trimmed.replace(/\/opportunities$/i, "/opportunity-scenarios");
   }
-  return `${trimmed}/opportunity-scenarios`;
+  throw new Error("VITE_API_BASE must point to the opportunities Edge Function.");
 }
 
 export async function fetchOpportunityScenarios(): Promise<OpportunityScenario[]> {
