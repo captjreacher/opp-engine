@@ -30,6 +30,16 @@ It uses Google Places discovery and the existing four assessment dimensions:
 
 The existing scoring and audit implementation remains unchanged in the first migration. The registry turns that implementation into an explicit assessment/report profile rather than replacing it.
 
+## Operator selector
+
+The Discovery screen loads active scenarios through the read-only `opportunity-scenarios` Edge Function and requires the operator to choose a scenario before starting discovery.
+
+The selected scenario supplies discovery defaults such as result limit and radius. The client also includes `scenario_id` in the discovery request payload.
+
+At this V1 compatibility point, the existing `opportunities` discovery handler does not yet consume arbitrary `scenario_id` values. Because only the seeded Local Digital Presence scenario is active, the database compatibility trigger records the same scenario and immutable snapshot on every new run.
+
+Before a second scenario is activated, the existing discovery handler must validate the requested active scenario and persist the selected scenario explicitly. This keeps the UI honest: scenario selection exists now, but multi-scenario execution is not claimed until routing is implemented.
+
 ## Commercial CTA rules
 
 Scenario commercial configuration may contain one or more CTAs. A CTA can point to:
@@ -47,9 +57,7 @@ After successful SMTP send, Opp Engine will idempotently hand the prospect to Co
 
 ## Next wiring steps
 
-1. Expose active scenarios through the existing Opportunity Engine API.
-2. Add scenario selection to Discovery.
-3. Persist explicit scenario ID/version/snapshot at run creation.
-4. Pass scenario provenance through assessment, report and outreach writes.
-5. Render scenario CTAs in the customer-ready report and resolve Billing offer references.
-6. Add Cockpit pre-assessment eligibility and post-send handoff contracts.
+1. Add explicit scenario routing to the existing discovery handler before a second scenario is activated.
+2. Pass scenario provenance through assessment, report and outreach writes rather than relying on compatibility defaults.
+3. Add Cockpit pre-assessment eligibility and post-send handoff contracts.
+4. Render scenario CTAs in the customer-ready report and resolve Billing offer references.
