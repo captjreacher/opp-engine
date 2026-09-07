@@ -24,8 +24,9 @@ as $$
     'commercial_config', s.commercial_config
   )
   from public.opportunity_scenarios s
-  where s.slug = 'local-digital-presence-v1'
+  where s.slug = 'local-digital-presence'
     and s.status = 'active'
+  order by s.version desc
   limit 1;
 $$;
 
@@ -68,8 +69,9 @@ begin
 
   select * into v_scenario
   from public.opportunity_scenarios
-  where slug = 'local-digital-presence-v1'
+  where slug = 'local-digital-presence'
     and status = 'active'
+  order by version desc
   limit 1;
 
   if not found then
@@ -123,8 +125,9 @@ begin
 
   select id, version into v_id, v_version
   from public.opportunity_scenarios
-  where slug = 'local-digital-presence-v1'
+  where slug = 'local-digital-presence'
     and status = 'active'
+  order by version desc
   limit 1;
 
   if v_id is null then
@@ -184,7 +187,14 @@ as $$
     s.commercial_config
   from public.opportunity_scenarios s
   where s.status = 'active'
-  order by s.name, s.version desc;
+    and not exists (
+      select 1
+      from public.opportunity_scenarios newer
+      where newer.slug = s.slug
+        and newer.status = 'active'
+        and newer.version > s.version
+    )
+  order by s.name;
 $$;
 
 revoke all on function public.opportunity_default_scenario_snapshot() from public, anon, authenticated;
