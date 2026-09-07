@@ -46,6 +46,7 @@ begin
 
   if v_candidate.imported_lead_id is not null then
     return jsonb_build_object(
+      'ok', true,
       'lead_id', v_candidate.imported_lead_id,
       'created', false,
       'idempotent', true,
@@ -95,11 +96,13 @@ begin
     where id = p_candidate_id;
 
     return jsonb_build_object(
+      'ok', false,
       'lead_id', null,
       'created', false,
       'idempotent', false,
       'eligible', false,
       'classification', v_classification,
+      'error', 'candidate_not_commercially_eligible',
       'eligibility', v_eligibility
     );
   end if;
@@ -163,6 +166,7 @@ begin
   );
 
   return jsonb_build_object(
+    'ok', true,
     'lead_id', v_lead_id,
     'created', v_created,
     'idempotent', false,
