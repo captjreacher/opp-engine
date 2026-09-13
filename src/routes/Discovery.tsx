@@ -10,6 +10,12 @@ import {
   startDiscoveryRun,
 } from "../lib/api";
 import { isActiveDiscoveryStatus, validateDiscoveryInput } from "../lib/discovery";
+import {
+  fetchOpportunityScenarios,
+  scenarioDefaultRadius,
+  scenarioDefaultResultLimit,
+  type OpportunityScenario,
+} from "../lib/scenarios";
 import type { DiscoveryCandidate, DiscoveryRun, DiscoverySearchInput } from "../lib/types";
 
 const initialForm: DiscoverySearchInput = {
@@ -75,12 +81,45 @@ export default function Discovery() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scenarios, setScenarios] = useState<OpportunityScenario[]>([]);
+  const [scenarioLoading, setScenarioLoading] = useState(true);
+  const [selectedScenarioId, setSelectedScenarioId] = useState("");
+
+  const selectedScenario = useMemo(
+    () => scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? null,
+    [scenarios, selectedScenarioId],
+  );
 
   const reload = useCallback(async (runId: string) => {
     const [runResponse, candidateResponse] = await Promise.all([fetchDiscoveryRun(runId), fetchDiscoveryCandidates(runId)]);
     setRun(runResponse.run);
     setCandidates(candidateResponse.candidates);
     setInspecting((current) => current ? candidateResponse.candidates.find((item) => item.id === current.id) ?? null : null);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetchOpportunityScenarios()
+      .then((items) => {
+        if (!active) return;
+        setScenarios(items);
+        const first = items[0];
+        if (first) {
+          setSelectedScenarioId(first.id);
+          setForm((current) => ({
+            ...current,
+            result_limit: scenarioDefaultResultLimit(first) ?? current.result_limit,
+            radius_m: scenarioDefaultRadius(first),
+          }));
+        }
+      })
+      .catch((reason) => {
+        if (active) setError(`Unable to load opportunity scenarios: ${displayError(reason)}`);
+      })
+      .finally(() => {
+        if (active) setScenarioLoading(false);
+      });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -94,17 +133,33 @@ export default function Discovery() {
     return () => window.clearInterval(timer);
   }, [reload, run]);
 
+  function chooseScenario(id: string) {
+    setSelectedScenarioId(id);
+    const scenario = scenarios.find((item) => item.id === id);
+    if (!scenario) return;
+    setForm((current) => ({
+      ...current,
+      result_limit: scenarioDefaultResultLimit(scenario) ?? current.result_limit,
+      radius_m: scenarioDefaultRadius(scenario),
+    }));
+  }
+
   async function start() {
     const validation = validateDiscoveryInput(form);
     setErrors(validation);
+    if (!selectedScenario) {
+      setError("Choose an active opportunity scenario before starting discovery.");
+      return;
+    }
     if (Object.keys(validation).length) return;
     setBusy("discover"); setError(null); setNotice(null); setCandidates([]); setSelected(new Set());
     try {
-      const response = await startDiscoveryRun(form);
+      const response = await startDiscoveryRun({ ...form, scenario_id: selectedScenario.id } as DiscoverySearchInput);
       window.sessionStorage.setItem("opp-engine:last-discovery-run", response.run.id);
+      window.sessionStorage.setItem("opp-engine:last-scenario-id", selectedScenario.id);
       setRun(response.run);
       await reload(response.run.id);
-      setNotice("Discovery run queued. You can continue using the console while it runs.");
+      setNotice(`Discovery run queued using ${selectedScenario.name} v${selectedScenario.version}.`);
     } catch (reason) { setError(displayError(reason)); }
     finally { setBusy(null); }
   }
@@ -130,16 +185,28 @@ export default function Discovery() {
 
   return (
     <div className="space-y-6">
-      <header><p className="text-xs font-medium uppercase tracking-[0.18em] text-accent-400">Intelligence intake</p><h1 className="mt-1 text-2xl font-semibold text-white">Discovery</h1><p className="mt-1 text-sm text-slate-400">Find businesses, review evidence, then deliberately import, score and audit them.</p></header>
+      <header><p className="text-xs font-medium uppercase tracking-[0.18em] text-accent-400">Intelligence intake</p><h1 className="mt-1 text-2xl font-semibold text-white">Discovery</h1><p className="mt-1 text-sm text-slate-400">Choose what opportunity to look for, then define where and who to search.</p></header>
 
       <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
+        <div className="mb-5 grid gap-3 border-b border-slate-800 pb-5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <label className="text-sm text-slate-300">Opportunity scenario *
+            <select className={fieldClass} value={selectedScenarioId} disabled={scenarioLoading || scenarios.length === 0} onChange={(event) => chooseScenario(event.target.value)}>
+              {scenarios.length === 0 && <option value="">{scenarioLoading ? "Loading scenarios…" : "No active scenarios"}</option>}
+              {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name} · v{scenario.version}</option>)}
+            </select>
+          </label>
+          <div className="rounded-md border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-400">
+            <p className="font-medium text-slate-200">{selectedScenario?.name ?? "Scenario required"}</p>
+            <p className="mt-1">{selectedScenario?.description ?? "The scenario determines the assessment, report and commercial outcome path."}</p>
+          </div>
+        </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           <label className="text-sm text-slate-300 lg:col-span-2">Location *<input className={fieldClass} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="e.g. Helensville, Auckland" />{errors.location && <span className="mt-1 block text-xs text-rose-400">{errors.location}</span>}</label>
           <label className="text-sm text-slate-300 lg:col-span-2">Industry or category *<input className={fieldClass} value={form.industry} onChange={(event) => setForm({ ...form, industry: event.target.value })} placeholder="e.g. electricians" />{errors.industry && <span className="mt-1 block text-xs text-rose-400">{errors.industry}</span>}</label>
           <label className="text-sm text-slate-300">Maximum results<input className={fieldClass} type="number" min={1} max={20} value={form.result_limit} onChange={(event) => setForm({ ...form, result_limit: Number(event.target.value) })} />{errors.result_limit && <span className="mt-1 block text-xs text-rose-400">{errors.result_limit}</span>}</label>
           <label className="text-sm text-slate-300 lg:col-span-3">Search keywords<input className={fieldClass} value={form.keywords} onChange={(event) => setForm({ ...form, keywords: event.target.value })} placeholder="Optional services or qualifiers" /></label>
           <label className="text-sm text-slate-300">Radius (metres)<input className={fieldClass} type="number" min={100} max={50000} value={form.radius_m ?? ""} onChange={(event) => setForm({ ...form, radius_m: event.target.value ? Number(event.target.value) : null })} placeholder="Optional" />{errors.radius_m && <span className="mt-1 block text-xs text-rose-400">{errors.radius_m}</span>}</label>
-          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover"} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setErrors({}); }}>Clear</button></div>
+          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || !selectedScenario} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setErrors({}); }}>Clear</button></div>
         </div>
       </section>
 
