@@ -375,6 +375,18 @@ export interface DiscoveryEvent {
   entity_id: string;
 }
 
+export interface DiscoveryEligibilityResult {
+  eligible?: boolean;
+  classification?: string;
+  reason?: string;
+  match_type?: string | null;
+  confidence?: string | null;
+  contact_id?: string | null;
+  organisation_id?: string | null;
+  contact_state?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface DiscoveryCandidate {
   id: string;
   run_id: string;
@@ -400,9 +412,29 @@ export interface DiscoveryCandidate {
   audit_status: string;
   import_status: string;
   error_info: Record<string, unknown>;
+  eligibility_status: string;
+  eligibility_result: DiscoveryEligibilityResult;
+  eligibility_acknowledged: boolean;
+  eligibility_acknowledged_at: string | null;
+  eligibility_acknowledged_by: string | null;
   events: DiscoveryEvent[];
   created_at: string;
   updated_at: string;
+}
+
+export interface CandidateAcknowledgementResponse {
+  ok: boolean;
+  idempotent?: boolean;
+  classification?: string;
+  contact_id?: string | null;
+  organisation_id?: string | null;
+  match_type?: string | null;
+  confidence?: string | null;
+  acknowledged_at?: string;
+  acknowledged_by?: string;
+  event_id?: string | null;
+  error?: string;
+  requires_acknowledgement?: boolean;
 }
 
 export interface DiscoveryRunResponse {

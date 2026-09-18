@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Badge, { toneForStatus } from "../components/Badge";
 import {
+  acknowledgePossibleMatch,
   assessDiscoveryCandidates,
   auditDiscoveryCandidates,
   fetchDiscoveryCandidates,
@@ -9,7 +10,14 @@ import {
   importDiscoveryCandidates,
   startDiscoveryRun,
 } from "../lib/api";
-import { isActiveDiscoveryStatus, validateDiscoveryInput } from "../lib/discovery";
+import {
+  candidateEligibilityClassification,
+  candidateEligibilityDisplay,
+  candidateMayProceed,
+  candidateNeedsEligibilityAcknowledgement,
+  isActiveDiscoveryStatus,
+  validateDiscoveryInput,
+} from "../lib/discovery";
 import {
   fetchOpportunityScenarios,
   scenarioDefaultRadius,
@@ -41,8 +49,25 @@ function statusTone(status: string) {
   return toneForStatus(status);
 }
 
-function CandidateDrawer({ candidate, onClose }: { candidate: DiscoveryCandidate; onClose: () => void }) {
+function CandidateDrawer({
+  candidate,
+  onClose,
+  onAcknowledge,
+  onContinue,
+  acknowledging,
+  continuing,
+}: {
+  candidate: DiscoveryCandidate;
+  onClose: () => void;
+  onAcknowledge: (candidateId: string) => void;
+  onContinue: (candidateId: string) => void;
+  acknowledging: boolean;
+  continuing: boolean;
+}) {
   const evidence = candidate.source_payload;
+  const eligibility = candidateEligibilityDisplay(candidate);
+  const [reviewed, setReviewed] = useState(false);
+  const matched = candidate.eligibility_result ?? {};
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/70" role="dialog" aria-modal="true" aria-label="Candidate detail">
       <div className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-700 bg-slate-900 p-6 shadow-2xl">
@@ -50,6 +75,57 @@ function CandidateDrawer({ candidate, onClose }: { candidate: DiscoveryCandidate
           <div><p className="text-xs uppercase tracking-wider text-accent-400">Candidate</p><h2 className="mt-1 text-xl font-semibold text-white">{candidate.business_name}</h2></div>
           <button className={buttonClass} onClick={onClose}>Close</button>
         </div>
+
+        {eligibility.needsAcknowledgement && (
+          <section className="mt-6 rounded-md border border-amber-700 bg-amber-950/30 p-4" role="alert" aria-label="Possible existing Cockpit record">
+            <h3 className="text-sm font-semibold text-amber-200">Possible existing Cockpit record</h3>
+            <p className="mt-2 text-sm text-amber-100/90">This business matches an existing Cockpit contact, but there is not enough identity evidence to confirm it is the same prospect.</p>
+            <p className="mt-2 text-sm text-amber-100/90">Continuing may create duplicate outreach to an existing relationship.</p>
+            <dl className="mt-3 grid grid-cols-[10rem_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-amber-300/80">Matched contact id</dt><dd className="font-mono text-amber-100">{matched.contact_id ?? "—"}</dd>
+              <dt className="text-amber-300/80">Matched organisation id</dt><dd className="font-mono text-amber-100">{matched.organisation_id ?? "—"}</dd>
+              <dt className="text-amber-300/80">Match type</dt><dd className="text-amber-100">{matched.match_type ?? "—"}</dd>
+              <dt className="text-amber-300/80">Confidence</dt><dd className="text-amber-100">{matched.confidence ?? "—"}</dd>
+              <dt className="text-amber-300/80">Reason</dt><dd className="text-amber-100">{matched.reason ?? "—"}</dd>
+            </dl>
+            <label className="mt-4 flex items-start gap-3 text-sm text-amber-100">
+              <input type="checkbox" className="mt-0.5" checked={reviewed} disabled={acknowledging} onChange={(event) => setReviewed(event.target.checked)} />
+              <span>I have reviewed this possible match and want to continue.</span>
+            </label>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button className={buttonClass} disabled={!reviewed || acknowledging} onClick={() => onAcknowledge(candidate.id)}>
+                {acknowledging ? "Persisting acknowledgement…" : "Acknowledge possible match"}
+              </button>
+              <span className="text-xs text-amber-300/80">Continue / Import stays disabled until the acknowledgement is persisted on the server.</span>
+            </div>
+          </section>
+        )}
+
+        {eligibility.acknowledged && (
+          <section className="mt-6 rounded-md border border-amber-800/70 bg-amber-950/20 p-4" aria-label="Acknowledged exception">
+            <p className="text-sm font-medium text-amber-200">Proceeding under an acknowledged possible-match exception</p>
+            <p className="mt-1 text-sm text-amber-100/80">
+              Cockpit classification remains <span className="font-mono">possible_match</span>
+              {candidate.eligibility_acknowledged_by ? ` · acknowledged by ${candidate.eligibility_acknowledged_by}` : ""}
+              {candidate.eligibility_acknowledged_at ? ` · ${new Date(candidate.eligibility_acknowledged_at).toLocaleString()}` : ""}.
+            </p>
+          </section>
+        )}
+
+        {!eligibility.mayProceed && !eligibility.needsAcknowledgement && (
+          <section className="mt-6 rounded-md border border-rose-800 bg-rose-950/40 p-4" role="alert">
+            <p className="text-sm font-medium text-rose-200">Blocked by Cockpit commercial eligibility</p>
+            <p className="mt-1 text-sm text-rose-300/90">Classification <span className="font-mono">{eligibility.label}</span> cannot be overridden. {matched.reason ?? ""}</p>
+          </section>
+        )}
+
+        <div className="mt-6 flex items-center gap-2">
+          <button className={buttonClass} disabled={!eligibility.mayProceed || continuing} onClick={() => onContinue(candidate.id)}>
+            {continuing ? "Importing…" : "Continue / Import"}
+          </button>
+          {!eligibility.mayProceed && <span className="text-xs text-slate-500">Unavailable until this candidate may proceed.</span>}
+        </div>
+
         <dl className="mt-6 grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-sm">
           <dt className="text-slate-500">Address</dt><dd className="text-slate-200">{candidate.address ?? candidate.location ?? "—"}</dd>
           <dt className="text-slate-500">Category</dt><dd className="text-slate-200">{candidate.industry ?? "—"}</dd>
@@ -79,6 +155,7 @@ export default function Discovery() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [inspecting, setInspecting] = useState<DiscoveryCandidate | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [acknowledging, setAcknowledging] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scenarios, setScenarios] = useState<OpportunityScenario[]>([]);
@@ -165,7 +242,56 @@ export default function Discovery() {
   }
 
   const selectedIds = useMemo(() => [...selected], [selected]);
-  const eligible = candidates.filter((candidate) => !candidate.imported_lead_id && !candidate.duplicate_lead_id && candidate.import_status !== "incomplete");
+  const selectedCandidates = useMemo(
+    () => candidates.filter((candidate) => selected.has(candidate.id)),
+    [candidates, selected],
+  );
+  const selectionNeedsAcknowledgement = selectedCandidates.some((candidate) =>
+    candidateNeedsEligibilityAcknowledgement(candidate),
+  );
+  const selectionAllowed =
+    selectedCandidates.length > 0 &&
+    selectedCandidates.every((candidate) => candidateMayProceed(candidate));
+  const eligible = candidates.filter(
+    (candidate) =>
+      !candidate.imported_lead_id &&
+      !candidate.duplicate_lead_id &&
+      candidateMayProceed(candidate) &&
+      (candidate.import_status !== "incomplete" ||
+        candidateEligibilityClassification(candidate) === "possible_match"),
+  );
+
+  async function acknowledge(candidateId: string) {
+    setAcknowledging(candidateId); setError(null); setNotice(null);
+    try {
+      const response = await acknowledgePossibleMatch(candidateId);
+      setNotice(
+        response.idempotent
+          ? "This possible match was already acknowledged."
+          : "Possible match acknowledged. The candidate may now proceed under an acknowledged exception.",
+      );
+      if (run) await reload(run.id);
+    } catch (reason) {
+      setError(displayError(reason));
+    } finally {
+      setAcknowledging(null);
+    }
+  }
+
+  async function importOne(candidateId: string) {
+    if (!run) return;
+    setBusy("import"); setError(null); setNotice(null);
+    try {
+      const response = await importDiscoveryCandidates(run.id, [candidateId]);
+      setNotice(`Import: ${response.succeeded} succeeded, ${response.failed} failed.`);
+      await reload(run.id);
+    } catch (reason) {
+      setError(displayError(reason));
+      await reload(run.id).catch(() => undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function batch(action: "import" | "assess" | "audit", retry = false) {
     if (!run || !selectedIds.length) return;
@@ -213,6 +339,10 @@ export default function Discovery() {
       {error && <div role="alert" className="rounded-md border border-rose-800 bg-rose-950/40 p-3 text-sm text-rose-300">{error}</div>}
       {notice && <div className="rounded-md border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-300">{notice}</div>}
 
+      {selectionNeedsAcknowledgement && <div role="alert" className="rounded-md border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">
+        {selectedCandidates.filter((candidate) => candidateNeedsEligibilityAcknowledgement(candidate)).length} selected candidate(s) are possible Cockpit matches awaiting acknowledgement. Open <span className="font-medium">Inspect</span>, review the match and acknowledge before importing or scoring.
+      </div>}
+
       {run && <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-slate-200">Discovery run</h2><p className="mt-1 font-mono text-xs text-slate-500">{run.id}</p></div><Badge tone={statusTone(run.status)}>{run.status.replace(/_/g, " ")}</Badge></div>
         <div className="mt-4 h-1.5 overflow-hidden rounded bg-slate-800"><div className="h-full bg-accent-500 transition-all" style={{ width: `${Math.min(100, run.businesses_discovered ? 25 + (run.candidates_scored / run.businesses_discovered) * 45 + (run.audits_generated / run.businesses_discovered) * 30 : isActiveDiscoveryStatus(run.status) ? 12 : 100)}%` }} /></div>
@@ -222,17 +352,19 @@ export default function Discovery() {
       </section>}
 
       <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60">
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 p-4"><h2 className="mr-auto text-sm font-semibold text-slate-200">Candidates <span className="text-slate-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} disabled={!selectedIds.length || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} disabled={!selectedIds.length || busy !== null} onClick={() => void batch("assess")}>Score selected</button><button className={buttonClass} disabled={!selectedIds.length || busy !== null} onClick={() => void batch("audit")}>Generate audits</button></div>
-        {!run ? <p className="p-8 text-center text-sm text-slate-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-950/50 text-xs text-slate-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Score", "Assessment", "Audit", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-slate-800">{candidates.map((candidate) => <tr key={candidate.id} className="hover:bg-slate-800/30">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 p-4"><h2 className="mr-auto text-sm font-semibold text-slate-200">Candidates <span className="text-slate-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before importing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before scoring." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("assess")}>Score selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before auditing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("audit")}>Generate audits</button></div>
+        {!run ? <p className="p-8 text-center text-sm text-slate-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-950/50 text-xs text-slate-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Eligibility", "Score", "Assessment", "Audit", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-slate-800">{candidates.map((candidate) => { const eligibility = candidateEligibilityDisplay(candidate); return <tr key={candidate.id} className="hover:bg-slate-800/30">
           <td className="px-3 py-3"><input aria-label={`Select ${candidate.business_name}`} type="checkbox" checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(candidate.id) ? next.delete(candidate.id) : next.add(candidate.id); return next; })} /></td>
           <td className="whitespace-nowrap px-3 py-3 font-medium text-slate-200">{candidate.business_name}</td><td className="px-3 py-3 text-slate-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.industry ?? "—"}</td>
           <td className="max-w-44 truncate px-3 py-3">{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">Visit</a> : "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.email ? "Email" : candidate.phone ? "Phone" : "None"}</td>
-          <td className="px-3 py-3"><Badge tone={candidate.duplicate_lead_id ? "warning" : "success"}>{candidate.duplicate_lead_id ? "existing" : "new"}</Badge></td><td className="px-3 py-3 font-mono text-slate-300">{candidate.preliminary_score ?? "—"}</td>
+          <td className="px-3 py-3"><Badge tone={candidate.duplicate_lead_id ? "warning" : "success"}>{candidate.duplicate_lead_id ? "existing" : "new"}</Badge></td>
+          <td className="whitespace-nowrap px-3 py-3"><Badge tone={eligibility.tone} title={candidate.eligibility_result?.reason ?? undefined}>{eligibility.label}</Badge></td>
+          <td className="px-3 py-3 font-mono text-slate-300">{candidate.preliminary_score ?? "—"}</td>
           <td className="px-3 py-3"><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.audit_status)}>{candidate.audit_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.import_status)}>{candidate.import_status.replace(/_/g, " ")}</Badge></td>
           <td className="whitespace-nowrap px-3 py-3"><button className="text-accent-400 hover:underline" onClick={() => setInspecting(candidate)}>Inspect</button>{(candidate.imported_lead_id ?? candidate.duplicate_lead_id) && <Link className="ml-3 text-sky-400 hover:underline" to={`/opportunities/${candidate.imported_lead_id ?? candidate.duplicate_lead_id}`}>Open</Link>}</td>
-        </tr>)}</tbody></table></div>}
+        </tr>; })}</tbody></table></div>}
       </section>
-      {inspecting && <CandidateDrawer candidate={inspecting} onClose={() => setInspecting(null)} />}
+      {inspecting && <CandidateDrawer candidate={inspecting} onClose={() => setInspecting(null)} onAcknowledge={(candidateId) => void acknowledge(candidateId)} onContinue={(candidateId) => void importOne(candidateId)} acknowledging={acknowledging === inspecting.id} continuing={busy === "import"} />}
     </div>
   );
 }

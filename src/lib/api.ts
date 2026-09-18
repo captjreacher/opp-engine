@@ -25,6 +25,7 @@ import type {
   DiscoveryRunResponse,
   DiscoveryCandidatesResponse,
   BatchActionResponse,
+  CandidateAcknowledgementResponse,
   VisualEvidence,
 } from "./types";
 
@@ -278,6 +279,16 @@ export const auditDiscoveryCandidates = (
   ids: string[],
   retry = false,
 ) => discoveryBatch(runId, "audit", ids, retry);
+
+export function acknowledgePossibleMatch(
+  candidateId: string,
+  operator?: string,
+): Promise<CandidateAcknowledgementResponse> {
+  return request<CandidateAcknowledgementResponse>(
+    `/discovery-candidates/${encodeURIComponent(candidateId)}/acknowledge`,
+    { method: "POST", body: JSON.stringify({ operator }) },
+  );
+}
 
 export function enrichOpportunity(
   id: string,

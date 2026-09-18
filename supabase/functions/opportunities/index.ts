@@ -19,6 +19,7 @@
 //   POST  /opportunities/discovery-runs               -> queue provider discovery
 //   GET   /opportunities/discovery-runs/:runId        -> durable run status
 //   GET   /opportunities/discovery-runs/:runId/candidates
+//   POST  /opportunities/discovery-candidates/:candidateId/acknowledge
 //   POST  /opportunities/discovery-runs/:runId/candidates/{import|assess|audit}
 //   POST  /opportunities/:id/{assess|audit}           -> canonical single-record intelligence action
 //   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
@@ -287,6 +288,79 @@ async function emitWorkflowEvent(args: {
     risk_version: "risk-map-v1",
   });
   if (error) throw new Error(`event_insert_failed: ${error.message}`);
+}
+
+// ---- Cockpit eligibility gating (possible_match acknowledgement) ------------
+// Cockpit owns the classifications. These helpers mirror the SQL predicate
+// public.opportunity_classification_allows_progress so the API can refuse work
+// before touching a lead. The database triggers remain the enforcement point.
+const HARD_BLOCK_ELIGIBILITY_CLASSIFICATIONS = new Set([
+  "existing_customer",
+  "previously_contacted",
+  "existing_lead",
+  "existing_contact",
+  "nurture",
+]);
+
+function eligibilityClassification(record: JsonObject): string {
+  const result = (record.eligibility_result ?? {}) as JsonObject;
+  const classification = result.classification;
+  if (typeof classification === "string" && classification.length > 0)
+    return classification;
+  const status = record.eligibility_status;
+  return typeof status === "string" && status.length > 0 ? status : "unknown";
+}
+
+function classificationAllowsProgress(
+  classification: string,
+  acknowledged: boolean,
+): boolean {
+  if (classification === "eligible") return true;
+  if (classification === "possible_match") return acknowledged === true;
+  return false;
+}
+
+/** A possible_match may proceed only after a persisted acknowledgement. */
+function candidateNeedsAcknowledgement(record: JsonObject): boolean {
+  return (
+    eligibilityClassification(record) === "possible_match" &&
+    record.eligibility_acknowledged !== true
+  );
+}
+
+function candidateGateErrorInfo(
+  record: JsonObject,
+  operation: string,
+): JsonObject {
+  const classification = eligibilityClassification(record);
+  const requiresAcknowledgement = candidateNeedsAcknowledgement(record);
+  return {
+    stage: classification === "possible_match" ? "eligibility_acknowledgement" : "eligibility",
+    operation,
+    detail: requiresAcknowledgement
+      ? "Acknowledge the possible Cockpit match before continuing."
+      : classification === "eligible"
+        ? "Cockpit commercial eligibility gate blocked processing."
+        : `Cockpit commercial eligibility gate blocked processing: ${classification}`,
+    classification,
+    requires_acknowledgement: requiresAcknowledgement,
+    hard_block: HARD_BLOCK_ELIGIBILITY_CLASSIFICATIONS.has(classification),
+  };
+}
+
+/** Finds the discovery candidate that produced a lead, if any. */
+async function candidateForLead(
+  leadId: string,
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabase
+    .from("opportunity_discovery_candidates")
+    .select("id,run_id,eligibility_status,eligibility_result,eligibility_acknowledged,imported_lead_id,duplicate_lead_id")
+    .or(`imported_lead_id.eq.${leadId},duplicate_lead_id.eq.${leadId}`)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as Record<string, unknown> | null) ?? null;
 }
 
 // ---- Operator review workflow (app-owned; derived from the audit log) -------
@@ -976,6 +1050,45 @@ async function importCandidates(
   );
 }
 
+// POST /discovery-candidates/:candidateId/acknowledge
+// Persists the operator acknowledgement for a possible_match. The RPC enforces
+// that only possible_match may be acknowledged and records the audit event.
+async function acknowledgeCandidate(
+  candidateId: string,
+  payload: JsonObject,
+): Promise<Response> {
+  const { data: candidate, error } = await supabase
+    .from("opportunity_discovery_candidates")
+    .select("id,business_name,eligibility_status,eligibility_result,eligibility_acknowledged")
+    .eq("id", candidateId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!candidate) return json({ error: "not_found" }, 404);
+
+  const classification = eligibilityClassification(candidate as JsonObject);
+  if (classification !== "possible_match") {
+    return json(
+      {
+        ok: false,
+        error: "candidate_not_possible_match",
+        classification,
+      },
+      422,
+    );
+  }
+
+  const operator = cleanText(payload.operator, 200) ?? "operator-console";
+  const { data, error: rpcError } = await supabase.rpc(
+    "opportunity_acknowledge_possible_match",
+    { p_candidate_id: candidateId, p_operator: operator },
+  );
+  if (rpcError) throw rpcError;
+
+  const result = (data ?? {}) as JsonObject;
+  if (result.ok !== true) return json(result, 422);
+  return json(result);
+}
+
 async function assessOpportunity(
   leadId: string,
   retry = false,
@@ -1580,6 +1693,59 @@ async function processCandidateBatch(
       continue;
     }
 
+    // Cockpit eligibility gate: hard blocks are never overridable; possible_match
+    // requires a persisted acknowledgement before scoring/audit. The database
+    // trigger re-checks this, so the UI cannot bypass enforcement.
+    const candidateRecord = candidate as unknown as JsonObject;
+    if (
+      !classificationAllowsProgress(
+        eligibilityClassification(candidateRecord),
+        candidateRecord.eligibility_acknowledged === true,
+      )
+    ) {
+      const requiresAcknowledgement = candidateNeedsAcknowledgement(candidateRecord);
+      const statusPatch =
+        operation === "assess"
+          ? { assessment_status: "failed" }
+          : { audit_status: "failed" };
+      const errorInfo = {
+        ...candidateGateErrorInfo(candidateRecord, operation),
+        candidate_id: candidate.id,
+        lead_id: leadId,
+        run_id: runId,
+      };
+      const { error: gateError } = await supabase
+        .from("opportunity_discovery_candidates")
+        .update({ ...statusPatch, error_info: errorInfo })
+        .eq("id", candidate.id);
+      results.push({
+        candidate_id: candidate.id,
+        lead_id: leadId,
+        ok: false,
+        error: requiresAcknowledgement
+          ? "candidate_requires_possible_match_acknowledgement"
+          : "candidate_not_commercially_eligible",
+        classification: eligibilityClassification(candidateRecord),
+        requires_acknowledgement: requiresAcknowledgement,
+        diagnostics: errorInfo,
+        gate_error: gateError?.message ?? null,
+      });
+      await emitWorkflowEvent({
+        eventType: `opportunity.discovery_candidate.${operation}.failed`,
+        entityType: "opportunity_discovery_candidate",
+        entityId: candidate.id,
+        entityRef: candidate.business_name,
+        status: "failed",
+        payload: {
+          run_id: runId,
+          lead_id: leadId,
+          error: "eligibility_gate_blocked",
+          ...errorInfo,
+        },
+      }).catch(() => undefined);
+      continue;
+    }
+
     const runningPatch =
       operation === "assess"
         ? {
@@ -1981,6 +2147,38 @@ async function createOutreach(
     .maybeSingle();
   if (leadErr) throw leadErr;
   if (!lead) return json({ error: "not_found" }, 404);
+
+  // Cockpit eligibility gate: an unacknowledged possible_match, or any hard
+  // block, may not create outreach. The database trigger re-checks Cockpit live.
+  const outreachCandidate = await candidateForLead(id);
+  if (
+    outreachCandidate &&
+    !classificationAllowsProgress(
+      eligibilityClassification(outreachCandidate as JsonObject),
+      outreachCandidate.eligibility_acknowledged === true,
+    )
+  ) {
+    const requiresAcknowledgement = candidateNeedsAcknowledgement(
+      outreachCandidate as JsonObject,
+    );
+    return json(
+      {
+        ok: false,
+        error: requiresAcknowledgement
+          ? "outreach_requires_possible_match_acknowledgement"
+          : "outreach_not_commercially_eligible",
+        classification: eligibilityClassification(
+          outreachCandidate as JsonObject,
+        ),
+        requires_acknowledgement: requiresAcknowledgement,
+        candidate_id: outreachCandidate.id,
+        detail: requiresAcknowledgement
+          ? "Acknowledge the possible Cockpit match before creating outreach for this prospect."
+          : "Cockpit commercial eligibility gate blocked outreach.",
+      },
+      requiresAcknowledgement ? 409 : 422,
+    );
+  }
 
   const { data: assessment } = await supabase
     .from("local_business_lead_assessments")
@@ -2445,6 +2643,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       parts[2] === "candidates"
     ) {
       return await listDiscoveryCandidates(parts[1]);
+    }
+    if (
+      req.method === "POST" &&
+      parts.length === 3 &&
+      parts[0] === "discovery-candidates" &&
+      parts[2] === "acknowledge"
+    ) {
+      return await acknowledgeCandidate(
+        parts[1],
+        (await req.json().catch(() => ({}))) as JsonObject,
+      );
     }
     if (
       req.method === "POST" &&
