@@ -154,12 +154,29 @@ export function candidateEligibilityDisplay(
   };
 }
 
-export function validateDiscoveryInput(input: DiscoverySearchInput): DiscoveryValidationErrors {
+/**
+ * Client-side mirror of the server's discovery validation. The operator-configured
+ * maximum results is passed in so the form cannot offer more than the backend will
+ * accept; it defaults to the hard ceiling for callers that do not know the setting.
+ */
+export function validateDiscoveryInput(
+  input: DiscoverySearchInput,
+  options: { maxResultLimit?: number } = {},
+): DiscoveryValidationErrors {
+  const maxResultLimit = options.maxResultLimit ?? 20;
   const errors: DiscoveryValidationErrors = {};
-  if (!input.location.trim()) errors.location = "Enter a target location.";
-  if (!input.industry.trim()) errors.industry = "Enter an industry or category.";
-  if (!Number.isInteger(input.result_limit) || input.result_limit < 1 || input.result_limit > 20) {
-    errors.result_limit = "Choose between 1 and 20 results.";
+  if (!input.location.trim()) errors.location = "Choose a search location.";
+  // A registry slug is the controlled path; the label keeps legacy runs valid.
+  const categorySelected =
+    Boolean(input.category_slug?.trim()) || Boolean(input.industry?.trim());
+  if (!categorySelected)
+    errors.industry = "Choose an opportunity category.";
+  if (
+    !Number.isInteger(input.result_limit) ||
+    input.result_limit < 1 ||
+    input.result_limit > maxResultLimit
+  ) {
+    errors.result_limit = `Choose between 1 and ${maxResultLimit} results.`;
   }
   if (input.radius_m !== null && (!Number.isInteger(input.radius_m) || input.radius_m < 100 || input.radius_m > 50_000)) {
     errors.radius_m = "Radius must be between 100 m and 50 km.";

@@ -39,6 +39,58 @@ describe("discovery form validation", () => {
     expect(validateDiscoveryInput({ location: "Auckland", industry: "Builder", keywords: "renovation", radius_m: 10_000, result_limit: 20 })).toEqual({});
   });
 
+  it("honours the operator-configured maximum results", () => {
+    const base = { location: "Auckland", industry: "Builder", keywords: "", radius_m: 10_000 };
+    expect(
+      validateDiscoveryInput({ ...base, result_limit: 8 }, { maxResultLimit: 5 }),
+    ).toMatchObject({ result_limit: "Choose between 1 and 5 results." });
+    expect(
+      validateDiscoveryInput({ ...base, result_limit: 5 }, { maxResultLimit: 5 }),
+    ).toEqual({});
+  });
+
+  it("accepts a controlled category selection without free-text keywords", () => {
+    expect(
+      validateDiscoveryInput({
+        location: "Helensville, Auckland, New Zealand",
+        industry: "Electricians",
+        keywords: "",
+        radius_m: 10000,
+        result_limit: 10,
+        location_place_id: "ChIJhelensville",
+        location_latitude: -36.6769,
+        location_longitude: 174.4503,
+        category_slug: "electricians",
+        category_label: "Electricians",
+      }),
+    ).toEqual({});
+  });
+
+  it("accepts a category slug when no label is supplied", () => {
+    expect(
+      validateDiscoveryInput({
+        location: "Auckland",
+        industry: "",
+        keywords: "",
+        radius_m: null,
+        result_limit: 10,
+        category_slug: "accountants",
+      }),
+    ).toEqual({});
+  });
+
+  it("keeps legacy free-text runs valid (location + industry label only)", () => {
+    expect(
+      validateDiscoveryInput({
+        location: "Helensville",
+        industry: "electricians",
+        keywords: "",
+        radius_m: null,
+        result_limit: 10,
+      }),
+    ).toEqual({});
+  });
+
   it("identifies every active run state", () => {
     for (const status of ["queued", "discovering", "enriching", "scoring", "auditing"]) expect(isActiveDiscoveryStatus(status)).toBe(true);
     for (const status of ["completed", "partially_completed", "failed", "cancelled"]) expect(isActiveDiscoveryStatus(status)).toBe(false);

@@ -126,10 +126,19 @@ existing data.
 
 ## Phase 5 — Discovery, scoring and audits
 
-The primary workflow is `Discovery → Opportunities → Pipeline`. The `/discovery` page starts durable
-runs, polls progress, presents provider evidence and duplicate matches, and exposes deliberate batch
-actions for import, assessment and audit generation. Imported canonical UUIDs appear automatically in
-Opportunities. Discovery and intelligence operations never create, approve or send outreach drafts.
+The primary workflow is `Discovery → Opportunities → Pipeline`, with an operator-only `Admin` console
+for tuning discovery configuration. The `/discovery` page starts durable runs, polls progress, presents
+provider evidence and duplicate matches, and exposes deliberate batch actions for import, assessment and
+audit generation. Imported canonical UUIDs appear automatically in Opportunities. Discovery and
+intelligence operations never create, approve or send outreach drafts.
+
+The `/admin` console edits the same registries the discovery path reads — categories, scenarios and the
+discovery-wide settings singleton — so an operator can tune radius/result/expansion defaults without
+editing migrations or source. Saving a change affects new runs only: each run records its own
+category/location/scenario snapshot and existing runs are never rewritten. Mutations are validated and
+ceiling-clamped server-side (the code constants are hard maxima) and recorded on the shared event store
+with previous value, new value and operator. Diagnostics is read-only and reports provider readiness as
+booleans — never a credential.
 
 ### API routes
 
@@ -138,6 +147,15 @@ All routes except health require the existing operator bearer token.
 | Method | Route | Purpose |
 |---|---|---|
 | POST | `/opportunities/discovery-runs` | Validate and queue provider discovery |
+| GET | `/opportunities/opportunity-categories` | Active controlled discovery categories |
+| GET | `/opportunities/places/autocomplete?query=` | NZ-biased Google location suggestions (server-side key) |
+| GET | `/opportunities/places/location?place_id=` | Structured location (label + coordinates) for a suggestion |
+| GET | `/opportunities/discovery-settings` | Effective operator-facing discovery defaults |
+| GET | `/opportunities/admin/config` | Admin console read (settings + all categories + all scenarios) |
+| PATCH | `/opportunities/admin/categories/:slug` | Edit a registry category (activate/deactivate, terms, radius) |
+| PATCH | `/opportunities/admin/scenarios/:id` | Edit a scenario; activation fails closed unless executable |
+| PATCH | `/opportunities/admin/settings` | Edit discovery-wide defaults |
+| GET | `/opportunities/admin/diagnostics` | Read-only operational snapshot (no secrets) |
 | GET | `/opportunities/discovery-runs/:runId` | Read durable progress/counts |
 | GET | `/opportunities/discovery-runs/:runId/candidates` | Candidates, evidence and candidate events |
 | POST | `/opportunities/discovery-runs/:runId/candidates/import` | Duplicate-safe canonical import |
@@ -191,15 +209,17 @@ file avoids falsely repairing or replaying unrelated MGRNZ migrations.
 
 ### Example workflow
 
-Open Discovery, enter `Helensville, Auckland` and `Electricians`, optionally add `emergency`, choose
-up to 20 results, and start. Review candidates, select eligible new businesses, import them, score
-them, generate audits, then Open the resulting opportunities for review/outreach.
+Open Discovery, choose an opportunity scenario and a controlled category (`Electricians`), pick the
+location from the Google suggestions (`Helensville, Auckland`), optionally add `emergency` keywords,
+choose up to 20 results, and start. Review candidates, select eligible new businesses, import them,
+score them, generate audits, then Open the resulting opportunities for review/outreach.
 
 ### Known limitations
 
 - Google Places Text Search returns at most 20 candidates per run.
-- Radius is persisted and validated, but the provider query currently uses textual location bias;
-  exact radial filtering needs a future geocoding/location-restriction step.
+- Radius is persisted and validated. When the operator selects a Google location suggestion (so the
+  run has coordinates), the provider query applies a circular `locationRestriction`; free-text-only
+  locations fall back to textual location bias.
 - Canonical enrichment can be partial/failed when provider keys, evidence or trusted identity matches
   are unavailable; explicit retries and per-item errors remain visible.
 - Audit output is structured JSON; PDF rendering/storage remains out of scope.

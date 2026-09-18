@@ -32,6 +32,7 @@ export default function TopBar() {
           <NavLink to="/discovery" className={navClass}>Discovery</NavLink>
           <NavLink to="/opportunities" className={navClass}>Opportunities</NavLink>
           <NavLink to="/pipeline" className={navClass}>Pipeline</NavLink>
+          <NavLink to="/admin" className={navClass}>Admin</NavLink>
         </nav>
 
         <div className="ml-auto flex items-center gap-2 text-xs">

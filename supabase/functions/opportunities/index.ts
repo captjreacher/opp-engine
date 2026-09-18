@@ -17,6 +17,15 @@
 //   GET   /opportunities/pipeline                     -> outcome pipeline buckets + summary metrics
 //   GET   /opportunities/:id                          -> full detail (+ review_state + outcome_state + console_events)
 //   POST  /opportunities/discovery-runs               -> queue provider discovery
+//   GET   /opportunities/opportunity-categories       -> active discovery categories (registry)
+//   GET   /opportunities/places/autocomplete?query=   -> country-biased Google location suggestions
+//   GET   /opportunities/places/location?place_id=    -> structured location for a place id
+//   GET   /opportunities/discovery-settings           -> effective operator-facing discovery defaults
+//   GET   /opportunities/admin/config                 -> Admin console read (all categories + scenarios + settings)
+//   PATCH /opportunities/admin/categories/:slug       -> edit a registry category (operator-authorised)
+//   PATCH /opportunities/admin/scenarios/:id          -> edit a scenario (activation fails closed)
+//   PATCH /opportunities/admin/settings               -> edit discovery-wide defaults
+//   GET   /opportunities/admin/diagnostics            -> read-only operational snapshot (never secrets)
 //   GET   /opportunities/discovery-runs/:runId        -> durable run status
 //   GET   /opportunities/discovery-runs/:runId/candidates
 //   POST  /opportunities/discovery-candidates/:candidateId/acknowledge
@@ -37,8 +46,28 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPERATOR_TOKEN = Deno.env.get("OPERATOR_TOKEN") ?? "";
 const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
 const GOOGLE_PLACES_API_KEY = Deno.env.get("GOOGLE_PLACES_API_KEY") ?? "";
-const MAX_DISCOVERY_RESULTS = 20;
 const MAX_BATCH_SIZE = 25;
+// ---- Discovery intake configuration ----------------------------------------
+// These are HARD SAFETY CEILINGS, not preferences. Operator-tunable settings
+// (public.opportunity_discovery_settings) are clamped to them on read, so a
+// configuration change can narrow provider usage but never widen it past what
+// this execution path was validated against.
+const MAX_DISCOVERY_RESULTS = 20;
+// A selected category may expand into several provider queries. Bounded so one
+// run cannot fan out into unbounded provider spend.
+const MAX_DISCOVERY_SEARCH_TERMS = 3;
+const MAX_PLACES_AUTOCOMPLETE_LIMIT = 10;
+const MIN_RADIUS_M = 100;
+const MAX_RADIUS_M = 50000;
+const DEFAULT_LOCATION_COUNTRY_BIAS = "nz";
+const ALLOWED_LOCATION_COUNTRY_BIASES = ["nz", "au"];
+const DEFAULT_DISCOVERY_SCENARIO_SLUG = "local-digital-presence";
+// Scenarios whose discovery + downstream orchestration is genuinely implemented.
+// The registry may legitimately contain draft scenarios; they must not execute
+// until this path supports them. Extend deliberately, never by status alone.
+const SUPPORTED_DISCOVERY_SCENARIO_SLUGS = new Set([
+  DEFAULT_DISCOVERY_SCENARIO_SLUG,
+]);
 const AUDIT_REPORT_VERSION = "opportunity-engine-v1";
 
 const cors = {
@@ -735,6 +764,278 @@ async function findDuplicateLead(candidate: {
   return match?.id ?? null;
 }
 
+// ---- Discovery intake: controlled categories + structured locations ---------
+
+interface CategoryRecord {
+  id: string;
+  slug: string;
+  label: string;
+  description: string | null;
+  search_terms: unknown;
+  google_types: unknown;
+  default_radius_m: number | null;
+  compatible_scenarios: unknown;
+}
+
+interface ScenarioRecord {
+  id: string;
+  slug: string;
+  name: string;
+  version: number;
+  discovery_config: JsonObject;
+}
+
+function stringList(value: unknown, max = 120): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => cleanText(item, max))
+    .filter((item): item is string => Boolean(item));
+}
+
+function numberInRange(value: unknown, min: number, max: number): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) return null;
+  return parsed;
+}
+
+// ---- Discovery-wide settings (operator-tunable, hard-ceiling clamped) -------
+//
+// The single settings row is authored through the Admin surface. Every read is
+// normalised and clamped here, so a hand-edited row (or a future contributor
+// forgetting a bound) can never widen provider usage past the code ceilings.
+// A read failure falls back to the code defaults rather than breaking discovery.
+
+interface DiscoverySettings {
+  default_radius_m: number | null;
+  radius_options_m: number[];
+  default_result_limit: number;
+  max_result_limit: number;
+  location_country_bias: string;
+  max_search_terms: number;
+  autocomplete_limit: number;
+}
+
+const DEFAULT_RADIUS_OPTIONS_M = [1000, 5000, 10000, 20000, 50000];
+const DEFAULT_PLACES_AUTOCOMPLETE_LIMIT = 8;
+
+const DISCOVERY_SETTINGS_FALLBACK: DiscoverySettings = {
+  default_radius_m: DEFAULT_RADIUS_OPTIONS_M[2],
+  radius_options_m: DEFAULT_RADIUS_OPTIONS_M,
+  default_result_limit: 10,
+  max_result_limit: MAX_DISCOVERY_RESULTS,
+  location_country_bias: DEFAULT_LOCATION_COUNTRY_BIAS,
+  max_search_terms: MAX_DISCOVERY_SEARCH_TERMS,
+  autocomplete_limit: DEFAULT_PLACES_AUTOCOMPLETE_LIMIT,
+};
+
+function clampInteger(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function radiusOptions(value: unknown): number[] {
+  if (!Array.isArray(value)) return DEFAULT_RADIUS_OPTIONS_M;
+  const options = [
+    ...new Set(
+      value
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item))
+        .map((item) => Math.trunc(item))
+        .filter((item) => item >= MIN_RADIUS_M && item <= MAX_RADIUS_M),
+    ),
+  ].sort((a, b) => a - b);
+  return options.length ? options : DEFAULT_RADIUS_OPTIONS_M;
+}
+
+function normalizeDiscoverySettingsRow(row: JsonObject | null): DiscoverySettings {
+  if (!row) return DISCOVERY_SETTINGS_FALLBACK;
+  const defaultRadius = numberInRange(row.default_radius_m, MIN_RADIUS_M, MAX_RADIUS_M);
+  const countryBias = cleanText(row.location_country_bias, 8)?.toLowerCase();
+  const maxResultLimit = clampInteger(
+    row.max_result_limit,
+    1,
+    MAX_DISCOVERY_RESULTS,
+    DISCOVERY_SETTINGS_FALLBACK.max_result_limit,
+  );
+  return {
+    default_radius_m: defaultRadius,
+    radius_options_m: radiusOptions(row.radius_options_m),
+    default_result_limit: clampInteger(
+      row.default_result_limit,
+      1,
+      maxResultLimit,
+      Math.min(DISCOVERY_SETTINGS_FALLBACK.default_result_limit, maxResultLimit),
+    ),
+    max_result_limit: maxResultLimit,
+    location_country_bias:
+      countryBias && ALLOWED_LOCATION_COUNTRY_BIASES.includes(countryBias)
+        ? countryBias
+        : DEFAULT_LOCATION_COUNTRY_BIAS,
+    max_search_terms: clampInteger(
+      row.max_search_terms,
+      1,
+      MAX_DISCOVERY_SEARCH_TERMS,
+      MAX_DISCOVERY_SEARCH_TERMS,
+    ),
+    autocomplete_limit: clampInteger(
+      row.autocomplete_limit,
+      1,
+      MAX_PLACES_AUTOCOMPLETE_LIMIT,
+      DEFAULT_PLACES_AUTOCOMPLETE_LIMIT,
+    ),
+  };
+}
+
+/** Reads the settings singleton; never throws — falls back to code defaults. */
+async function loadDiscoverySettings(): Promise<DiscoverySettings> {
+  const { data, error } = await supabase
+    .from("opportunity_discovery_settings")
+    .select(
+      "default_radius_m,radius_options_m,default_result_limit,max_result_limit,location_country_bias,max_search_terms,autocomplete_limit",
+    )
+    .eq("id", "global")
+    .maybeSingle();
+  if (error) {
+    console.error("discovery_settings_read_failed", error.message);
+    return DISCOVERY_SETTINGS_FALLBACK;
+  }
+  return normalizeDiscoverySettingsRow((data as JsonObject | null) ?? null);
+}
+
+/**
+ * Mirrors src/lib/categories.ts expandCategorySearchTerms().
+ *
+ * The registry's configured search terms (or the label when none are configured)
+ * are the base provider queries; free-text keywords are an optional refinement
+ * appended to each base term. Bounded by the operator setting, itself clamped to
+ * MAX_DISCOVERY_SEARCH_TERMS.
+ */
+function expandCategorySearchTerms(
+  category: { label: string; search_terms: unknown },
+  keywords: string | null,
+  limit: number = MAX_DISCOVERY_SEARCH_TERMS,
+): string[] {
+  const bounded = clampInteger(limit, 1, MAX_DISCOVERY_SEARCH_TERMS, MAX_DISCOVERY_SEARCH_TERMS);
+  const configured = stringList(category.search_terms, 160);
+  const base = configured.length ? configured : [category.label];
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const raw of base) {
+    const term = cleanText(raw, 160);
+    if (!term) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    terms.push(keywords ? `${term} ${keywords}` : term);
+    if (terms.length >= bounded) break;
+  }
+  return terms;
+}
+
+/** Registry categories are operator-selectable by slug only while active. */
+async function findActiveCategory(slug: string): Promise<CategoryRecord | null> {
+  const { data, error } = await supabase
+    .from("opportunity_categories")
+    .select(
+      "id,slug,label,description,search_terms,google_types,default_radius_m,compatible_scenarios,status",
+    )
+    .eq("slug", slug)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const record = data as unknown as CategoryRecord & { status?: string };
+  return record.status === "active" ? record : null;
+}
+
+/** Empty compatible_scenarios means the category is compatible with everything. */
+function categorySupportsScenario(
+  category: { compatible_scenarios: unknown },
+  scenarioSlug: string,
+): boolean {
+  const compatible = stringList(category.compatible_scenarios, 80);
+  return compatible.length === 0 || compatible.includes(scenarioSlug);
+}
+
+/**
+ * A run may only reference an ACTIVE scenario that the execution path actually
+ * supports. Selecting an unsupported (or merely draft) scenario fails closed
+ * rather than silently running the Local Digital Presence orchestration.
+ */
+async function resolveDiscoveryScenario(
+  scenarioId: string | null,
+): Promise<
+  | { ok: true; scenario: ScenarioRecord }
+  | { ok: false; status: number; body: JsonObject }
+> {
+  let query = supabase
+    .from("opportunity_scenarios")
+    .select("id,slug,name,version,discovery_config,status")
+    .eq("status", "active");
+  query = scenarioId
+    ? query.eq("id", scenarioId)
+    : query.eq("slug", DEFAULT_DISCOVERY_SCENARIO_SLUG);
+  const { data, error } = await query
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data)
+    return {
+      ok: false,
+      status: 422,
+      body: {
+        error: "scenario_not_active",
+        detail: "The selected opportunity scenario is not active.",
+      },
+    };
+
+  const scenario = data as unknown as ScenarioRecord;
+  if (!SUPPORTED_DISCOVERY_SCENARIO_SLUGS.has(scenario.slug))
+    return {
+      ok: false,
+      status: 422,
+      body: {
+        error: "scenario_not_executable",
+        detail: `Scenario "${scenario.slug}" is not wired into the discovery execution path yet.`,
+        supported_scenarios: [...SUPPORTED_DISCOVERY_SCENARIO_SLUGS],
+      },
+    };
+
+  return { ok: true, scenario };
+}
+
+async function searchPlacesText(body: JsonObject): Promise<PlacesResult[]> {
+  const response = await fetch(
+    "https://places.googleapis.com/v1/places:searchText",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+        "X-Goog-FieldMask":
+          "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.primaryTypeDisplayName,places.types",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  const providerBody = (await response.json().catch(() => ({}))) as {
+    places?: PlacesResult[];
+    error?: { message?: string };
+  };
+  if (!response.ok)
+    throw new Error(
+      `google_places_${response.status}: ${providerBody.error?.message ?? "request failed"}`,
+    );
+  return providerBody.places ?? [];
+}
+
 async function executeDiscoveryRun(
   runId: string,
   input: {
@@ -742,9 +1043,21 @@ async function executeDiscoveryRun(
     industry: string;
     keywords: string | null;
     resultLimit: number;
+    /** Expanded provider search terms; falls back to the legacy label query. */
+    terms?: string[];
+    radiusM?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    /** Operator-configured Google Places region bias for this run. */
+    countryBias?: string;
   },
 ): Promise<void> {
   const { location, industry, keywords, resultLimit } = input;
+  const radiusM = input.radiusM ?? null;
+  const latitude = input.latitude ?? null;
+  const longitude = input.longitude ?? null;
+  const countryBias = cleanText(input.countryBias, 8) ?? DEFAULT_LOCATION_COUNTRY_BIAS;
+  const terms = input.terms && input.terms.length ? input.terms : [industry];
   try {
     const { error: startError } = await supabase
       .from("opportunity_discovery_runs")
@@ -763,33 +1076,38 @@ async function executeDiscoveryRun(
       status: "started",
       payload: { ...input },
     });
-    const response = await fetch(
-      "https://places.googleapis.com/v1/places:searchText",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
-          "X-Goog-FieldMask":
-            "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.primaryTypeDisplayName,places.types",
-        },
-        body: JSON.stringify({
-          textQuery: [keywords, industry, location].filter(Boolean).join(" "),
-          maxResultCount: resultLimit,
-          languageCode: "en",
-        }),
-      },
-    );
-    const providerBody = (await response.json().catch(() => ({}))) as {
-      places?: PlacesResult[];
-      error?: { message?: string };
-    };
-    if (!response.ok)
-      throw new Error(
-        `google_places_${response.status}: ${providerBody.error?.message ?? "request failed"}`,
-      );
+    // One provider query per expanded search term; results are de-duplicated by
+    // place id so category expansion never duplicates a business.
+    const places: PlacesResult[] = [];
+    const seenPlaceIds = new Set<string>();
+    for (const term of terms) {
+      const page = await searchPlacesText({
+        textQuery: [term, location].filter(Boolean).join(" "),
+        maxResultCount: resultLimit,
+        languageCode: "en",
+        regionCode: countryBias,
+        ...(radiusM && latitude !== null && longitude !== null
+          ? {
+              locationRestriction: {
+                circle: {
+                  center: { latitude, longitude },
+                  radius: radiusM,
+                },
+              },
+            }
+          : {}),
+      });
+      for (const place of page) {
+        const placeId = cleanText(place.id, 200);
+        if (!placeId || seenPlaceIds.has(placeId)) continue;
+        seenPlaceIds.add(placeId);
+        places.push(place);
+        if (places.length >= resultLimit) break;
+      }
+      if (places.length >= resultLimit) break;
+    }
     const candidates = [];
-    for (const place of providerBody.places ?? []) {
+    for (const place of places) {
       const businessName = cleanText(place.displayName?.text, 200);
       const sourceIdentifier = cleanText(place.id, 200);
       if (!businessName || !sourceIdentifier) continue;
@@ -888,28 +1206,80 @@ async function executeDiscoveryRun(
 }
 
 async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
-  const location = cleanText(payload.location, 120);
-  const industry = cleanText(payload.industry ?? payload.category, 120);
+  // Location: normally the operator selects a Google location suggestion, so a
+  // stable place id (and coordinates) travel with the human-readable label. Free
+  // text is still accepted for backwards compatibility with existing clients.
+  const location = cleanText(payload.location_label ?? payload.location, 160);
+  const locationPlaceId = cleanText(payload.location_place_id, 300);
+  const latitude = numberInRange(payload.location_latitude, -90, 90);
+  const longitude = numberInRange(payload.location_longitude, -180, 180);
+
+  // Category: registry slug (preferred) with a free-text label fallback for
+  // legacy callers. `industry` remains the human-readable label snapshot.
+  const categorySlug = cleanText(payload.category_slug, 80);
+  const legacyIndustry = cleanText(payload.industry ?? payload.category, 120);
   const keywords = cleanText(payload.keywords, 200);
-  const radius =
+  const scenarioId = cleanText(payload.scenario_id, 64);
+  // Discovery-wide settings supply the fallbacks; they are already clamped to the
+  // code ceilings, so an operator cannot widen provider usage past them.
+  const settings = await loadDiscoverySettings();
+  const resultLimit =
+    payload.result_limit == null || payload.result_limit === ""
+      ? settings.default_result_limit
+      : Number(payload.result_limit);
+  const requestedRadius =
     payload.radius_m == null || payload.radius_m === ""
       ? null
       : Number(payload.radius_m);
-  const resultLimit = Number(payload.result_limit ?? 20);
+
   const validation: Record<string, string> = {};
-  if (!location) validation.location = "Location is required.";
-  if (!industry) validation.industry = "Industry or category is required.";
+  if (!location) validation.location = "Choose a search location.";
+
+  let category: CategoryRecord | null = null;
+  if (categorySlug) {
+    category = await findActiveCategory(categorySlug);
+    if (!category)
+      validation.category_slug = `Category "${categorySlug}" is not an active discovery category.`;
+  } else if (!legacyIndustry) {
+    validation.category = "Choose an opportunity category.";
+  }
+  const categoryLabel = category?.label ?? legacyIndustry;
+
+  // The scenario is now validated explicitly: it must be active AND executable.
+  const scenarioResult = await resolveDiscoveryScenario(scenarioId);
+  if (!scenarioResult.ok)
+    return json(scenarioResult.body, scenarioResult.status);
+  const scenario = scenarioResult.scenario;
+
+  if (category && !categorySupportsScenario(category, scenario.slug))
+    validation.category_slug = `Category "${category.label}" is not compatible with the ${scenario.name} scenario.`;
+
   if (
     !Number.isInteger(resultLimit) ||
     resultLimit < 1 ||
-    resultLimit > MAX_DISCOVERY_RESULTS
+    resultLimit > settings.max_result_limit
   )
-    validation.result_limit = `Maximum results must be between 1 and ${MAX_DISCOVERY_RESULTS}.`;
+    validation.result_limit =
+      `Maximum results must be between 1 and ${settings.max_result_limit}.`;
+
+  const scenarioRadius = numberInRange(
+    scenario.discovery_config.radius_m,
+    MIN_RADIUS_M,
+    MAX_RADIUS_M,
+  );
+  // Resolution order: explicit request -> scenario default -> category default ->
+  // operator-configured global default.
+  const radius =
+    requestedRadius ??
+    scenarioRadius ??
+    category?.default_radius_m ??
+    settings.default_radius_m;
   if (
     radius !== null &&
-    (!Number.isInteger(radius) || radius < 100 || radius > 50000)
+    (!Number.isInteger(radius) || radius < MIN_RADIUS_M || radius > MAX_RADIUS_M)
   )
     validation.radius_m = "Radius must be between 100 and 50,000 metres.";
+
   if (Object.keys(validation).length)
     return json({ error: "validation_failed", fields: validation }, 422);
   if (!GOOGLE_PLACES_API_KEY)
@@ -921,25 +1291,42 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
       503,
     );
 
+  const terms = category
+    ? expandCategorySearchTerms(category, keywords, settings.max_search_terms)
+    : [];
+
   const { data: run, error: runError } = await supabase
     .from("opportunity_discovery_runs")
     .insert({
       location,
-      industry,
+      industry: categoryLabel,
       keywords,
       radius_m: radius,
       result_limit: resultLimit,
       status: "queued",
       current_stage: "queued",
+      scenario_id: scenario.id,
+      location_place_id: locationPlaceId,
+      location_latitude: latitude,
+      location_longitude: longitude,
+      category_id: category?.id ?? null,
+      category_slug: category?.slug ?? null,
+      category_label: categoryLabel,
+      discovery_terms: terms,
     })
     .select("*")
     .single();
   if (runError) throw runError;
   const work = executeDiscoveryRun(run.id, {
     location: location!,
-    industry: industry!,
+    industry: categoryLabel!,
     keywords,
     resultLimit,
+    terms,
+    radiusM: radius,
+    latitude,
+    longitude,
+    countryBias: settings.location_country_bias,
   });
   const runtime = globalThis as typeof globalThis & {
     EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
@@ -947,6 +1334,817 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
   if (runtime.EdgeRuntime) runtime.EdgeRuntime.waitUntil(work);
   else await work;
   return json({ run }, 202);
+}
+
+// GET /opportunity-categories — active registry categories for the discovery form.
+async function listCategories(): Promise<Response> {
+  const { data, error } = await supabase.rpc(
+    "opportunity_list_active_categories",
+  );
+  if (error) throw error;
+  return json({ categories: data ?? [] });
+}
+
+// GET /discovery-settings — the effective operator-facing defaults. Read-only and
+// deliberately narrow: no secrets, no provider credentials, no env values.
+async function getDiscoverySettings(): Promise<Response> {
+  const settings = await loadDiscoverySettings();
+  return json({ settings });
+}
+
+// GET /places/autocomplete?query= — location suggestions via Google Places
+// Autocomplete (New), region-biased to the operator-configured country. The
+// provider credential stays server-side; only place ids and display labels
+// reach the browser.
+async function autocompleteLocations(url: URL): Promise<Response> {
+  const query = cleanText(url.searchParams.get("query"), 200);
+  if (!query) return json({ suggestions: [] });
+  if (!GOOGLE_PLACES_API_KEY)
+    return json(
+      {
+        error: "provider_not_configured",
+        detail: "GOOGLE_PLACES_API_KEY is not configured server-side.",
+      },
+      503,
+    );
+
+  const settings = await loadDiscoverySettings();
+  const countryBias = settings.location_country_bias;
+  const response = await fetch(
+    "https://places.googleapis.com/v1/places:autocomplete",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+      },
+      body: JSON.stringify({
+        input: query,
+        languageCode: "en",
+        regionCode: countryBias,
+        includedRegionCodes: [countryBias],
+      }),
+    },
+  );
+  const body = (await response.json().catch(() => ({}))) as {
+    suggestions?: Array<{
+      placePrediction?: {
+        placeId?: string;
+        text?: { text?: string };
+        structuredFormat?: {
+          mainText?: { text?: string };
+          secondaryText?: { text?: string };
+        };
+        types?: string[];
+      };
+    }>;
+    error?: { message?: string };
+  };
+  if (!response.ok)
+    return json(
+      {
+        error: "location_provider_failed",
+        detail: `google_places_${response.status}`,
+      },
+      502,
+    );
+
+  const suggestions: Array<{
+    place_id: string;
+    label: string;
+    primary_text: string | null;
+    secondary_text: string | null;
+    types: string[];
+  }> = [];
+  for (const entry of body.suggestions ?? []) {
+    const prediction = entry.placePrediction;
+    const placeId = cleanText(prediction?.placeId, 300);
+    const label = cleanText(prediction?.text?.text, 200);
+    if (!placeId || !label) continue;
+    suggestions.push({
+      place_id: placeId,
+      label,
+      primary_text: cleanText(prediction?.structuredFormat?.mainText?.text, 160),
+      secondary_text: cleanText(
+        prediction?.structuredFormat?.secondaryText?.text,
+        160,
+      ),
+      types: Array.isArray(prediction?.types)
+        ? prediction.types.slice(0, 6)
+        : [],
+    });
+    if (suggestions.length >= settings.autocomplete_limit) break;
+  }
+
+  return json({
+    suggestions,
+    provider: "google_places",
+    region: countryBias,
+  });
+}
+
+// GET /places/location?place_id= — structured location for a selected suggestion.
+// Returns the human-readable label plus coordinates so a run can retain the
+// stable identifier and enough structure to avoid relying on free text alone.
+async function resolvePlaceLocation(url: URL): Promise<Response> {
+  const placeId = cleanText(url.searchParams.get("place_id"), 300);
+  if (!placeId)
+    return json(
+      { error: "validation_failed", detail: "place_id is required." },
+      422,
+    );
+  if (!GOOGLE_PLACES_API_KEY)
+    return json(
+      {
+        error: "provider_not_configured",
+        detail: "GOOGLE_PLACES_API_KEY is not configured server-side.",
+      },
+      503,
+    );
+
+  const response = await fetch(
+    `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+    {
+      headers: {
+        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+        "X-Goog-FieldMask":
+          "id,displayName,formattedAddress,shortFormattedAddress,location,addressComponents",
+      },
+    },
+  );
+  const body = (await response.json().catch(() => ({}))) as {
+    id?: string;
+    displayName?: { text?: string };
+    formattedAddress?: string;
+    shortFormattedAddress?: string;
+    location?: { latitude?: number; longitude?: number };
+    addressComponents?: Array<{
+      types?: string[];
+      shortText?: string;
+      longText?: string;
+    }>;
+    error?: { message?: string };
+  };
+  if (!response.ok)
+    return json(
+      {
+        error: "location_provider_failed",
+        detail: `google_places_${response.status}`,
+      },
+      502,
+    );
+
+  const components = body.addressComponents ?? [];
+  const componentFor = (type: string): string | null => {
+    const matches = components.filter((component) =>
+      (component.types ?? []).includes(type)
+    );
+    return cleanText(matches[0]?.shortText ?? matches[0]?.longText, 120);
+  };
+
+  return json({
+    location: {
+      place_id: cleanText(body.id, 300) ?? placeId,
+      label:
+        cleanText(body.formattedAddress, 200) ??
+        cleanText(body.displayName?.text, 200) ??
+        placeId,
+      short_label: cleanText(body.shortFormattedAddress, 200),
+      locality: componentFor("locality"),
+      region: componentFor("administrative_area_level_1"),
+      country: componentFor("country"),
+      latitude: numberInRange(body.location?.latitude, -90, 90),
+      longitude: numberInRange(body.location?.longitude, -180, 180),
+    },
+    provider: "google_places",
+  });
+}
+
+// ---- Admin: operator-adjustable discovery configuration ---------------------
+//
+// Every route below sits behind the same operator bearer token as the rest of
+// the API (the router rejects unauthenticated requests before dispatch), and the
+// underlying tables are service-role only, so a mutation is impossible without
+// the Edge Function. The console is a thin editor: this file owns validation,
+// hard ceilings, scenario-execution safety and the audit trail.
+//
+// Responses deliberately contain configuration and counts only — never an API
+// key, Supabase secret, operator token, signing key or SMTP credential.
+
+interface AdminCategoryRow {
+  id: string;
+  slug: string;
+  label: string;
+  description: string | null;
+  status: string;
+  search_terms: unknown;
+  google_types: unknown;
+  default_radius_m: number | null;
+  compatible_scenarios: unknown;
+  sort_order: number;
+}
+
+interface AdminScenarioRow {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  status: string;
+  version: number;
+  discovery_config: JsonObject;
+}
+
+const CATEGORY_FIELDS = [
+  "id",
+  "slug",
+  "label",
+  "description",
+  "status",
+  "search_terms",
+  "google_types",
+  "default_radius_m",
+  "compatible_scenarios",
+  "sort_order",
+  "updated_at",
+].join(",");
+
+const SCENARIO_FIELDS =
+  "id,slug,name,description,status,version,discovery_config,updated_at";
+
+// The settings singleton has a text primary key, but event rows are keyed by
+// uuid, so its audit events use this stable placeholder identity.
+const DISCOVERY_SETTINGS_ENTITY_ID = "00000000-0000-4000-8000-000000000000";
+
+/** The shared-token operator model has no per-user identity; a label may be supplied. */
+function adminOperator(payload: JsonObject): string {
+  return cleanText(payload.operator, 200) ?? "operator-console";
+}
+
+function scenarioIsExecutable(slug: string): boolean {
+  return SUPPORTED_DISCOVERY_SCENARIO_SLUGS.has(slug);
+}
+
+function withExecutability(scenario: AdminScenarioRow): AdminScenarioRow & {
+  executable: boolean;
+  active: boolean;
+} {
+  return {
+    ...scenario,
+    active: scenario.status === "active",
+    executable: scenarioIsExecutable(scenario.slug),
+  };
+}
+
+function adminCapabilities(settings: DiscoverySettings): JsonObject {
+  return {
+    supported_scenarios: [...SUPPORTED_DISCOVERY_SCENARIO_SLUGS],
+    default_scenario_slug: DEFAULT_DISCOVERY_SCENARIO_SLUG,
+    radius_bounds_m: { min: MIN_RADIUS_M, max: MAX_RADIUS_M },
+    max_result_limit: MAX_DISCOVERY_RESULTS,
+    max_search_terms: MAX_DISCOVERY_SEARCH_TERMS,
+    max_autocomplete_limit: MAX_PLACES_AUTOCOMPLETE_LIMIT,
+    allowed_country_biases: ALLOWED_LOCATION_COUNTRY_BIASES,
+    default_radius_options_m: DEFAULT_RADIUS_OPTIONS_M,
+    effective: settings,
+  };
+}
+
+/**
+ * Records a configuration change on the existing canonical event store, the same
+ * mechanism the discovery and acknowledgement events already use. An audit
+ * failure is reported but never rolls back an applied configuration change.
+ */
+async function recordAdminChange(args: {
+  eventType: string;
+  entityType: string;
+  entityId: string;
+  entityRef: string | null;
+  operator: string;
+  changes: Array<{ field: string; previous: unknown; next: unknown }>;
+}): Promise<boolean> {
+  if (!args.changes.length) return false;
+  try {
+    await emitWorkflowEvent({
+      eventType: args.eventType,
+      entityType: args.entityType,
+      entityId: args.entityId,
+      entityRef: args.entityRef,
+      status: "updated",
+      payload: { operator: args.operator, changes: args.changes },
+    });
+    return true;
+  } catch (error) {
+    console.error("admin_audit_failed", String(error));
+    return false;
+  }
+}
+
+function changeSet(
+  previous: JsonObject,
+  next: JsonObject,
+): Array<{ field: string; previous: unknown; next: unknown }> {
+  const changes: Array<{ field: string; previous: unknown; next: unknown }> = [];
+  for (const field of Object.keys(next)) {
+    if (JSON.stringify(previous[field] ?? null) === JSON.stringify(next[field] ?? null))
+      continue;
+    changes.push({ field, previous: previous[field] ?? null, next: next[field] ?? null });
+  }
+  return changes;
+}
+
+/** Dashboard/console read: settings + every category + every scenario. */
+async function adminConfig(): Promise<Response> {
+  const [settings, categoryResult, scenarioResult] = await Promise.all([
+    loadDiscoverySettings(),
+    supabase
+      .from("opportunity_categories")
+      .select(CATEGORY_FIELDS)
+      .order("sort_order", { ascending: true })
+      .order("label", { ascending: true }),
+    supabase
+      .from("opportunity_scenarios")
+      .select(SCENARIO_FIELDS)
+      .order("slug", { ascending: true })
+      .order("version", { ascending: false }),
+  ]);
+  if (categoryResult.error) throw categoryResult.error;
+  if (scenarioResult.error) throw scenarioResult.error;
+
+  return json({
+    settings,
+    categories: categoryResult.data ?? [],
+    scenarios: ((scenarioResult.data ?? []) as unknown as AdminScenarioRow[]).map(
+      withExecutability,
+    ),
+    capabilities: adminCapabilities(settings),
+  });
+}
+
+const CATEGORY_STATUSES = ["active", "inactive"];
+const SCENARIO_STATUSES = ["draft", "active", "retired"];
+
+function textArrayField(
+  value: unknown,
+  maxItems: number,
+  maxLength: number,
+): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const items = stringList(value, maxLength).slice(0, maxItems);
+  return value.length > maxItems ? null : items;
+}
+
+/** PATCH /admin/categories/:slug — edit one registry category. */
+async function updateAdminCategory(
+  slug: string,
+  payload: JsonObject,
+): Promise<Response> {
+  const { data: current, error } = await supabase
+    .from("opportunity_categories")
+    .select(CATEGORY_FIELDS)
+    .eq("slug", slug)
+    .maybeSingle();
+  if (error) throw error;
+  if (!current) return json({ error: "not_found" }, 404);
+
+  const previous = current as unknown as AdminCategoryRow;
+  const fields: Record<string, string> = {};
+  const patch: JsonObject = {};
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(payload, key);
+
+  if (has("label")) {
+    const label = cleanText(payload.label, 160);
+    if (!label) fields.label = "Label is required.";
+    else patch.label = label;
+  }
+  if (has("description")) {
+    patch.description = cleanText(payload.description, 400);
+  }
+  if (has("status")) {
+    const status = cleanText(payload.status, 20);
+    if (!status || !CATEGORY_STATUSES.includes(status))
+      fields.status = `Status must be one of: ${CATEGORY_STATUSES.join(", ")}.`;
+    else patch.status = status;
+  }
+  if (has("search_terms")) {
+    const terms = textArrayField(payload.search_terms, 8, 160);
+    if (!terms) fields.search_terms = "Search terms must be up to 8 text values.";
+    else {
+      const seen = new Set<string>();
+      patch.search_terms = terms.filter((term) => {
+        const key = term.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }
+  if (has("google_types")) {
+    const types = textArrayField(payload.google_types, 8, 60);
+    if (!types) fields.google_types = "Google types must be up to 8 text values.";
+    else patch.google_types = types;
+  }
+  if (has("default_radius_m")) {
+    if (payload.default_radius_m == null || payload.default_radius_m === "") {
+      patch.default_radius_m = null;
+    } else {
+      const radius = numberInRange(payload.default_radius_m, MIN_RADIUS_M, MAX_RADIUS_M);
+      if (radius === null)
+        fields.default_radius_m = "Default radius must be between 100 and 50,000 metres.";
+      else patch.default_radius_m = Math.trunc(radius);
+    }
+  }
+  if (has("compatible_scenarios")) {
+    const list = textArrayField(payload.compatible_scenarios, 12, 80);
+    if (!list)
+      fields.compatible_scenarios = "Compatible scenarios must be up to 12 scenario slugs.";
+    else {
+      const { data: known, error: slugError } = await supabase
+        .from("opportunity_scenarios")
+        .select("slug");
+      if (slugError) throw slugError;
+      const knownSlugs = new Set(
+        (known ?? []).map((row) => String(row.slug)),
+      );
+      const unknown = list.filter((entry) => !knownSlugs.has(entry));
+      if (unknown.length)
+        fields.compatible_scenarios = `Unknown scenario slug(s): ${unknown.join(", ")}.`;
+      else patch.compatible_scenarios = [...new Set(list)];
+    }
+  }
+  if (has("sort_order")) {
+    const order = numberInRange(payload.sort_order, 0, 10000);
+    if (order === null) fields.sort_order = "Sort order must be between 0 and 10000.";
+    else patch.sort_order = Math.trunc(order);
+  }
+  if (!Object.keys(patch).length && !Object.keys(fields).length)
+    return json({ error: "no_fields", detail: "No editable fields supplied." }, 422);
+  if (Object.keys(fields).length)
+    return json({ error: "validation_failed", fields }, 422);
+
+  const changes = changeSet(
+    previous as unknown as JsonObject,
+    patch,
+  );
+  if (!changes.length)
+    return json({ category: previous, changes: [], audit_logged: false });
+
+  const { data: category, error: updateError } = await supabase
+    .from("opportunity_categories")
+    .update(patch)
+    .eq("id", previous.id)
+    .select(CATEGORY_FIELDS)
+    .single();
+  if (updateError) throw updateError;
+
+  const auditLogged = await recordAdminChange({
+    eventType: "opportunity.admin.category_updated",
+    entityType: "opportunity_category",
+    entityId: previous.id,
+    entityRef: previous.slug,
+    operator: adminOperator(payload),
+    changes,
+  });
+  return json({ category, changes, audit_logged: auditLogged });
+}
+
+/** PATCH /admin/scenarios/:id — edit a scenario. Activation fails closed. */
+async function updateAdminScenario(
+  id: string,
+  payload: JsonObject,
+): Promise<Response> {
+  const { data: current, error } = await supabase
+    .from("opportunity_scenarios")
+    .select(SCENARIO_FIELDS)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!current) return json({ error: "not_found" }, 404);
+
+  const previous = current as unknown as AdminScenarioRow;
+  const settings = await loadDiscoverySettings();
+  const fields: Record<string, string> = {};
+  const patch: JsonObject = {};
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(payload, key);
+
+  if (has("name")) {
+    const name = cleanText(payload.name, 160);
+    if (!name) fields.name = "Name is required.";
+    else patch.name = name;
+  }
+  if (has("description")) patch.description = cleanText(payload.description, 600);
+
+  let nextStatus = previous.status;
+  if (has("status")) {
+    const status = cleanText(payload.status, 20);
+    if (!status || !SCENARIO_STATUSES.includes(status))
+      fields.status = `Status must be one of: ${SCENARIO_STATUSES.join(", ")}.`;
+    else {
+      nextStatus = status;
+      patch.status = status;
+    }
+  }
+
+  if (has("discovery_config")) {
+    const incoming = payload.discovery_config;
+    if (!incoming || typeof incoming !== "object" || Array.isArray(incoming))
+      fields.discovery_config = "Discovery config must be an object.";
+    else {
+      const config: JsonObject = { ...previous.discovery_config };
+      const source = incoming as JsonObject;
+      if (Object.prototype.hasOwnProperty.call(source, "default_result_limit")) {
+        const limit = numberInRange(source.default_result_limit, 1, settings.max_result_limit);
+        if (limit === null)
+          fields.discovery_config =
+            `Default result limit must be between 1 and ${settings.max_result_limit}.`;
+        else config.default_result_limit = Math.trunc(limit);
+      }
+      if (Object.prototype.hasOwnProperty.call(source, "radius_m")) {
+        if (source.radius_m == null || source.radius_m === "") {
+          config.radius_m = null;
+        } else {
+          const radius = numberInRange(source.radius_m, MIN_RADIUS_M, MAX_RADIUS_M);
+          if (radius === null)
+            fields.discovery_config = "Discovery radius must be between 100 and 50,000 metres.";
+          else config.radius_m = Math.trunc(radius);
+        }
+      }
+      if (!fields.discovery_config) patch.discovery_config = config;
+    }
+  }
+
+  if (Object.keys(fields).length)
+    return json({ error: "validation_failed", fields }, 422);
+  if (!Object.keys(patch).length)
+    return json({ error: "no_fields", detail: "No editable fields supplied." }, 422);
+
+  // Safety guard 1: a scenario only becomes operational when the discovery
+  // execution path genuinely supports its contract. Changing `status` alone is
+  // never enough.
+  if (nextStatus === "active" && !scenarioIsExecutable(previous.slug))
+    return json(
+      {
+        error: "scenario_not_executable",
+        detail:
+          `Scenario "${previous.slug}" is registered but not wired into the discovery execution path. ` +
+          "Activation is refused until the backend supports it.",
+        supported_scenarios: [...SUPPORTED_DISCOVERY_SCENARIO_SLUGS],
+      },
+      409,
+    );
+
+  // Safety guard 2: the default scenario must stay active — the discovery-run
+  // insert trigger resolves the default scenario by slug from the active rows.
+  if (previous.status === "active" && nextStatus !== "active") {
+    if (previous.slug === DEFAULT_DISCOVERY_SCENARIO_SLUG)
+      return json(
+        {
+          error: "default_scenario_required",
+          detail:
+            `${DEFAULT_DISCOVERY_SCENARIO_SLUG} must remain active: discovery runs resolve it as the default scenario.`,
+        },
+        409,
+      );
+    const { data: others, error: otherError } = await supabase
+      .from("opportunity_scenarios")
+      .select("slug,status")
+      .eq("status", "active")
+      .neq("id", previous.id);
+    if (otherError) throw otherError;
+    const stillExecutable = (others ?? []).some((row) =>
+      scenarioIsExecutable(String(row.slug)),
+    );
+    if (!stillExecutable)
+      return json(
+        {
+          error: "last_executable_scenario",
+          detail: "At least one active, executable scenario must remain available.",
+        },
+        409,
+      );
+  }
+
+  const changes = changeSet(previous as unknown as JsonObject, patch);
+  if (!changes.length)
+    return json({ scenario: withExecutability(previous), changes: [], audit_logged: false });
+
+  const { data: scenario, error: updateError } = await supabase
+    .from("opportunity_scenarios")
+    .update(patch)
+    .eq("id", previous.id)
+    .select(SCENARIO_FIELDS)
+    .single();
+  if (updateError) throw updateError;
+
+  const auditLogged = await recordAdminChange({
+    eventType: "opportunity.admin.scenario_updated",
+    entityType: "opportunity_scenario",
+    entityId: previous.id,
+    entityRef: `${previous.slug}@v${previous.version}`,
+    operator: adminOperator(payload),
+    changes,
+  });
+  return json({
+    scenario: withExecutability(scenario as unknown as AdminScenarioRow),
+    changes,
+    audit_logged: auditLogged,
+  });
+}
+
+/** PATCH /admin/settings — edit the discovery-wide singleton. */
+async function updateAdminDiscoverySettings(
+  payload: JsonObject,
+): Promise<Response> {
+  const settings = await loadDiscoverySettings();
+  const fields: Record<string, string> = {};
+  const patch: Partial<DiscoverySettings> = {};
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(payload, key);
+
+  if (has("default_radius_m")) {
+    if (payload.default_radius_m == null || payload.default_radius_m === "") {
+      patch.default_radius_m = null;
+    } else {
+      const radius = numberInRange(payload.default_radius_m, MIN_RADIUS_M, MAX_RADIUS_M);
+      if (radius === null)
+        fields.default_radius_m = "Default radius must be between 100 and 50,000 metres.";
+      else patch.default_radius_m = Math.trunc(radius);
+    }
+  }
+  if (has("radius_options_m")) {
+    const raw = payload.radius_options_m;
+    if (!Array.isArray(raw) || raw.length < 1 || raw.length > 8)
+      fields.radius_options_m = "Provide between 1 and 8 radius options.";
+    else {
+      const options = radiusOptions(raw);
+      const invalid = raw.filter(
+        (item) => numberInRange(item, MIN_RADIUS_M, MAX_RADIUS_M) === null,
+      );
+      if (invalid.length)
+        fields.radius_options_m =
+          "Every radius option must be between 100 and 50,000 metres.";
+      else patch.radius_options_m = options;
+    }
+  }
+  if (has("max_result_limit")) {
+    const limit = numberInRange(payload.max_result_limit, 1, MAX_DISCOVERY_RESULTS);
+    if (limit === null)
+      fields.max_result_limit = `Maximum allowed results must be between 1 and ${MAX_DISCOVERY_RESULTS}.`;
+    else patch.max_result_limit = Math.trunc(limit);
+  }
+  if (has("default_result_limit")) {
+    const limit = numberInRange(
+      payload.default_result_limit,
+      1,
+      patch.max_result_limit ?? settings.max_result_limit,
+    );
+    if (limit === null)
+      fields.default_result_limit = `Default results must be between 1 and ${patch.max_result_limit ?? settings.max_result_limit}.`;
+    else patch.default_result_limit = Math.trunc(limit);
+  }
+  if (has("location_country_bias")) {
+    const bias = cleanText(payload.location_country_bias, 8)?.toLowerCase();
+    if (!bias || !ALLOWED_LOCATION_COUNTRY_BIASES.includes(bias))
+      fields.location_country_bias =
+        `Country bias must be one of: ${ALLOWED_LOCATION_COUNTRY_BIASES.join(", ")}.`;
+    else patch.location_country_bias = bias;
+  }
+  if (has("max_search_terms")) {
+    const terms = numberInRange(payload.max_search_terms, 1, MAX_DISCOVERY_SEARCH_TERMS);
+    if (terms === null)
+      fields.max_search_terms = `Search-term expansion must be between 1 and ${MAX_DISCOVERY_SEARCH_TERMS}.`;
+    else patch.max_search_terms = Math.trunc(terms);
+  }
+  if (has("autocomplete_limit")) {
+    const limit = numberInRange(payload.autocomplete_limit, 1, MAX_PLACES_AUTOCOMPLETE_LIMIT);
+    if (limit === null)
+      fields.autocomplete_limit = `Autocomplete limit must be between 1 and ${MAX_PLACES_AUTOCOMPLETE_LIMIT}.`;
+    else patch.autocomplete_limit = Math.trunc(limit);
+  }
+
+  if (!Object.keys(patch).length && !Object.keys(fields).length)
+    return json({ error: "no_fields", detail: "No editable fields supplied." }, 422);
+  if (Object.keys(fields).length)
+    return json({ error: "validation_failed", fields }, 422);
+
+  const next: DiscoverySettings = { ...settings, ...patch };
+  if (next.default_result_limit > next.max_result_limit)
+    return json(
+      {
+        error: "validation_failed",
+        fields: {
+          default_result_limit: "Default results cannot exceed the maximum allowed results.",
+        },
+      },
+      422,
+    );
+  // The operator-facing radius list and its default must agree, otherwise the
+  // Discovery form has no selectable value that matches the default.
+  if (
+    next.radius_options_m.length > 0 &&
+    next.default_radius_m !== null &&
+    !next.radius_options_m.includes(next.default_radius_m)
+  )
+    return json(
+      {
+        error: "validation_failed",
+        fields: {
+          default_radius_m: "Default radius must be one of the supported radius options.",
+        },
+      },
+      422,
+    );
+
+  const changes = changeSet(settings as unknown as JsonObject, next as unknown as JsonObject);
+  if (!changes.length)
+    return json({ settings: next, changes: [], audit_logged: false });
+
+  const { error: upsertError } = await supabase
+    .from("opportunity_discovery_settings")
+    .upsert(
+      { id: "global", ...next, updated_by: adminOperator(payload) },
+      { onConflict: "id" },
+    );
+  if (upsertError) throw upsertError;
+
+  const auditLogged = await recordAdminChange({
+    eventType: "opportunity.admin.discovery_settings_updated",
+    entityType: "opportunity_discovery_settings",
+    entityId: DISCOVERY_SETTINGS_ENTITY_ID,
+    entityRef: "global",
+    operator: adminOperator(payload),
+    changes,
+  });
+  return json({ settings: next, changes, audit_logged: auditLogged });
+}
+
+/** GET /admin/diagnostics — read-only operational snapshot. No secrets, ever. */
+async function adminDiagnostics(): Promise<Response> {
+  const settings = await loadDiscoverySettings();
+  const [categoryResult, scenarioResult, runResult] = await Promise.all([
+    supabase.from("opportunity_categories").select("status"),
+    supabase.from("opportunity_scenarios").select("slug,name,status,version"),
+    supabase
+      .from("opportunity_discovery_runs")
+      .select(
+        "id,status,current_stage,location,category_slug,category_label,discovery_terms,result_limit,radius_m,scenario_version,scenario_snapshot,created_at",
+      )
+      .order("created_at", { ascending: false })
+      .limit(10),
+  ]);
+  if (categoryResult.error) throw categoryResult.error;
+  if (scenarioResult.error) throw scenarioResult.error;
+  if (runResult.error) throw runResult.error;
+
+  const categories = categoryResult.data ?? [];
+  const scenarios = (scenarioResult.data ?? []) as Array<{
+    slug: string;
+    name: string;
+    status: string;
+    version: number;
+  }>;
+  const smtpHost = Deno.env.get("MGRNZ_SMTP_HOST") || "";
+  const smtpUser = Deno.env.get("MGRNZ_SMTP_USERNAME") || "";
+  const smtpPassword = Deno.env.get("MGRNZ_SMTP_PASSWORD") || "";
+
+  return json({
+    generated_at: new Date().toISOString(),
+    provider: {
+      google_places_configured: Boolean(GOOGLE_PLACES_API_KEY),
+      smtp_configured: Boolean(smtpHost && smtpUser && smtpPassword),
+    },
+    categories: {
+      active: categories.filter((row) => row.status === "active").length,
+      inactive: categories.filter((row) => row.status !== "active").length,
+      total: categories.length,
+    },
+    scenarios: {
+      active: scenarios.filter((row) => row.status === "active").map((row) => row.slug),
+      draft: scenarios.filter((row) => row.status === "draft").map((row) => row.slug),
+      retired: scenarios.filter((row) => row.status === "retired").map((row) => row.slug),
+      executable: scenarios
+        .filter((row) => scenarioIsExecutable(row.slug))
+        .map((row) => row.slug),
+      default_scenario_slug: DEFAULT_DISCOVERY_SCENARIO_SLUG,
+    },
+    settings,
+    capabilities: adminCapabilities(settings),
+    recent_runs: (runResult.data ?? []).map((run) => {
+      const snapshot = (run.scenario_snapshot ?? {}) as JsonObject;
+      return {
+        id: run.id,
+        status: run.status,
+        current_stage: run.current_stage,
+        created_at: run.created_at,
+        scenario_slug: cleanText(snapshot.slug, 120),
+        scenario_version: run.scenario_version,
+        category_slug: run.category_slug,
+        category_label: run.category_label,
+        location: run.location,
+        discovery_terms: run.discovery_terms,
+        result_limit: run.result_limit,
+        radius_m: run.radius_m,
+      };
+    }),
+  });
 }
 
 async function getDiscoveryRun(runId: string): Promise<Response> {
@@ -2691,6 +3889,86 @@ Deno.serve(async (req: Request): Promise<Response> => {
         parts[1],
         await req.json().catch(() => ({})),
         "audit",
+      );
+    }
+    if (
+      req.method === "GET" &&
+      parts.length === 1 &&
+      parts[0] === "opportunity-categories"
+    ) {
+      return await listCategories();
+    }
+    if (
+      req.method === "GET" &&
+      parts.length === 2 &&
+      parts[0] === "places" &&
+      parts[1] === "autocomplete"
+    ) {
+      return await autocompleteLocations(url);
+    }
+    if (
+      req.method === "GET" &&
+      parts.length === 2 &&
+      parts[0] === "places" &&
+      parts[1] === "location"
+    ) {
+      return await resolvePlaceLocation(url);
+    }
+    if (
+      req.method === "GET" &&
+      parts.length === 1 &&
+      parts[0] === "discovery-settings"
+    ) {
+      return await getDiscoverySettings();
+    }
+    // Admin console. Reads are operator-scoped like every other route; mutations
+    // are validated and audited server-side so the UI can never bypass them.
+    if (
+      req.method === "GET" &&
+      parts.length === 2 &&
+      parts[0] === "admin" &&
+      parts[1] === "config"
+    ) {
+      return await adminConfig();
+    }
+    if (
+      req.method === "GET" &&
+      parts.length === 2 &&
+      parts[0] === "admin" &&
+      parts[1] === "diagnostics"
+    ) {
+      return await adminDiagnostics();
+    }
+    if (
+      req.method === "PATCH" &&
+      parts.length === 2 &&
+      parts[0] === "admin" &&
+      parts[1] === "settings"
+    ) {
+      return await updateAdminDiscoverySettings(
+        await req.json().catch(() => ({})),
+      );
+    }
+    if (
+      req.method === "PATCH" &&
+      parts.length === 3 &&
+      parts[0] === "admin" &&
+      parts[1] === "categories"
+    ) {
+      return await updateAdminCategory(
+        decodeURIComponent(parts[2]),
+        await req.json().catch(() => ({})),
+      );
+    }
+    if (
+      req.method === "PATCH" &&
+      parts.length === 3 &&
+      parts[0] === "admin" &&
+      parts[1] === "scenarios"
+    ) {
+      return await updateAdminScenario(
+        decodeURIComponent(parts[2]),
+        await req.json().catch(() => ({})),
       );
     }
     if (req.method === "GET" && parts.length === 1)

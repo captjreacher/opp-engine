@@ -342,11 +342,25 @@ export type DiscoveryRunStatus =
   | "cancelled";
 
 export interface DiscoverySearchInput {
+  /** Human-readable location label — the value stored in the legacy `location` column. */
   location: string;
+  /** Category label snapshot — the value stored in the legacy `industry` column. */
   industry: string;
   keywords: string;
   radius_m: number | null;
   result_limit: number;
+  /**
+   * Google place id for the selected location suggestion. Null/absent when the
+   * operator typed free text (legacy runs keep the label only).
+   */
+  location_place_id?: string | null;
+  location_latitude?: number | null;
+  location_longitude?: number | null;
+  /** Controlled registry slug. Null/absent for legacy free-text categories. */
+  category_slug?: string | null;
+  category_label?: string | null;
+  /** Active, executable opportunity scenario selected for this run. */
+  scenario_id?: string | null;
 }
 
 export interface DiscoveryRun extends DiscoverySearchInput {
@@ -364,6 +378,18 @@ export interface DiscoveryRun extends DiscoverySearchInput {
   started_at: string | null;
   completed_at: string | null;
   updated_at: string;
+  /** Scenario provenance captured at run creation (immutable snapshot). */
+  scenario_id?: string | null;
+  scenario_version?: number | null;
+  scenario_snapshot?: Record<string, unknown> | null;
+  /** Expanded provider search terms actually used for this run. */
+  discovery_terms?: string[];
+  /** Legacy free-text runs retain the label and leave these null. */
+  location_place_id?: string | null;
+  location_latitude?: number | null;
+  location_longitude?: number | null;
+  category_slug?: string | null;
+  category_label?: string | null;
 }
 
 export interface DiscoveryEvent {
@@ -375,6 +401,10 @@ export interface DiscoveryEvent {
   entity_id: string;
 }
 
+/**
+ * Retained read-only result from Cockpit `check_prospect_eligibility`.
+ * `classification` is the source of truth and is never rewritten to eligible.
+ */
 export interface DiscoveryEligibilityResult {
   eligible?: boolean;
   classification?: string;
@@ -422,6 +452,7 @@ export interface DiscoveryCandidate {
   updated_at: string;
 }
 
+/** Response from POST {VITE_API_BASE}/discovery-candidates/{id}/acknowledge. */
 export interface CandidateAcknowledgementResponse {
   ok: boolean;
   idempotent?: boolean;
@@ -439,6 +470,24 @@ export interface CandidateAcknowledgementResponse {
 
 export interface DiscoveryRunResponse {
   run: DiscoveryRun;
+}
+
+/** Response from GET {VITE_API_BASE}/opportunity-categories. */
+export interface DiscoveryCategoriesResponse {
+  categories: unknown[];
+}
+
+/** Response from GET {VITE_API_BASE}/places/autocomplete?query=. */
+export interface LocationSuggestionsResponse {
+  suggestions: unknown[];
+  provider?: string;
+  region?: string;
+}
+
+/** Response from GET {VITE_API_BASE}/places/location?place_id=. */
+export interface ResolvedLocationResponse {
+  location: unknown;
+  provider?: string;
 }
 export interface DiscoveryCandidatesResponse {
   candidates: DiscoveryCandidate[];

@@ -23,11 +23,22 @@ import type {
   SendResponse,
   DiscoverySearchInput,
   DiscoveryRunResponse,
+  DiscoveryCategoriesResponse,
   DiscoveryCandidatesResponse,
+  LocationSuggestionsResponse,
+  ResolvedLocationResponse,
   BatchActionResponse,
   CandidateAcknowledgementResponse,
   VisualEvidence,
 } from "./types";
+import type {
+  AdminCategory,
+  AdminConfigResponse,
+  AdminDiagnostics,
+  AdminMutationResponse,
+  AdminScenario,
+  DiscoverySettings,
+} from "./admin";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").trim();
 const OPERATOR_TOKEN = (import.meta.env.VITE_OPERATOR_TOKEN ?? "").trim();
@@ -244,6 +255,44 @@ export function fetchDiscoveryRun(
   );
 }
 
+/**
+ * GET {VITE_API_BASE}/opportunity-categories
+ *
+ * Active categories from the controlled registry. Rows are normalized by
+ * `src/lib/categories.ts` — the client never invents a category.
+ */
+export function fetchOpportunityCategories(): Promise<DiscoveryCategoriesResponse> {
+  return request<DiscoveryCategoriesResponse>("/opportunity-categories");
+}
+
+/**
+ * GET {VITE_API_BASE}/places/autocomplete?query=
+ *
+ * NZ-biased Google location suggestions, proxied by the API. The operator token
+ * is the only credential the browser holds — the Google key stays server-side.
+ */
+export function fetchLocationSuggestions(
+  query: string,
+): Promise<LocationSuggestionsResponse> {
+  return request<LocationSuggestionsResponse>(
+    `/places/autocomplete?query=${encodeURIComponent(query)}`,
+  );
+}
+
+/**
+ * GET {VITE_API_BASE}/places/location?place_id=
+ *
+ * Structured location (human label + coordinates) for a selected suggestion so
+ * the run never relies on arbitrary free text alone.
+ */
+export function fetchLocationDetails(
+  placeId: string,
+): Promise<ResolvedLocationResponse> {
+  return request<ResolvedLocationResponse>(
+    `/places/location?place_id=${encodeURIComponent(placeId)}`,
+  );
+}
+
 export function fetchDiscoveryCandidates(
   runId: string,
 ): Promise<DiscoveryCandidatesResponse> {
@@ -280,6 +329,13 @@ export const auditDiscoveryCandidates = (
   retry = false,
 ) => discoveryBatch(runId, "audit", ids, retry);
 
+/**
+ * POST {VITE_API_BASE}/discovery-candidates/{id}/acknowledge
+ *
+ * Persists the operator acknowledgement for a `possible_match` candidate. The
+ * backend records the audit event and keeps the classification as
+ * `possible_match`; the UI checkbox alone is never sufficient.
+ */
 export function acknowledgePossibleMatch(
   candidateId: string,
   operator?: string,
@@ -288,6 +344,85 @@ export function acknowledgePossibleMatch(
     `/discovery-candidates/${encodeURIComponent(candidateId)}/acknowledge`,
     { method: "POST", body: JSON.stringify({ operator }) },
   );
+}
+
+/**
+ * GET {VITE_API_BASE}/discovery-settings
+ *
+ * Effective operator-facing discovery defaults. Narrow by design: no provider
+ * credential, no env value.
+ */
+export function fetchDiscoverySettings(): Promise<{ settings: DiscoverySettings }> {
+  return request<{ settings: DiscoverySettings }>("/discovery-settings");
+}
+
+/** GET {VITE_API_BASE}/admin/config — settings + every category + every scenario. */
+export function fetchAdminConfig(): Promise<AdminConfigResponse> {
+  return request<AdminConfigResponse>("/admin/config");
+}
+
+/** GET {VITE_API_BASE}/admin/diagnostics — read-only operational snapshot. */
+export function fetchAdminDiagnostics(): Promise<AdminDiagnostics> {
+  return request<AdminDiagnostics>("/admin/diagnostics");
+}
+
+export type AdminCategoryPatch = Partial<
+  Pick<
+    AdminCategory,
+    | "label"
+    | "description"
+    | "status"
+    | "search_terms"
+    | "google_types"
+    | "default_radius_m"
+    | "compatible_scenarios"
+    | "sort_order"
+  >
+>;
+
+export type AdminScenarioPatch = Partial<Pick<AdminScenario, "name" | "description" | "status">> & {
+  discovery_config?: { default_result_limit?: number; radius_m?: number | null };
+};
+
+/**
+ * PATCH {VITE_API_BASE}/admin/categories/{slug}
+ *
+ * Mutations are validated, ceiling-clamped and audited by the backend. The
+ * console never writes to a database directly, and the registry is
+ * service-role only, so the UI cannot bypass a single backend rule.
+ */
+export function updateAdminCategory(
+  slug: string,
+  patch: AdminCategoryPatch,
+  operator?: string,
+): Promise<AdminMutationResponse<AdminCategory>> {
+  return request<AdminMutationResponse<AdminCategory>>(
+    `/admin/categories/${encodeURIComponent(slug)}`,
+    { method: "PATCH", body: JSON.stringify({ ...patch, operator }) },
+  );
+}
+
+/** PATCH {VITE_API_BASE}/admin/scenarios/{id} — activation fails closed server-side. */
+export function updateAdminScenario(
+  id: string,
+  patch: AdminScenarioPatch,
+  operator?: string,
+): Promise<AdminMutationResponse<AdminScenario>> {
+  return request<AdminMutationResponse<AdminScenario>>(
+    `/admin/scenarios/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: JSON.stringify({ ...patch, operator }) },
+  );
+}
+
+/** PATCH {VITE_API_BASE}/admin/settings — edit the discovery-wide singleton. */
+export function updateAdminSettings(
+  patch: Partial<DiscoverySettings>,
+  operator?: string,
+): Promise<AdminMutationResponse<DiscoverySettings>> {
+  return request<AdminMutationResponse<DiscoverySettings>>("/admin/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ ...patch, operator }),
+  });
 }
 
 export function enrichOpportunity(

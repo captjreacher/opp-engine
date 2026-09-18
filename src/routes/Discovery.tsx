@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Badge, { toneForStatus } from "../components/Badge";
 import {
@@ -7,9 +7,26 @@ import {
   auditDiscoveryCandidates,
   fetchDiscoveryCandidates,
   fetchDiscoveryRun,
+  fetchLocationDetails,
+  fetchDiscoverySettings,
+  fetchLocationSuggestions,
+  fetchOpportunityCategories,
   importDiscoveryCandidates,
   startDiscoveryRun,
 } from "../lib/api";
+import {
+  DISCOVERY_SETTINGS_FALLBACK,
+  metresToKilometres,
+  normalizeDiscoverySettings,
+  type DiscoverySettings,
+} from "../lib/admin";
+import {
+  activeCategories,
+  categoryDefaultRadius,
+  categorySupportsScenario,
+  findCategoryBySlug,
+  type OpportunityCategory,
+} from "../lib/categories";
 import {
   candidateEligibilityClassification,
   candidateEligibilityDisplay,
@@ -18,6 +35,15 @@ import {
   isActiveDiscoveryStatus,
   validateDiscoveryInput,
 } from "../lib/discovery";
+import {
+  EMPTY_LOCATION,
+  applyResolvedLocation,
+  locationSuggestions,
+  mergeLocationSuggestion,
+  withFreeTextLocation,
+  type LocationSuggestion,
+  type StructuredLocation,
+} from "../lib/location";
 import {
   fetchOpportunityScenarios,
   scenarioDefaultRadius,
@@ -32,6 +58,11 @@ const initialForm: DiscoverySearchInput = {
   keywords: "",
   radius_m: null,
   result_limit: 10,
+  location_place_id: null,
+  location_latitude: null,
+  location_longitude: null,
+  category_slug: null,
+  category_label: null,
 };
 
 const fieldClass = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-accent-500";
@@ -39,6 +70,111 @@ const buttonClass = "rounded-md border border-slate-700 bg-slate-800 px-3 py-2 t
 
 function displayError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Radius precedence, mirroring the backend: scenario default, then category
+ * default, then the discovery-wide setting. All values stay in metres.
+ */
+function defaultRadius(
+  scenario: OpportunityScenario | null,
+  category: OpportunityCategory | null,
+  settings: DiscoverySettings,
+): number | null {
+  return (
+    (scenario ? scenarioDefaultRadius(scenario) : null) ??
+    categoryDefaultRadius(category) ??
+    settings.default_radius_m
+  );
+}
+
+/**
+ * Location field backed by Google Places autocomplete (proxied by the API, so the
+ * provider credential never reaches the browser). Selecting a suggestion records
+ * the human-readable label plus the stable place id.
+ */
+function LocationField({
+  value,
+  error,
+  onSelect,
+  onChange,
+}: {
+  value: StructuredLocation;
+  error?: string;
+  onSelect: (suggestion: LocationSuggestion) => void;
+  onChange: (label: string) => void;
+}) {
+  const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const requestId = useRef(0);
+
+  useEffect(() => {
+    const query = value.label.trim();
+    // A selected suggestion is already structured; don't suggest over it again.
+    if (query.length < 3 || value.place_id) {
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
+    const id = ++requestId.current;
+    setLoading(true);
+    const timer = window.setTimeout(() => {
+      void fetchLocationSuggestions(query)
+        .then((response) => {
+          if (requestId.current !== id) return;
+          setSuggestions(locationSuggestions(response.suggestions));
+          setOpen(true);
+        })
+        .catch(() => {
+          if (requestId.current === id) setSuggestions([]);
+        })
+        .finally(() => {
+          if (requestId.current === id) setLoading(false);
+        });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [value.label, value.place_id]);
+
+  const searching = loading;
+
+  return (
+    <div className="text-sm text-slate-300">
+      <label>Location *
+        <input
+          className={fieldClass}
+          value={value.label}
+          autoComplete="off"
+          placeholder="Start typing a suburb or city"
+          onChange={(event) => onChange(event.target.value)}
+          onFocus={() => { if (suggestions.length) setOpen(true); }}
+        />
+      </label>
+      {searching && <span className="mt-1 block text-xs text-slate-500">Searching Google locations…</span>}
+      {open && suggestions.length > 0 && (
+        <ul role="listbox" aria-label="Location suggestions" className="mt-1 max-h-56 overflow-y-auto rounded-md border border-slate-700 bg-slate-950 shadow-lg">
+          {suggestions.map((suggestion) => (
+            <li key={suggestion.place_id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={false}
+                className="w-full px-3 py-2 text-left hover:bg-slate-800"
+                onClick={() => { setOpen(false); onSelect(suggestion); }}
+              >
+                <span className="block text-sm text-slate-200">{suggestion.primary_text ?? suggestion.label}</span>
+                {suggestion.secondary_text && <span className="block text-xs text-slate-500">{suggestion.secondary_text}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {value.place_id
+        ? <span className="mt-1 block text-xs text-emerald-400">Google location retained · place id {value.place_id.slice(0, 14)}…</span>
+        : <span className="mt-1 block text-xs text-slate-500">Pick a Google suggestion to retain a stable place id.</span>}
+      {error && <span className="mt-1 block text-xs text-rose-400">{error}</span>}
+    </div>
+  );
 }
 
 function statusTone(status: string) {
@@ -149,6 +285,8 @@ function CandidateDrawer({
 
 export default function Discovery() {
   const [form, setForm] = useState<DiscoverySearchInput>(initialForm);
+  const [structuredLocation, setStructuredLocation] = useState<StructuredLocation>(EMPTY_LOCATION);
+  const [radiusTouched, setRadiusTouched] = useState(false);
   const [errors, setErrors] = useState<ReturnType<typeof validateDiscoveryInput>>({});
   const [run, setRun] = useState<DiscoveryRun | null>(null);
   const [candidates, setCandidates] = useState<DiscoveryCandidate[]>([]);
@@ -161,10 +299,37 @@ export default function Discovery() {
   const [scenarios, setScenarios] = useState<OpportunityScenario[]>([]);
   const [scenarioLoading, setScenarioLoading] = useState(true);
   const [selectedScenarioId, setSelectedScenarioId] = useState("");
+  const [categories, setCategories] = useState<OpportunityCategory[]>([]);
+  const [categoryLoading, setCategoryLoading] = useState(true);
+  const [settings, setSettings] = useState<DiscoverySettings>({
+    ...DISCOVERY_SETTINGS_FALLBACK,
+  });
+
+  // The operator-configured radius choices, plus whatever value is currently in
+  // play so a scenario/category default outside the list still displays.
+  const radiusOptions = useMemo(() => {
+    const configured = settings.radius_options_m.length
+      ? settings.radius_options_m
+      : DISCOVERY_SETTINGS_FALLBACK.radius_options_m;
+    const current = form.radius_m;
+    if (current && !configured.includes(current)) {
+      return [...configured, current].sort((a, b) => a - b);
+    }
+    return configured;
+  }, [settings.radius_options_m, form.radius_m]);
 
   const selectedScenario = useMemo(
     () => scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? null,
     [scenarios, selectedScenarioId],
+  );
+  const selectedCategory = useMemo(
+    () => findCategoryBySlug(categories, form.category_slug),
+    [categories, form.category_slug],
+  );
+  const categoryIncompatible = Boolean(
+    selectedCategory &&
+      selectedScenario &&
+      !categorySupportsScenario(selectedCategory, selectedScenario.slug),
   );
 
   const reload = useCallback(async (runId: string) => {
@@ -174,19 +339,33 @@ export default function Discovery() {
     setInspecting((current) => current ? candidateResponse.candidates.find((item) => item.id === current.id) ?? null : null);
   }, []);
 
+  // Scenarios and discovery settings bootstrap the form together: the scenario
+  // supplies its own default result limit, the setting supplies the fallback.
   useEffect(() => {
     let active = true;
-    void fetchOpportunityScenarios()
-      .then((items) => {
+    void Promise.all([
+      fetchOpportunityScenarios(),
+      fetchDiscoverySettings().catch(() => null),
+    ])
+      .then(([items, settingsResponse]) => {
         if (!active) return;
+        const nextSettings = settingsResponse
+          ? normalizeDiscoverySettings(settingsResponse.settings)
+          : { ...DISCOVERY_SETTINGS_FALLBACK };
+        setSettings(nextSettings);
         setScenarios(items);
         const first = items[0];
         if (first) {
           setSelectedScenarioId(first.id);
           setForm((current) => ({
             ...current,
-            result_limit: scenarioDefaultResultLimit(first) ?? current.result_limit,
-            radius_m: scenarioDefaultRadius(first),
+            result_limit:
+              scenarioDefaultResultLimit(first) ?? nextSettings.default_result_limit,
+          }));
+        } else {
+          setForm((current) => ({
+            ...current,
+            result_limit: nextSettings.default_result_limit,
           }));
         }
       })
@@ -198,6 +377,30 @@ export default function Discovery() {
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetchOpportunityCategories()
+      .then((response) => {
+        if (active) setCategories(activeCategories(response.categories));
+      })
+      .catch((reason) => {
+        if (active) setError(`Unable to load discovery categories: ${displayError(reason)}`);
+      })
+      .finally(() => {
+        if (active) setCategoryLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  // Radius follows the scenario, falling back to the category default, until the
+  // operator edits it by hand.
+  useEffect(() => {
+    if (radiusTouched) return;
+    const next = defaultRadius(selectedScenario, selectedCategory, settings);
+    if (next === null) return;
+    setForm((current) => (current.radius_m === next ? current : { ...current, radius_m: next }));
+  }, [radiusTouched, selectedCategory, selectedScenario, settings]);
 
   useEffect(() => {
     const latestRunId = window.sessionStorage.getItem("opp-engine:last-discovery-run");
@@ -217,26 +420,74 @@ export default function Discovery() {
     setForm((current) => ({
       ...current,
       result_limit: scenarioDefaultResultLimit(scenario) ?? current.result_limit,
-      radius_m: scenarioDefaultRadius(scenario),
     }));
   }
 
+  function chooseCategory(slug: string) {
+    const category = findCategoryBySlug(categories, slug);
+    setForm((current) => ({
+      ...current,
+      category_slug: category?.slug ?? null,
+      category_label: category?.label ?? null,
+      industry: category?.label ?? "",
+    }));
+  }
+
+  function selectLocation(suggestion: LocationSuggestion) {
+    setStructuredLocation((current) => mergeLocationSuggestion(current, suggestion));
+    setForm((current) => ({ ...current, location: suggestion.label }));
+    setError(null);
+    // Coordinates are best-effort: the label and place id are already retained.
+    void fetchLocationDetails(suggestion.place_id)
+      .then((response) => setStructuredLocation((current) => applyResolvedLocation(current, response.location)))
+      .catch(() => undefined);
+  }
+
+  function changeLocationText(label: string) {
+    setStructuredLocation((current) => withFreeTextLocation(current, label));
+    setForm((current) => ({ ...current, location: label }));
+  }
+
   async function start() {
-    const validation = validateDiscoveryInput(form);
+    const validation = validateDiscoveryInput(form, {
+      maxResultLimit: settings.max_result_limit,
+    });
     setErrors(validation);
     if (!selectedScenario) {
       setError("Choose an active opportunity scenario before starting discovery.");
       return;
     }
+    if (!selectedCategory) {
+      setError("Choose an opportunity category before starting discovery.");
+      return;
+    }
+    if (categoryIncompatible) {
+      setError(`${selectedCategory.label} is not compatible with the ${selectedScenario.name} scenario.`);
+      return;
+    }
     if (Object.keys(validation).length) return;
     setBusy("discover"); setError(null); setNotice(null); setCandidates([]); setSelected(new Set());
     try {
-      const response = await startDiscoveryRun({ ...form, scenario_id: selectedScenario.id } as DiscoverySearchInput);
+      const payload: DiscoverySearchInput = {
+        ...form,
+        location: structuredLocation.label.trim(),
+        location_place_id: structuredLocation.place_id,
+        location_latitude: structuredLocation.latitude,
+        location_longitude: structuredLocation.longitude,
+        category_slug: selectedCategory.slug,
+        category_label: selectedCategory.label,
+        industry: selectedCategory.label,
+        scenario_id: selectedScenario.id,
+      };
+      const response = await startDiscoveryRun(payload);
       window.sessionStorage.setItem("opp-engine:last-discovery-run", response.run.id);
       window.sessionStorage.setItem("opp-engine:last-scenario-id", selectedScenario.id);
       setRun(response.run);
       await reload(response.run.id);
-      setNotice(`Discovery run queued using ${selectedScenario.name} v${selectedScenario.version}.`);
+      const terms = Array.isArray(response.run.discovery_terms) ? response.run.discovery_terms : [];
+      setNotice(
+        `Discovery run queued using ${selectedScenario.name} v${selectedScenario.version}${terms.length ? ` · searching ${terms.join(", ")}` : ""}.`,
+      );
     } catch (reason) { setError(displayError(reason)); }
     finally { setBusy(null); }
   }
@@ -327,12 +578,33 @@ export default function Discovery() {
           </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-          <label className="text-sm text-slate-300 lg:col-span-2">Location *<input className={fieldClass} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="e.g. Helensville, Auckland" />{errors.location && <span className="mt-1 block text-xs text-rose-400">{errors.location}</span>}</label>
-          <label className="text-sm text-slate-300 lg:col-span-2">Industry or category *<input className={fieldClass} value={form.industry} onChange={(event) => setForm({ ...form, industry: event.target.value })} placeholder="e.g. electricians" />{errors.industry && <span className="mt-1 block text-xs text-rose-400">{errors.industry}</span>}</label>
-          <label className="text-sm text-slate-300">Maximum results<input className={fieldClass} type="number" min={1} max={20} value={form.result_limit} onChange={(event) => setForm({ ...form, result_limit: Number(event.target.value) })} />{errors.result_limit && <span className="mt-1 block text-xs text-rose-400">{errors.result_limit}</span>}</label>
+          <div className="lg:col-span-2">
+            <LocationField value={structuredLocation} error={errors.location} onSelect={selectLocation} onChange={changeLocationText} />
+          </div>
+          <label className="text-sm text-slate-300 lg:col-span-2">Category *
+            <select
+              className={fieldClass}
+              value={selectedCategory?.slug ?? ""}
+              disabled={categoryLoading || categories.length === 0}
+              onChange={(event) => chooseCategory(event.target.value)}
+            >
+              {categories.length === 0 && <option value="">{categoryLoading ? "Loading categories…" : "No active categories"}</option>}
+              {categories.map((category) => <option key={category.slug} value={category.slug}>{category.label}</option>)}
+            </select>
+            {(errors.industry ?? errors.category_slug) && <span className="mt-1 block text-xs text-rose-400">{errors.industry ?? errors.category_slug}</span>}
+            {categoryIncompatible && <span className="mt-1 block text-xs text-amber-400">{selectedCategory?.label} is not available for the {selectedScenario?.name} scenario.</span>}
+          </label>
+          <label className="text-sm text-slate-300">Maximum results<input className={fieldClass} type="number" min={1} max={settings.max_result_limit} value={form.result_limit} onChange={(event) => setForm({ ...form, result_limit: Number(event.target.value) })} />{errors.result_limit && <span className="mt-1 block text-xs text-rose-400">{errors.result_limit}</span>}</label>
           <label className="text-sm text-slate-300 lg:col-span-3">Search keywords<input className={fieldClass} value={form.keywords} onChange={(event) => setForm({ ...form, keywords: event.target.value })} placeholder="Optional services or qualifiers" /></label>
-          <label className="text-sm text-slate-300">Radius (metres)<input className={fieldClass} type="number" min={100} max={50000} value={form.radius_m ?? ""} onChange={(event) => setForm({ ...form, radius_m: event.target.value ? Number(event.target.value) : null })} placeholder="Optional" />{errors.radius_m && <span className="mt-1 block text-xs text-rose-400">{errors.radius_m}</span>}</label>
-          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || !selectedScenario} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setErrors({}); }}>Clear</button></div>
+          <label className="text-sm text-slate-300">Radius (km)
+            <select className={fieldClass} value={form.radius_m ?? ""} onChange={(event) => { setRadiusTouched(true); setForm({ ...form, radius_m: event.target.value ? Number(event.target.value) : null }); }}>
+              <option value="">No radius</option>
+              {radiusOptions.map((metres) => <option key={metres} value={metres}>{metresToKilometres(metres)} km</option>)}
+            </select>
+            {errors.radius_m && <span className="mt-1 block text-xs text-rose-400">{errors.radius_m}</span>}
+            <span className="mt-1 block text-xs text-slate-500">Options come from Admin · Discovery settings.</span>
+          </label>
+          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || !selectedCategory || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
         </div>
       </section>
 
@@ -349,6 +621,12 @@ export default function Discovery() {
         <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4 lg:grid-cols-8">{[
           ["Stage", run.current_stage], ["Discovered", run.businesses_discovered], ["Enriched", run.candidates_enriched], ["Scored", run.candidates_scored], ["Audited", run.audits_generated], ["Failures", run.failures], ["Started", run.started_at ? new Date(run.started_at).toLocaleTimeString() : "—"], ["Completed", run.completed_at ? new Date(run.completed_at).toLocaleTimeString() : "—"],
         ].map(([label, value]) => <div key={String(label)}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 text-slate-200">{value}</dd></div>)}</dl>
+        <p className="mt-4 text-xs text-slate-500">
+          Location: <span className="text-slate-300">{run.location}</span>
+          {run.location_place_id ? ` · place id ${String(run.location_place_id).slice(0, 14)}…` : ""}
+          {run.category_label ? ` · ${run.category_label}` : ""}
+          {Array.isArray(run.discovery_terms) && run.discovery_terms.length ? ` · searched ${run.discovery_terms.join(", ")}` : ""}
+        </p>
       </section>}
 
       <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60">
