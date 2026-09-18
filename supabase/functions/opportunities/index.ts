@@ -1163,169 +1163,76 @@ async function assessOpportunity(
   }
 }
 
-async function runOpportunityEnrichment(
-  leadId: string,
-  retry = false,
-): Promise<{
+type QueueEnrichmentResult = {
   ok: boolean;
   status?: string;
-  evidence?: unknown;
-  assessmentId?: string | null;
+  lead_id?: string;
+  enrichment_status?: string;
+  request_id?: number | string | null;
   error?: string;
-}> {
-  let responseBody: JsonObject = {};
-  let responseText = "";
-  try {
-    const response = await fetch(
-      `${SUPABASE_URL}/functions/v1/local-business-enrich`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-          apikey: SERVICE_ROLE_KEY,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          lead_id: leadId,
-          action: retry ? "reenrich" : "enrich",
-          source: "opportunity-engine",
-        }),
-      },
-    );
-    responseText = await response.text();
-    if (responseText) {
-      try {
-        responseBody = JSON.parse(responseText) as JsonObject;
-      } catch {
-        responseBody = {};
-      }
-    }
-    if (!response.ok || responseBody.ok === false) {
-      const detail =
-        cleanText(
-          responseBody.detail ??
-            responseBody.error ??
-            responseBody.message ??
-            responseBody.status,
-          500,
-        ) ?? `enrichment_http_${response.status}`;
-      await supabase.from("opportunity_console_audit_log").insert({
-        action: "enrichment_failed",
-        lead_id: leadId,
-        actor: "operator-console",
-        metadata: { retry, detail },
-      });
-      return { ok: false, error: detail };
-    }
-    const { data: lead, error: leadError } = await supabase
-      .from("local_business_leads")
-      .select("enrichment_diagnostics")
-      .eq("id", leadId)
-      .maybeSingle();
-    if (leadError)
-      throw new Error(`lead_diagnostics_lookup_failed: ${leadError.message}`);
-    const assessmentId =
-      cleanText(responseBody.assessment_id, 80) ??
-      cleanText(
-        (responseBody.details as JsonObject | undefined)?.assessment_id,
-        80,
-      ) ??
-      null;
-    const status = cleanText(responseBody.status, 80) ?? "success";
-    await supabase.from("opportunity_console_audit_log").insert({
-      action: "enrichment_completed",
-      lead_id: leadId,
-      actor: "operator-console",
-      metadata: { retry, status, assessment_id: assessmentId },
-    });
+  detail?: string;
+};
+
+async function queueOpportunityEnrichment(
+  leadId: string,
+  retry = false,
+): Promise<QueueEnrichmentResult> {
+  const { data, error } = await supabase.rpc("queue_local_business_enrichment", {
+    p_lead_id: leadId,
+    p_project_url: SUPABASE_URL,
+    p_operator_token: OPERATOR_TOKEN,
+    p_retry: retry,
+  });
+
+  if (error) {
     return {
-      ok: true,
-      status,
-      assessmentId,
-      evidence:
-        ((lead?.enrichment_diagnostics as JsonObject | null)
-          ?.enrichment_result as JsonObject | null) ?? {},
+      ok: false,
+      error: `enrichment_queue_rpc_failed: ${error.message}`,
     };
-  } catch (error) {
-    const detail = String(error instanceof Error ? error.message : error).slice(
-      0,
-      500,
-    );
-    await supabase.from("opportunity_console_audit_log").insert({
-      action: "enrichment_failed",
-      lead_id: leadId,
-      actor: "operator-console",
-      metadata: { retry, detail, response_text: responseText.slice(0, 1000) },
-    });
-    return { ok: false, error: detail };
   }
+
+  return (data ?? {
+    ok: false,
+    error: "enrichment_queue_empty_response",
+  }) as QueueEnrichmentResult;
 }
 
 async function requestOpportunityEnrichment(
   leadId: string,
   retry = false,
 ): Promise<Response> {
-  const { data: lead, error: leadError } = await supabase
-    .from("local_business_leads")
-    .select("id,enrichment_status")
-    .eq("id", leadId)
-    .maybeSingle();
+  const result = await queueOpportunityEnrichment(leadId, retry);
 
-  if (leadError) {
-    throw new Error(`lead_lookup_failed: ${leadError.message}`);
-  }
+  if (!result.ok) {
+    const detail =
+      cleanText(result.detail ?? result.error, 500) ??
+      "enrichment_queue_failed";
+    const status =
+      result.error === "not_found"
+        ? 404
+        : result.error === "enrichment_in_progress"
+          ? 409
+          : 502;
 
-  if (!lead) {
-    return json({ error: "not_found" }, 404);
-  }
-
-  if (lead.enrichment_status === "enriching") {
     return json(
       {
         ok: false,
-        error: "enrichment_in_progress",
-        detail: "Enrichment is already running.",
+        error: result.error ?? "enrichment_queue_failed",
+        detail,
         lead_id: leadId,
-        enrichment_status: "enriching",
+        enrichment_status: result.enrichment_status ?? null,
       },
-      409,
+      status,
     );
   }
-
-  const { error: updateError } = await supabase
-    .from("local_business_leads")
-    .update({ enrichment_status: "enriching" })
-    .eq("id", leadId);
-
-  if (updateError) {
-    throw new Error(`enrichment_request_update_failed: ${updateError.message}`);
-  }
-
-  const { error: auditError } = await supabase
-    .from("opportunity_console_audit_log")
-    .insert({
-      action: "enrichment_requested",
-      lead_id: leadId,
-      actor: "operator-console",
-      metadata: { retry, enrichment_status: "enriching" },
-    });
-
-  if (auditError) {
-    console.error(
-      "Failed to persist enrichment_requested audit row",
-      leadId,
-      auditError.message,
-    );
-  }
-
-  runInBackground(runOpportunityEnrichment(leadId, retry));
 
   return json(
     {
       ok: true,
       status: "accepted",
       lead_id: leadId,
-      enrichment_status: "enriching",
+      enrichment_status: result.enrichment_status ?? "enriching",
+      request_id: result.request_id ?? null,
     },
     202,
   );

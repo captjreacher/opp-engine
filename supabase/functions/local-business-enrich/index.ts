@@ -10,6 +10,17 @@ import {
   type NameSignature,
   type CandidateDecision,
 } from "../_shared/nameMatch.ts";
+import {
+  OVERALL_ENRICHMENT_BUDGET_MS,
+  HARD_STOP_MARGIN_MS,
+  STALE_ENRICHMENT_AFTER_MS,
+  TIER_BUDGET_MS,
+  TIER_MIN_START_MS,
+  EnrichmentBudget,
+  partialReasonFor,
+  resolveTerminalStatus,
+  type TierName,
+} from "../_shared/enrichmentBudget.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Type definitions
@@ -112,6 +123,8 @@ type TierDebug = {
   place_ids?: string[];
   urls_probed?: string[];
   pages_reached?: number;
+  /** True when this tier stopped early because the shared budget ran out. */
+  budget_stopped?: boolean;
 };
 
 type EnrichmentDebug = {
@@ -226,16 +239,18 @@ const GOOGLE_PLACES_FIELD_MASK = [
 // Minimum number of meaningful fields before we skip lower tiers.
 const SUFFICIENT_CANDIDATE_THRESHOLD = 2;
 
-// Hard execution budgets. Supabase terminated the previous implementation at
-// ~150s, so enrichment must finish well before the platform ceiling.
-const OVERALL_ENRICHMENT_BUDGET_MS = 95_000;
-const GOOGLE_PLACES_TIMEOUT_MS = 15_000;
-const EXA_TIER_BUDGET_MS = 24_000;
+// Hard execution budgets.
+//
+// pg_net queues this function with a 110s request envelope, so the provider /
+// search allowance lives in ../_shared/enrichmentBudget.ts (75s) and the overall
+// deadline there is authoritative: every tier and every fallback crawl asks the
+// shared EnrichmentBudget for a timeout, which is always clamped by whatever
+// budget is actually left. Nothing may run past the deadline merely because its
+// own tier timeout has not expired.
+const GOOGLE_PLACES_TIMEOUT_MS = 12_000;
 const EXA_QUERY_TIMEOUT_MS = 7_000;
-const DIRECT_FETCH_TIER_BUDGET_MS = 24_000;
 const DIRECT_FETCH_TIMEOUT_MS = 3_500;
-const DUCKDUCKGO_TIER_BUDGET_MS = 12_000;
-const MIN_TIER_START_REMAINING_MS = 8_000;
+const DUCKDUCKGO_FETCH_TIMEOUT_MS = 3_500;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitive helpers
@@ -767,9 +782,9 @@ function generatedLookupCandidates(context: DiscoveryContext): FieldCandidate[] 
 // HTTP fetch helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchText(url: string, timeoutMs = 4500) {
+async function fetchText(url: string, timeoutMs = 4500, externalSignal?: AbortSignal | null) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const disposeTimeout = combineAbortSignals(controller, timeoutMs, externalSignal);
   try {
     const response = await fetch(url, {
       method: "GET",
@@ -785,7 +800,7 @@ async function fetchText(url: string, timeoutMs = 4500) {
   } catch {
     return { ok: false, finalUrl: url, text: "", status: 0 };
   } finally {
-    clearTimeout(timeout);
+    disposeTimeout();
   }
 }
 
@@ -793,22 +808,56 @@ async function fetchWithTimeout(
   input: string | URL | Request,
   init: RequestInit = {},
   timeoutMs = 10_000,
+  externalSignal?: AbortSignal | null,
 ) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const disposeTimeout = combineAbortSignals(controller, timeoutMs, externalSignal);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } finally {
-    clearTimeout(timeout);
+    disposeTimeout();
   }
 }
 
-function budgetRemaining(deadlineMs: number) {
-  return Math.max(0, deadlineMs - Date.now());
+// ─────────────────────────────────────────────────────────────────────────────
+// Execution budget wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Record the single budget-stop reason for a run. `EnrichmentBudget.markExhausted`
+ * keeps the FIRST tier that stopped the run, so later skips stay attributed to
+ * the tier that actually ran the budget out.
+ */
+function stopForBudgetReason(budget: EnrichmentBudget, tier: TierName | string): void {
+  const first = budget.markExhausted(tier);
+  log(first ? "enrichment_budget_exhausted" : "enrichment_budget_stop_repeat", {
+    tier,
+    first_stop_tier: budget.budgetStopTier,
+    elapsed_ms: budget.elapsedMs(),
+    remaining_ms: budget.remainingMs(),
+  });
 }
 
-function canStartTier(deadlineMs: number, minimumMs = MIN_TIER_START_REMAINING_MS) {
-  return budgetRemaining(deadlineMs) >= minimumMs;
+/**
+ * Wire a fetch timeout together with the run's hard-stop signal, so the
+ * watchdog can abort in-flight provider work even when its own timeout has not
+ * expired yet.
+ */
+function combineAbortSignals(
+  controller: AbortController,
+  timeoutMs: number,
+  externalSignal?: AbortSignal | null,
+): () => void {
+  const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  return () => {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
+  };
 }
 
 
@@ -857,6 +906,7 @@ type GooglePlacesResult = {
 async function searchGooglePlaces(
   context: DiscoveryContext,
   observedAt: string,
+  budget: EnrichmentBudget,
   raw?: Json,
 ): Promise<{ result: GooglePlacesResult | null; debug: TierDebug }> {
   const apiKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
@@ -864,6 +914,22 @@ async function searchGooglePlaces(
     return {
       result: null,
       debug: { attempted: false, skip_reason: "api_key_missing", wall_clock_ms: 0 },
+    };
+  }
+
+  // The overall deadline is authoritative: no request may be issued unless the
+  // remaining budget can actually cover it, and its timeout is clamped by what
+  // is left (naming a longer timeout does not buy more time).
+  const primaryTimeoutMs = budget.tierTimeoutMs("google_places", GOOGLE_PLACES_TIMEOUT_MS);
+  if (primaryTimeoutMs === null) {
+    return {
+      result: null,
+      debug: {
+        attempted: false,
+        skip_reason: "insufficient_remaining_budget",
+        wall_clock_ms: 0,
+        budget_stopped: true,
+      },
     };
   }
 
@@ -883,6 +949,7 @@ async function searchGooglePlaces(
 
   const query = primaryQuery;
   const startMs = Date.now();
+  let googleBudgetStopped = false;
 
   try {
     const response = await fetchWithTimeout("https://places.googleapis.com/v1/places:searchText", {
@@ -893,7 +960,7 @@ async function searchGooglePlaces(
         "X-Goog-FieldMask": GOOGLE_PLACES_FIELD_MASK,
       },
       body: JSON.stringify({ textQuery: query }),
-    }, GOOGLE_PLACES_TIMEOUT_MS);
+    }, primaryTimeoutMs, budget.abortSignal);
 
     const wallClockMs = Date.now() - startMs;
 
@@ -910,6 +977,7 @@ async function searchGooglePlaces(
           wall_clock_ms: wallClockMs,
           provider_error: `HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
           place_ids: [],
+          budget_stopped: googleBudgetStopped,
         },
       };
     }
@@ -1107,6 +1175,18 @@ async function searchGooglePlaces(
     const executedQueries = [query];
     if (candidates.length === 0 && fallbackQueries.length > 0) {
       for (const fbQuery of fallbackQueries.slice(0, 1)) {
+        // The fallback query is a SECOND provider request: it must re-check the
+        // same deadline, otherwise the tier can silently double its own budget.
+        const fallbackTimeoutMs = budget.tierTimeoutMs("google_places", GOOGLE_PLACES_TIMEOUT_MS);
+        if (fallbackTimeoutMs === null) {
+          if (budget.overallBudgetExhausted()) googleBudgetStopped = true;
+          log("tier_budget_exhausted", {
+            tier: "google_places",
+            stage: "fallback_query",
+            remaining_ms: budget.remainingMs(),
+          });
+          break;
+        }
         try {
           log("google_places_fallback_query", { query: fbQuery });
           const fbResponse = await fetchWithTimeout("https://places.googleapis.com/v1/places:searchText", {
@@ -1117,7 +1197,7 @@ async function searchGooglePlaces(
               "X-Goog-FieldMask": GOOGLE_PLACES_FIELD_MASK,
             },
             body: JSON.stringify({ textQuery: fbQuery }),
-          }, GOOGLE_PLACES_TIMEOUT_MS);
+          }, fallbackTimeoutMs, budget.abortSignal);
           executedQueries.push(fbQuery);
           if (!fbResponse.ok) continue;
           const fbData = await fbResponse.json();
@@ -1177,6 +1257,7 @@ async function searchGooglePlaces(
         wall_clock_ms: totalWallClockMs,
         provider_error: null,
         place_ids: placeIds,
+        budget_stopped: googleBudgetStopped,
       },
     };
   } catch (error) {
@@ -1191,6 +1272,7 @@ async function searchGooglePlaces(
         wall_clock_ms: wallClockMs,
         provider_error: errorMessage(error),
         place_ids: [],
+        budget_stopped: googleBudgetStopped,
       },
     };
   }
@@ -1240,12 +1322,25 @@ type ExaSearchResult = {
 async function searchExa(
   context: DiscoveryContext,
   observedAt: string,
+  budget: EnrichmentBudget,
 ): Promise<{ result: ExaSearchResult | null; debug: TierDebug }> {
   const apiKey = Deno.env.get("EXA_API_KEY");
   if (!apiKey) {
     return {
       result: null,
       debug: { attempted: false, skip_reason: "api_key_missing", wall_clock_ms: 0 },
+    };
+  }
+
+  if (budget.tierTimeoutMs("exa", EXA_QUERY_TIMEOUT_MS) === null) {
+    return {
+      result: null,
+      debug: {
+        attempted: false,
+        skip_reason: "insufficient_remaining_budget",
+        wall_clock_ms: 0,
+        budget_stopped: true,
+      },
     };
   }
 
@@ -1264,10 +1359,19 @@ async function searchExa(
   const rejectedUrls: RejectedUrl[] = [];
   const executedQueries: string[] = [];
 
+  let budgetStopped = false;
+
   try {
     for (const query of queries.slice(0, 3)) {
-      if (Date.now() - startMs >= EXA_TIER_BUDGET_MS) {
-        log("tier_budget_exhausted", { tier: "exa", elapsed_ms: Date.now() - startMs });
+      // Clamped by BOTH the Exa tier allowance and the overall deadline.
+      const queryTimeoutMs = budget.tierTimeoutMs("exa", EXA_QUERY_TIMEOUT_MS);
+      if (queryTimeoutMs === null) {
+        budgetStopped = budget.overallBudgetExhausted();
+        log("tier_budget_exhausted", {
+          tier: "exa",
+          elapsed_ms: Date.now() - startMs,
+          remaining_ms: budget.remainingMs(),
+        });
         break;
       }
       executedQueries.push(query);
@@ -1285,7 +1389,7 @@ async function searchExa(
             highlights: { numSentences: 5 },
           },
         }),
-      }, EXA_QUERY_TIMEOUT_MS);
+      }, queryTimeoutMs, budget.abortSignal);
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "");
@@ -1440,6 +1544,7 @@ async function searchExa(
         candidates_found: candidates.length,
         wall_clock_ms: wallClockMs,
         provider_error: null,
+        budget_stopped: budgetStopped,
       },
     };
   } catch (error) {
@@ -1453,6 +1558,7 @@ async function searchExa(
         candidates_found: candidates.length,
         wall_clock_ms: wallClockMs,
         provider_error: errorMessage(error),
+        budget_stopped: budgetStopped,
       },
     };
   }
@@ -1482,9 +1588,35 @@ async function directFetchAndCrawl(
   context: DiscoveryContext,
   existingCandidates: FieldCandidate[],
   observedAt: string,
+  budget: EnrichmentBudget,
+  tier: TierName = "direct_fetch",
   includeGeneratedUrls = true,
 ): Promise<{ result: DirectFetchResult; debug: TierDebug }> {
   const startMs = Date.now();
+
+  // Entry guard. This function is ALSO called as a post-search fallback crawl;
+  // a fresh call must not receive a fresh budget. It is measured against the
+  // same overall deadline and skipped outright when too little remains.
+  if (budget.tierTimeoutMs(tier, DIRECT_FETCH_TIMEOUT_MS) === null) {
+    return {
+      result: {
+        candidates: [],
+        reviewSignals: [],
+        operatingHistory: [],
+        contactPathways: [],
+        rejectedUrls: [],
+        urlsProbed: [],
+        pagesReached: 0,
+        openingHours: null,
+      },
+      debug: {
+        attempted: false,
+        skip_reason: "insufficient_remaining_budget",
+        wall_clock_ms: 0,
+        budget_stopped: true,
+      },
+    };
+  }
 
   // Gather website URLs from earlier tiers
   const websitesFromTiers = existingCandidates
@@ -1523,8 +1655,8 @@ async function directFetchAndCrawl(
   let pagesReached = 0;
   let openingHours: OpeningHours | null = null;
 
-  const processUrl = async (url: string) => {
-      const result = await fetchText(url, DIRECT_FETCH_TIMEOUT_MS);
+  const processUrl = async (url: string, timeoutMs: number) => {
+      const result = await fetchText(url, timeoutMs, budget.abortSignal);
       if (!result.ok) return;
       pagesReached++;
 
@@ -1636,19 +1768,26 @@ async function directFetchAndCrawl(
   };
 
   const concurrency = 4;
+  let budgetStopped = false;
   for (let index = 0; index < deduped.length; index += concurrency) {
-    if (Date.now() - startMs >= DIRECT_FETCH_TIER_BUDGET_MS) {
+    // The SHARED deadline is checked before every batch, and each fetch inside
+    // the batch is clamped to what is actually left. A slow page therefore
+    // cannot extend the run past the overall deadline.
+    const batchTimeoutMs = budget.tierTimeoutMs(tier, DIRECT_FETCH_TIMEOUT_MS);
+    if (batchTimeoutMs === null) {
+      budgetStopped = budget.overallBudgetExhausted();
       log("tier_budget_exhausted", {
-        tier: "direct_fetch",
+        tier,
         elapsed_ms: Date.now() - startMs,
         urls_processed: index,
+        remaining_ms: budget.remainingMs(),
       });
       break;
     }
     await Promise.all(
       deduped
         .slice(index, index + concurrency)
-        .map((url) => processUrl(url)),
+        .map((url) => processUrl(url, batchTimeoutMs)),
     );
   }
 
@@ -1671,6 +1810,7 @@ async function directFetchAndCrawl(
       urls_probed: deduped,
       pages_reached: pagesReached,
       wall_clock_ms: wallClockMs,
+      budget_stopped: budgetStopped,
     },
   };
 }
@@ -1682,7 +1822,14 @@ async function directFetchAndCrawl(
 async function discoverSearchCandidates(
   context: DiscoveryContext,
   observedAt: string,
-): Promise<{ candidates: FieldCandidate[]; attempted: string[]; reviewSignals: Json[]; rejectedUrls: RejectedUrl[] }> {
+  budget: EnrichmentBudget,
+): Promise<{
+  candidates: FieldCandidate[];
+  attempted: string[];
+  reviewSignals: Json[];
+  rejectedUrls: RejectedUrl[];
+  budget_stopped: boolean;
+}> {
   const queries = dedupe([
     [context.strippedName, context.suburb, context.region, context.country].filter(Boolean).join(" "),
     [context.strippedName, context.category, context.suburb, context.country].filter(Boolean).join(" "),
@@ -1698,9 +1845,17 @@ async function discoverSearchCandidates(
   const reviewSignals: Json[] = [];
   const rejectedUrls: RejectedUrl[] = [];
 
+  // DuckDuckGo has no budget of its own beyond the tier allowance: the fetch
+  // timeout is clamped by the shared deadline, and the tier is skipped entirely
+  // when nothing useful is left.
+  const queryTimeoutMs = budget.tierTimeoutMs("duckduckgo", DUCKDUCKGO_FETCH_TIMEOUT_MS);
+  if (queryTimeoutMs === null) {
+    return { candidates, attempted: [], reviewSignals, rejectedUrls, budget_stopped: true };
+  }
+
   await Promise.all(
     attempted.map(async (url) => {
-      const result = await fetchText(url, 3_500);
+      const result = await fetchText(url, queryTimeoutMs, budget.abortSignal);
       if (!result.ok) return;
       reviewSignals.push(...extractReviewSignals(result.text, result.finalUrl));
 
@@ -1740,7 +1895,13 @@ async function discoverSearchCandidates(
     }),
   );
 
-  return { candidates, attempted, reviewSignals, rejectedUrls: dedupeRejectedUrls(rejectedUrls) };
+  return {
+    candidates,
+    attempted,
+    reviewSignals,
+    rejectedUrls: dedupeRejectedUrls(rejectedUrls),
+    budget_stopped: false,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2334,7 +2495,12 @@ function missingCoverageFields(candidates: FieldCandidate[]) {
   return coverageFields.filter((field) => !hasCanonicalValue(accepted[field]));
 }
 
-async function runTieredDiscovery(raw: Json, businessName: string, observedAt: string) {
+async function runTieredDiscovery(
+  raw: Json,
+  businessName: string,
+  observedAt: string,
+  budget: EnrichmentBudget,
+) {
   const context = contextFrom(raw, businessName);
   const direct = directCandidates(raw, context);
   const generated = generatedLookupCandidates(context);
@@ -2348,19 +2514,19 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
   let openingHours: OpeningHours | null = null;
   let searchTierReached = "payload";
   const totalStartMs = Date.now();
-  const deadlineMs = totalStartMs + OVERALL_ENRICHMENT_BUDGET_MS;
+
+  // The ONE authoritative deadline for this enrichment run. It is owned by the
+  // request handler and shared by every tier and every fallback crawl below:
+  // each call site asks for a timeout first and is clamped to what is left.
   let budgetExhausted = false;
   let budgetStopTier: string | null = null;
 
-  const stopForBudget = (tier: string) => {
-    budgetExhausted = true;
-    budgetStopTier = tier;
-    log("enrichment_budget_exhausted", {
-      tier,
-      elapsed_ms: Date.now() - totalStartMs,
-      remaining_ms: budgetRemaining(deadlineMs),
-    });
+  const stopForBudget = (tier: TierName | string) => {
+    stopForBudgetReason(budget, tier);
+    budgetExhausted = budget.budgetExhausted;
+    budgetStopTier = budget.budgetStopTier;
   };
+
 
   // Tier debug accumulators
   const tierDebug: EnrichmentDebug["tiers"] = {
@@ -2375,10 +2541,12 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
     result: null,
     debug: { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 },
   };
-  if (canStartTier(deadlineMs)) {
+  if (budget.canStartTier("google_places")) {
+    budget.startTier("google_places");
     log("tier_start", { tier: "google_places", business_name: businessName });
-    googleResult = await searchGooglePlaces(context, observedAt, raw);
+    googleResult = await searchGooglePlaces(context, observedAt, budget, raw);
     tierDebug.google_places = googleResult.debug;
+    if (googleResult.debug.budget_stopped) stopForBudget("google_places");
   } else {
     stopForBudget("google_places");
     tierDebug.google_places = googleResult.debug;
@@ -2402,13 +2570,15 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
     !budgetExhausted &&
     missingCoverageFields(allCandidates).some((field) => ["website_url", "facebook_url", "email", "address"].includes(field))
   ) {
-    if (!canStartTier(deadlineMs)) {
+    if (!budget.canStartTier("exa")) {
       stopForBudget("exa");
       tierDebug.exa = { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 };
     } else {
+    budget.startTier("exa");
     log("tier_start", { tier: "exa", business_name: businessName });
-    const exaResult = await searchExa(context, observedAt);
+    const exaResult = await searchExa(context, observedAt, budget);
     tierDebug.exa = exaResult.debug;
+    if (exaResult.debug.budget_stopped) stopForBudget("exa");
 
     if (exaResult.result) {
       allCandidates.push(...exaResult.result.candidates);
@@ -2429,10 +2599,12 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
   // ── Tier 3: Direct Fetch + Crawl ──────────────────────────────────────
   // Always run this tier to extract phone/email/hours from discovered websites
   let directFetchResult: Awaited<ReturnType<typeof directFetchAndCrawl>> | null = null;
-  if (!budgetExhausted && canStartTier(deadlineMs)) {
+  if (!budgetExhausted && budget.canStartTier("direct_fetch")) {
+    budget.startTier("direct_fetch");
     log("tier_start", { tier: "direct_fetch", business_name: businessName });
-    directFetchResult = await directFetchAndCrawl(context, allCandidates, observedAt);
+    directFetchResult = await directFetchAndCrawl(context, allCandidates, observedAt, budget);
     tierDebug.direct_fetch = directFetchResult.debug;
+    if (directFetchResult.debug.budget_stopped) stopForBudget("direct_fetch");
   } else {
     if (!budgetExhausted) stopForBudget("direct_fetch");
     tierDebug.direct_fetch = { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 };
@@ -2464,23 +2636,26 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
     !budgetExhausted &&
     missingCoverageFields(allCandidates).some((field) => ["website_url", "facebook_url", "google_maps_url", "phone", "email", "address"].includes(field))
   ) {
-    if (!canStartTier(deadlineMs)) {
+    if (!budget.canStartTier("duckduckgo")) {
       stopForBudget("duckduckgo");
       tierDebug.duckduckgo = { attempted: false, skip_reason: "execution_budget_exhausted", wall_clock_ms: 0 };
     } else {
+    budget.startTier("duckduckgo");
     log("tier_start", { tier: "duckduckgo", business_name: businessName });
     const ddgStartMs = Date.now();
-    const searchDiscovery = await discoverSearchCandidates(context, observedAt);
+    const searchDiscovery = await discoverSearchCandidates(context, observedAt, budget);
     const ddgWallClockMs = Date.now() - ddgStartMs;
 
     tierDebug.duckduckgo = {
-      attempted: true,
-      skip_reason: null,
+      attempted: !searchDiscovery.budget_stopped,
+      skip_reason: searchDiscovery.budget_stopped ? "insufficient_remaining_budget" : null,
       queries: searchDiscovery.attempted,
       candidates_found: searchDiscovery.candidates.length,
       wall_clock_ms: ddgWallClockMs,
       provider_error: null,
+      budget_stopped: searchDiscovery.budget_stopped,
     };
+    if (searchDiscovery.budget_stopped) stopForBudget("duckduckgo");
 
     allCandidates.push(...searchDiscovery.candidates);
     allReviewSignals.push(...searchDiscovery.reviewSignals);
@@ -2494,27 +2669,39 @@ async function runTieredDiscovery(raw: Json, businessName: string, observedAt: s
 
     // Websites first discovered by fallback search must be crawled in the same
     // run so contact details and linked official profiles are not deferred.
+    //
+    // This call is the path that previously blew the pg_net envelope: it starts
+    // a brand-new crawl, so it used to receive a fresh allowance with no overall
+    // deadline guard. It now shares the ONE budget: the crawl is skipped outright
+    // when too little time remains, and every fetch inside it is clamped by the
+    // same deadline, so it cannot extend the run past the envelope.
     if (searchDiscovery.candidates.some((candidate) => candidate.field === "website_url")) {
-      const fallbackCrawl = await directFetchAndCrawl(context, searchDiscovery.candidates, observedAt, false);
+      if (!budget.canStartTier("fallback_crawl")) {
+        stopForBudget("fallback_crawl");
+      } else {
+      budget.startTier("fallback_crawl");
+      const fallbackCrawl = await directFetchAndCrawl(context, searchDiscovery.candidates, observedAt, budget, "fallback_crawl", false);
       allCandidates.push(...fallbackCrawl.result.candidates);
       allReviewSignals.push(...fallbackCrawl.result.reviewSignals);
       allOperatingHistory.push(...fallbackCrawl.result.operatingHistory);
       allContactPathways.push(...fallbackCrawl.result.contactPathways);
       allRejectedUrls.push(...fallbackCrawl.result.rejectedUrls);
       if (!openingHours && fallbackCrawl.result.openingHours) openingHours = fallbackCrawl.result.openingHours;
+      if (fallbackCrawl.debug.budget_stopped) stopForBudget("fallback_crawl");
       tierDebug.direct_fetch = {
         ...tierDebug.direct_fetch,
         urls_probed: dedupe([...(tierDebug.direct_fetch.urls_probed ?? []), ...(fallbackCrawl.debug.urls_probed ?? [])]),
         pages_reached: (tierDebug.direct_fetch.pages_reached ?? 0) + (fallbackCrawl.debug.pages_reached ?? 0),
         wall_clock_ms: tierDebug.direct_fetch.wall_clock_ms + fallbackCrawl.debug.wall_clock_ms,
       };
+      }
     }
     }
   } else {
     tierDebug.duckduckgo = { attempted: false, skip_reason: "sufficient_candidates_from_earlier_tiers", wall_clock_ms: 0 };
   }
 
-  if (!budgetExhausted && Date.now() - totalStartMs >= OVERALL_ENRICHMENT_BUDGET_MS) {
+  if (!budgetExhausted && budget.overallBudgetExhausted()) {
     stopForBudget("finalize");
   }
 
@@ -2628,7 +2815,9 @@ async function handleSearchFailure(
 ) {
   const retryable = status !== "zero_candidates";
 
-  // Do NOT touch canonical fields. Only update enrichment_status and diagnostics.
+  // Do NOT touch canonical fields. Only update enrichment_status and diagnostics
+  // (already merged over the queued diagnostics by the caller, so the lead still
+  // moves `enriching` -> `failed` and keeps its queue provenance).
   await supabase
     .from("local_business_leads")
     .update({
@@ -2663,6 +2852,104 @@ async function handleSearchFailure(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Observability and stale-claim fencing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-run execution record persisted inside enrichment_diagnostics.
+ *
+ * Operators (and the console UI) need enough evidence to tell a live run from
+ * an abandoned one: when it was queued, when it started, how long it took, and
+ * whether it stopped because the execution budget ran out.
+ */
+type EnrichmentExecution = {
+  claim_id: string;
+  queued_at: string | null;
+  started_at: string;
+  finished_at: string | null;
+  total_wall_clock_ms: number | null;
+  budget_ms: number;
+  hard_stop_ms: number;
+  budget_exhausted: boolean;
+  budget_stop_tier: string | null;
+  tiers_attempted: string[];
+  terminal_status: "enriching" | "success" | "partial" | "failed";
+  stale_after_ms: number;
+  stale_claim_reclaimed: boolean;
+};
+
+function diagnosticsObject(value: unknown): Json {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
+}
+
+/** ISO timestamp (or equivalent) to epoch ms; null when absent or unparseable. */
+function timestampMs(value: unknown): number | null {
+  const text = asString(value);
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Merge new diagnostics OVER the existing ones instead of replacing them.
+ *
+ * The queue RPC writes queue_requested_at, enrichment_claim_id and the queue
+ * generation into enrichment_diagnostics; a terminal write that replaced the
+ * object wholesale erased that provenance and made a stuck lead impossible to
+ * diagnose (the exact symptom seen in production).
+ */
+function mergeEnrichmentDiagnostics(existing: unknown, patch: Json): Json {
+  return { ...diagnosticsObject(existing), ...patch };
+}
+
+/**
+ * Decide whether THIS invocation may own enrichment for the lead.
+ *
+ * `enriching` + a fresh claim owned by someone else is refused, so the same
+ * lead can never be enriched concurrently and a superseded run can never write
+ * canonical fields or duplicate completion events.
+ *
+ * A stale claim (queued longer ago than STALE_ENRICHMENT_AFTER_MS, or with no
+ * recorded start at all) may be taken over, because a dead invocation cannot
+ * clean up after itself: recovery must be possible from outside the failed run.
+ */
+function resolveEnrichmentClaim(args: {
+  requestedClaim: string | null;
+  leadStatus: string | null;
+  existingDiagnostics: unknown;
+  nowMs: number;
+}): {
+  allowed: boolean;
+  claimId: string;
+  staleReclaimed: boolean;
+  queuedAt: string | null;
+  priorClaim: string | null;
+  staleAfterMs: number;
+} {
+  const diagnostics = diagnosticsObject(args.existingDiagnostics);
+  const priorClaim = asString(diagnostics.enrichment_claim_id);
+  const queuedAt = asString(diagnostics.queue_requested_at);
+  const execution = diagnosticsObject(diagnostics.enrichment_execution);
+  const startedAtMs =
+    timestampMs(queuedAt) ?? timestampMs(execution.started_at) ?? timestampMs(execution.finished_at);
+  const staleAfterMs = STALE_ENRICHMENT_AFTER_MS;
+  const ageMs = startedAtMs === null ? null : args.nowMs - startedAtMs;
+  const isStale = ageMs === null || ageMs >= staleAfterMs;
+  const isActive = args.leadStatus === "enriching" && !isStale;
+
+  const claimId = args.requestedClaim ?? crypto.randomUUID();
+
+  return {
+    allowed: !(isActive && args.requestedClaim !== priorClaim),
+    claimId,
+    staleReclaimed: args.leadStatus === "enriching" && isStale,
+    queuedAt,
+    priorClaim,
+    staleAfterMs,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main request handler
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2683,18 +2970,128 @@ export async function handler(req: Request) {
     auth: authContext,
   });
 
+  // ── Authoritative execution budget ──────────────────────────────────────
+  // Owned by the handler so it spans lead resolution, every discovery tier and
+  // the post-search fallback crawl. Every provider timeout is clamped by it.
+  const executionStartedAtMs = Date.now();
+  const budget = new EnrichmentBudget({
+    totalBudgetMs: OVERALL_ENRICHMENT_BUDGET_MS,
+    startedAt: executionStartedAtMs,
+  });
+  const hardStop = new AbortController();
+  budget.abortSignal = hardStop.signal;
+  const hardStopTimer = setTimeout(() => {
+    log("enrichment_hard_stop", {
+      elapsed_ms: budget.elapsedMs(),
+      budget_ms: budget.totalBudgetMs,
+      hard_stop_margin_ms: HARD_STOP_MARGIN_MS,
+    });
+    hardStop.abort();
+    stopForBudgetReason(budget, "hard_stop");
+  }, OVERALL_ENRICHMENT_BUDGET_MS + HARD_STOP_MARGIN_MS);
+
+  let execution: EnrichmentExecution | null = null;
+  let existingDiagnostics: unknown = null;
+
+  /** Diagnostics merged over the queued ones, always carrying the run record. */
+  const buildDiagnostics = (patch: Json): Json =>
+    mergeEnrichmentDiagnostics(existingDiagnostics, {
+      ...patch,
+      ...(execution ? { enrichment_execution: { ...execution } } : {}),
+      // Record the ACTIVE claim so a concurrent invocation can detect that this
+      // lead is already owned (see resolveEnrichmentClaim).
+      ...(execution ? { enrichment_claim_id: execution.claim_id } : {}),
+      budget_exhausted: budget.budgetExhausted,
+      budget_stop_tier: budget.budgetStopTier,
+      stale_after_ms: STALE_ENRICHMENT_AFTER_MS,
+      ...(execution ? { enrichment_terminal_status: execution.terminal_status } : {}),
+    });
+
+  const finalizeExecution = (terminalStatus: EnrichmentExecution["terminal_status"]) => {
+    if (!execution) return;
+    execution.terminal_status = terminalStatus;
+    execution.finished_at = new Date().toISOString();
+    execution.total_wall_clock_ms = Date.now() - executionStartedAtMs;
+    execution.budget_exhausted = budget.budgetExhausted;
+    execution.budget_stop_tier = budget.budgetStopTier;
+    execution.tiers_attempted = budget.tiersAttempted();
+  };
+
   try {
     const resolved = await resolveLead(supabase, body);
     leadId = resolved.leadId;
     businessName = resolved.businessName;
+    existingDiagnostics = resolved.lead.enrichment_diagnostics;
 
-    await supabase.from("local_business_leads").update({ enrichment_status: "enriching" }).eq("id", leadId);
+    // ── Claim: never enrich the same lead concurrently ─────────────────────
+    const claim = resolveEnrichmentClaim({
+      requestedClaim: asString(body.claim_id),
+      leadStatus: asString(resolved.lead.enrichment_status),
+      existingDiagnostics,
+      nowMs: executionStartedAtMs,
+    });
+
+    if (!claim.allowed) {
+      // Fenced out: a fresh run already owns this lead. No status change, no
+      // canonical writes and no events at all, so a superseded invocation can
+      // never write canonical fields or create duplicate completion events.
+      log("enrichment_superseded", {
+        lead_id: leadId,
+        requested_claim: asString(body.claim_id),
+        active_claim: claim.priorClaim,
+        queued_at: claim.queuedAt,
+      });
+      return jsonResponse(
+        {
+          ok: false,
+          status: "failed",
+          error: "enrichment_already_in_progress",
+          lead_id: leadId,
+          enrichment_status: "enriching",
+          active_claim_id: claim.priorClaim,
+          queued_at: claim.queuedAt,
+          stale_after_ms: claim.staleAfterMs,
+        },
+        409,
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    execution = {
+      claim_id: claim.claimId,
+      queued_at: claim.queuedAt,
+      started_at: now,
+      finished_at: null,
+      total_wall_clock_ms: null,
+      budget_ms: budget.totalBudgetMs,
+      hard_stop_ms: HARD_STOP_MARGIN_MS,
+      budget_exhausted: false,
+      budget_stop_tier: null,
+      tiers_attempted: [],
+      terminal_status: "enriching",
+      stale_after_ms: claim.staleAfterMs,
+      stale_claim_reclaimed: claim.staleReclaimed,
+    };
+
+    // Persist the run record BEFORE any provider work so an invocation that dies
+    // mid-flight is still identifiable as stale (queue_requested_at plus the
+    // execution start) and can be reclaimed without waiting for this code to run.
+    await supabase
+      .from("local_business_leads")
+      .update({
+        enrichment_status: "enriching",
+        enrichment_diagnostics: buildDiagnostics({}),
+      })
+      .eq("id", leadId);
 
     const startedPayload = {
       lead_id: leadId,
       source_event_id: resolved.sourceEventId ?? null,
       action: asString(body.action) ?? asString(body.mode) ?? "enrich",
       auth_user_id: authContext.user_id,
+      enrichment_claim_id: claim.claimId,
+      stale_claim_reclaimed: claim.staleReclaimed,
     };
 
     startedEventId = await insertEvent(supabase, {
@@ -2713,10 +3110,8 @@ export async function handler(req: Request) {
       payload: { ...startedPayload, canonical_event_id: startedEventId },
     });
 
-    const now = new Date().toISOString();
-
     // ── Run tiered discovery pipeline ────────────────────────────────────
-    const discovery = await runTieredDiscovery(resolved.sourcePayload, businessName, now);
+    const discovery = await runTieredDiscovery(resolved.sourcePayload, businessName, now, budget);
 
     // Check for soft-fail conditions:
     // If all tiers were skipped (no API keys, no search) or blocked
@@ -2745,15 +3140,20 @@ export async function handler(req: Request) {
       discovery.candidates.filter((c) => c.source === "payload"),
     );
 
-    // Build enrichment debug for failure case
-    const failureDebug: Json = {
-      ...discovery.enrichmentDebugCore,
-      persistence_result: { fields_updated: [], fields_skipped: [] },
-      status: "failed",
-    };
+    // Build enrichment debug for the failure cases. These are TERMINAL writes:
+    // they merge over the queued diagnostics and always carry the run record
+    // (terminal status, wall clock, budget exhausted / stop tier, tiers tried).
+    const buildFailureDebug = (): Json =>
+      buildDiagnostics({
+        ...discovery.enrichmentDebugCore,
+        persistence_result: { fields_updated: [], fields_skipped: [] },
+        status: "failed",
+      });
 
     if (noTierAttempted && directPayloadFields < SUFFICIENT_CANDIDATE_THRESHOLD) {
       // No search tier had an API key and payload is insufficient
+      finalizeExecution("failed");
+      const failureDebug = buildFailureDebug();
       const failureEventId = await handleSearchFailure(
         supabase, leadId, businessName, "search_unavailable",
         failureDebug, startedEventId, resolved.sourceEventId ?? null,
@@ -2771,7 +3171,10 @@ export async function handler(req: Request) {
     }
 
     if (allAttemptedFailed && searchCandidateCount === 0 && directPayloadFields < SUFFICIENT_CANDIDATE_THRESHOLD) {
-      // All attempted tiers returned errors
+      // All attempted tiers returned errors: a provider outage is terminal for
+      // this lead (failed), never a silent return to `enriching`.
+      finalizeExecution("failed");
+      const failureDebug = buildFailureDebug();
       const failureEventId = await handleSearchFailure(
         supabase, leadId, businessName, "search_blocked",
         failureDebug, startedEventId, resolved.sourceEventId ?? null,
@@ -2861,11 +3264,12 @@ export async function handler(req: Request) {
 
     // If all tiers ran but we found zero candidates after all tiers
     if (meaningfulSignals === 0 && searchCandidateCount === 0 && directPayloadFields === 0) {
-      const zeroDebug: Json = {
+      finalizeExecution("failed");
+      const zeroDebug: Json = buildDiagnostics({
         ...discovery.enrichmentDebugCore,
         persistence_result: { fields_updated: [], fields_skipped: meaningfulFields },
         status: "zero_candidates",
-      };
+      });
       const failureEventId = await handleSearchFailure(
         supabase, leadId, businessName, "zero_candidates",
         zeroDebug, startedEventId, resolved.sourceEventId ?? null,
@@ -2927,21 +3331,39 @@ export async function handler(req: Request) {
       fieldsSkipped.push("opening_hours");
     }
 
+    // Resolve the terminal status ONCE and finalize the run record. Budget
+    // exhaustion always resolves to `partial`; it can never leave `enriching`.
+    const terminalStatus = resolveTerminalStatus({
+      meaningfulSignals,
+      strongAnchorPresent,
+      budgetExhausted: discovery.budgetExhausted,
+    });
+    finalizeExecution(terminalStatus);
+
     // Build final enrichment_debug with persistence_result
     const finalEnrichmentDebug: Json = {
       ...discovery.enrichmentDebugCore,
       persistence_result: { fields_updated: fieldsUpdated, fields_skipped: fieldsSkipped },
-      status: meaningfulSignals > 0 && strongAnchorPresent ? "success" : "partial",
+      status: terminalStatus,
+      execution_budget_exhausted: discovery.budgetExhausted,
+      budget_stop_tier: discovery.budgetStopTier,
+      tiers_attempted: budget.tiersAttempted(),
     };
 
-    leadPatch.enrichment_diagnostics = {
+    // Merged over the queued diagnostics so queue metadata is never lost.
+    leadPatch.enrichment_diagnostics = buildDiagnostics({
       ...discovery.diagnostics,
       confidence: discovery.confidence,
       meaningful_signal_count: meaningfulSignals,
       fields_found_now: foundNow,
       enrichment_result: result,
       enrichment_debug: finalEnrichmentDebug,
-    };
+      terminal_status: terminalStatus,
+      execution_budget_exhausted: discovery.budgetExhausted,
+      budget_stop_tier: discovery.budgetStopTier,
+      tiers_attempted: budget.tiersAttempted(),
+      total_wall_clock_ms: budget.elapsedMs(),
+    });
 
     if (result.social_links.length > 0 || leadPatch.facebook_url === null || leadPatch.google_maps_url === null) leadPatch.social_links = result.social_links;
     if (result.service_areas.length > 0) leadPatch.service_areas = result.service_areas;
@@ -2957,11 +3379,12 @@ export async function handler(req: Request) {
     if (meaningfulSignals === 0 || !strongAnchorPresent || discovery.budgetExhausted) {
       leadPatch.enrichment_status = "partial";
       if (resolved.lead.status === "discovered") leadPatch.status = "review_required";
-      const partialReason = discovery.budgetExhausted
-        ? `execution_budget_exhausted:${discovery.budgetStopTier ?? "unknown"}`
-        : meaningfulSignals === 0
-          ? "no_meaningful_enrichment_signal"
-          : "strong_anchor_required";
+      const partialReason = partialReasonFor({
+        budgetExhausted: discovery.budgetExhausted,
+        budgetStopTier: discovery.budgetStopTier,
+        meaningfulSignals,
+        strongAnchorPresent,
+      });
 
       // Enrichment is intentionally separate from analysis. Persist whatever
       // canonical evidence was found, mark the run partial, and let the operator
@@ -2984,6 +3407,12 @@ export async function handler(req: Request) {
           diagnostics: leadPatch.enrichment_diagnostics as Json,
           enrichment_debug: finalEnrichmentDebug,
           reason: partialReason,
+          terminal_status: "partial",
+          execution_budget_exhausted: discovery.budgetExhausted,
+          budget_stop_tier: discovery.budgetStopTier,
+          tiers_attempted: budget.tiersAttempted(),
+          total_wall_clock_ms: budget.elapsedMs(),
+          enrichment_claim_id: execution?.claim_id ?? null,
           started_event_id: startedEventId,
           source_event_id: resolved.sourceEventId ?? null,
         },
@@ -3000,6 +3429,9 @@ export async function handler(req: Request) {
           diagnostics: leadPatch.enrichment_diagnostics as Json,
           enrichment_debug: finalEnrichmentDebug,
           reason: partialReason,
+          terminal_status: "partial",
+          execution_budget_exhausted: discovery.budgetExhausted,
+          budget_stop_tier: discovery.budgetStopTier,
           requested_event_id: startedEventId,
           source_event_id: resolved.sourceEventId ?? null,
         },
@@ -3024,11 +3456,16 @@ export async function handler(req: Request) {
         search_tier_reached: discovery.searchTierReached,
         details: {
           reason: partialReason,
+          terminal_status: "partial",
           meaningful_signal_count: meaningfulSignals,
           fields_found_now: foundNow,
           data_alignment_status: result.data_alignment_status,
           identity_alignment: result.identity_alignment,
+          execution_budget_exhausted: discovery.budgetExhausted,
+          budget_stop_tier: discovery.budgetStopTier,
+          tiers_attempted: budget.tiersAttempted(),
           total_wall_clock_ms: discovery.enrichmentDebugCore.total_wall_clock_ms,
+          wall_clock_ms: budget.elapsedMs(),
           evidence_counts: Object.fromEntries(
             ["canonical", "supporting", "citation", "rejected"].map((evidenceClass) => [
               evidenceClass,
@@ -3064,6 +3501,12 @@ export async function handler(req: Request) {
         confidence: discovery.confidence,
         diagnostics: leadPatch.enrichment_diagnostics as Json,
         enrichment_debug: finalEnrichmentDebug,
+        terminal_status: "success",
+        execution_budget_exhausted: discovery.budgetExhausted,
+        budget_stop_tier: discovery.budgetStopTier,
+        tiers_attempted: budget.tiersAttempted(),
+        total_wall_clock_ms: budget.elapsedMs(),
+        enrichment_claim_id: execution?.claim_id ?? null,
         started_event_id: startedEventId,
         source_event_id: resolved.sourceEventId ?? null,
       },
@@ -3083,6 +3526,9 @@ export async function handler(req: Request) {
         confidence: discovery.confidence,
         diagnostics: leadPatch.enrichment_diagnostics as Json,
         enrichment_debug: finalEnrichmentDebug,
+        terminal_status: "success",
+        execution_budget_exhausted: discovery.budgetExhausted,
+        budget_stop_tier: discovery.budgetStopTier,
         canonical_event_id: completedEventId,
         requested_event_id: startedEventId,
         source_event_id: resolved.sourceEventId ?? null,
@@ -3107,10 +3553,15 @@ export async function handler(req: Request) {
       enriched_event_id: completedEventId,
       search_tier_reached: discovery.searchTierReached,
       details: {
+        terminal_status: "success",
         meaningful_signal_count: meaningfulSignals,
         fields_found_now: foundNow,
         data_alignment_status: result.data_alignment_status,
         identity_alignment: result.identity_alignment,
+        execution_budget_exhausted: discovery.budgetExhausted,
+        budget_stop_tier: discovery.budgetStopTier,
+        tiers_attempted: budget.tiersAttempted(),
+        total_wall_clock_ms: budget.elapsedMs(),
         evidence_counts: Object.fromEntries(
           ["canonical", "supporting", "citation", "rejected"].map((evidenceClass) => [
             evidenceClass,
@@ -3125,16 +3576,24 @@ export async function handler(req: Request) {
 
     let failureEventId: string | null = null;
     if (leadId) {
+      // Terminal: merge over the queued diagnostics (keeping queue_requested_at
+      // and the claim) instead of replacing them, and record why the run ended.
+      finalizeExecution("failed");
       await supabase
         .from("local_business_leads")
         .update({
           enrichment_status: "failed",
-          enrichment_diagnostics: {
+          enrichment_diagnostics: buildDiagnostics({
             schema_version: "enrichment-v2",
             failure_reason: message,
             started_event_id: startedEventId,
             failed_at: new Date().toISOString(),
-          },
+            terminal_status: "failed",
+            execution_budget_exhausted: budget.budgetExhausted,
+            budget_stop_tier: budget.budgetStopTier,
+            tiers_attempted: budget.tiersAttempted(),
+            total_wall_clock_ms: budget.elapsedMs(),
+          }),
         })
         .eq("id", leadId);
 
@@ -3148,6 +3607,11 @@ export async function handler(req: Request) {
             lead_id: leadId,
             started_event_id: startedEventId,
             error: message,
+            terminal_status: "failed",
+            execution_budget_exhausted: budget.budgetExhausted,
+            budget_stop_tier: budget.budgetStopTier,
+            tiers_attempted: budget.tiersAttempted(),
+            total_wall_clock_ms: budget.elapsedMs(),
           },
         });
 
@@ -3161,6 +3625,9 @@ export async function handler(req: Request) {
             lead_id: leadId,
             requested_event_id: startedEventId,
             error: message,
+            terminal_status: "failed",
+            execution_budget_exhausted: budget.budgetExhausted,
+            budget_stop_tier: budget.budgetStopTier,
           },
         });
       } catch (failureInsertError) {
@@ -3179,6 +3646,9 @@ export async function handler(req: Request) {
       },
       500,
     );
+  } finally {
+    // Never leave the watchdog armed past the response.
+    clearTimeout(hardStopTimer);
   }
 if (import.meta.main) Deno.serve(handler);}
 

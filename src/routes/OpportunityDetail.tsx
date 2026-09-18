@@ -18,6 +18,7 @@ import {
   ENRICHMENT_POLL_INTERVAL_MS,
   ENRICHMENT_POLL_TIMEOUT_MS,
   isEnrichmentRunning,
+  isEnrichmentStale,
 } from "../lib/enrichment";
 import type { OppDetail, OutcomeState, ReviewState } from "../lib/types";
 import { OUTCOME_ACTIONS, REVIEW_STATE_ORDER } from "../lib/types";
@@ -167,6 +168,11 @@ export default function OpportunityDetail() {
   useEffect(() => {
     if (!id || !isApiConfigured) return;
     if (!detail || !isEnrichmentRunning(detail.lead.enrichment_status)) return;
+    // A stale run has no owner left to finish it: stop polling instead of
+    // spinning forever behind a request that already died.
+    if (isEnrichmentStale(detail.lead.enrichment_status, detail.lead.enrichment_diagnostics)) {
+      return;
+    }
 
     let cancelled = false;
     const startedAt = Date.now();
@@ -322,7 +328,10 @@ export default function OpportunityDetail() {
   async function handleEnrich(retry = false) {
     if (!id) return;
 
-    if (isEnrichmentRunning(detail?.lead.enrichment_status ?? null)) {
+    const leadStatus = detail?.lead.enrichment_status ?? null;
+    const runIsStale = isEnrichmentStale(leadStatus, detail?.lead.enrichment_diagnostics);
+    if (isEnrichmentRunning(leadStatus) && !runIsStale) {
+      // A live run is still owned by the backend: poll it, do not re-queue.
       await handleRefreshEnrichmentStatus();
       return;
     }
@@ -497,7 +506,11 @@ export default function OpportunityDetail() {
   } = detail;
 
   const enrichmentStatus = lead.enrichment_status ?? null;
-  const enrichmentRunning = isEnrichmentRunning(enrichmentStatus);
+  // Stale runs are still `enriching` in the data, but nothing is executing: such
+  // a lead must not render as a running job (no endless spinner), and its button
+  // becomes a retry, which the queue RPC now allows for stale runs.
+  const enrichmentStale = isEnrichmentStale(enrichmentStatus, lead.enrichment_diagnostics);
+  const enrichmentRunning = isEnrichmentRunning(enrichmentStatus) && !enrichmentStale;
 
   const currentReviewIndex = REVIEW_STATE_ORDER.indexOf(review_state);
   const latestDraft = outreach_drafts[0] ?? null;
@@ -655,9 +668,11 @@ Enrichment
 <p className="mt-1 text-xs text-slate-500">
   {enrichmentRunning
     ? "Enrichment is running in the background. The page will refresh automatically."
-    : latestEnrichmentEvent
-      ? `${latestEnrichmentEvent.action === "enrichment_failed" ? "Last attempt failed" : "Last completed"} ${formatTimestamp(latestEnrichmentEvent.created_at)}`
-      : "Run enrichment before analysis."}
+    : enrichmentStale
+      ? "This run stopped reporting (stale). Retry enrichment to finish it — already collected evidence is kept."
+      : latestEnrichmentEvent
+        ? `${latestEnrichmentEvent.action === "enrichment_failed" ? "Last attempt failed" : "Last completed"} ${formatTimestamp(latestEnrichmentEvent.created_at)}`
+        : "Run enrichment before analysis."}
 </p>
 <div className="mt-3 flex flex-wrap gap-2">
   <button
@@ -665,7 +680,7 @@ Enrichment
     onClick={() =>
       void (enrichmentRunning
         ? handleRefreshEnrichmentStatus()
-        : handleEnrich(false))
+        : handleEnrich(enrichmentStale))
     }
     disabled={intelligencePending !== null}
     className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -674,6 +689,8 @@ Enrichment
       ? "Working…"
       : enrichmentRunning
         ? "Refresh status"
+        : enrichmentStale
+        ? "Retry enrichment"
         : hasEnrichment
         ? "Refresh enrichment"
         : "Run enrichment"}
