@@ -36,6 +36,7 @@
 //   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via SMTP (operator-gated)
 //   POST  /opportunities/:id/review                   -> record an operator review-state transition
 //   POST  /opportunities/:id/outcome                  -> record an outcome-state transition (post-send)
+//   POST  /opportunities/:id/inspection               -> request metadata-only Visual Evidence inspection
 //
 // Auth: `Authorization: Bearer <OPERATOR_TOKEN>` (or `x-operator-token`). Fails closed if unset.
 
@@ -3791,6 +3792,53 @@ async function addVisualEvidence(
   return json({ evidence }, 201);
 }
 
+// Service-to-service adapter. It does not write the legacy visual tables.
+async function requestVisualInspection(
+  id: string,
+  payload: Record<string, unknown>,
+  idempotencyKey: string | null,
+): Promise<Response> {
+  const { data: lead, error: leadError } = await supabase
+    .from("local_business_leads")
+    .select("id,address")
+    .eq("id", id)
+    .maybeSingle();
+  if (leadError) return json({ error: "database_error" }, 500);
+  if (!lead) return json({ error: "not_found" }, 404);
+  const address = cleanText(lead.address, 500);
+  if (!address || address.length < 5) {
+    return json({ error: "address_unavailable" }, 422);
+  }
+  if (!Array.isArray(payload.attributes)) {
+    return json({ error: "attributes_required" }, 422);
+  }
+
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+    apikey: SERVICE_ROLE_KEY,
+    "content-type": "application/json",
+  };
+  if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
+  let response: Response;
+  try {
+    response = await fetch(
+      `${SUPABASE_URL}/functions/v1/visual-evidence/v1/inspections`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ address, attributes: payload.attributes }),
+      },
+    );
+  } catch {
+    return json({ error: "visual_evidence_unavailable" }, 502);
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    return json({ error: "visual_evidence_request_failed", status: response.status }, 502);
+  }
+  return json({ inspection: body }, response.status);
+}
+
 // ---- Router -----------------------------------------------------------------
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -4030,6 +4078,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return await addVisualEvidence(
         parts[0],
         await req.json().catch(() => ({})),
+      );
+    }
+    if (req.method === "POST" && parts.length === 2 && parts[1] === "inspection") {
+      return await requestVisualInspection(
+        parts[0],
+        (await req.json().catch(() => ({}))) as JsonObject,
+        req.headers.get("idempotency-key"),
       );
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "review") {

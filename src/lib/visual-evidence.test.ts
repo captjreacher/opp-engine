@@ -235,7 +235,7 @@ describe("Visual evidence backend contract", () => {
   it("creates analysable evidence only as NEW managed rows", () => {
     const handler = edgeSource.slice(
       edgeSource.indexOf("async function addVisualEvidence"),
-      edgeSource.indexOf("// ---- Router"),
+      edgeSource.indexOf("async function requestVisualInspection"),
     );
 
     expect(handler).toContain("analysis_allowed: true");
