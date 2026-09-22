@@ -76,13 +76,33 @@ describe("Multi-category discovery test suite", () => {
     ]);
   });
 
-  it("3. supports All categories selection using canonical [] representation", () => {
-    // Canonical representation is category_slugs: [] with all_categories: true
-    const summary = formatCategorySummary([], true);
-    expect(summary).toBe("All categories");
+  it("3. enforces authoritative all_categories boolean and [] domain contract", () => {
+    // Explicit All categories request
+    expect(validateDiscoveryInput({
+      location: "Helensville, New Zealand",
+      industry: "All categories",
+      keywords: "",
+      radius_m: 15000,
+      result_limit: 20,
+      category_slugs: [],
+      all_categories: true,
+    })).toEqual({});
 
-    const terms = expandCategoriesSearchTerms(allCategoriesList, null, 1);
-    expect(terms).toEqual(["building company", "electrician", "plumber"]);
+    // Explicit individual categories request
+    expect(validateDiscoveryInput({
+      location: "Helensville, New Zealand",
+      industry: "Builders / Construction + 1 more",
+      keywords: "",
+      radius_m: 15000,
+      result_limit: 20,
+      category_slugs: ["builders-construction", "electricians"],
+      all_categories: false,
+    })).toEqual({});
+
+    // Server-side validation rejects "all" string in category_slugs
+    expect(edgeSource).toContain(
+      'validation.category_slugs =\n      "Use all_categories: true or select individual categories.";',
+    );
   });
 
   it("4. handles state transition: switching All -> individual category", () => {
@@ -144,7 +164,6 @@ describe("Multi-category discovery test suite", () => {
   it("7. enforces global max-results cap across all categories", () => {
     expect(edgeSource).toContain("if (places.length >= resultLimit) break;");
     expect(edgeSource).toContain("const places: PlacesResult[] = [];");
-    // Result limit is passed as maxResultCount to searchPlacesText and checked in accumulator
     expect(edgeSource).toContain("places.push(place);");
   });
 

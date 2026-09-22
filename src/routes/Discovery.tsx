@@ -25,7 +25,6 @@ import {
   categoryDefaultRadius,
   categorySupportsScenario,
   findCategoriesBySlugs,
-  findCategoryBySlug,
   formatCategorySummary,
   type OpportunityCategory,
 } from "../lib/categories";
@@ -78,17 +77,6 @@ function displayError(error: unknown): string {
  * Radius precedence, mirroring the backend: scenario default, then category
  * default, then the discovery-wide setting. All values stay in metres.
  */
-function defaultRadius(
-  scenario: OpportunityScenario | null,
-  category: OpportunityCategory | null,
-  settings: DiscoverySettings,
-): number | null {
-  return (
-    (scenario ? scenarioDefaultRadius(scenario) : null) ??
-    categoryDefaultRadius(category) ??
-    settings.default_radius_m
-  );
-}
 
 /**
  * Location field backed by Google Places autocomplete (proxied by the API, so the
@@ -574,15 +562,6 @@ export default function Discovery() {
     }));
   }
 
-  function chooseCategory(slug: string) {
-    const category = findCategoryBySlug(categories, slug);
-    setForm((current) => ({
-      ...current,
-      category_slug: category?.slug ?? null,
-      category_label: category?.label ?? null,
-      industry: category?.label ?? "",
-    }));
-  }
 
   function selectLocation(suggestion: LocationSuggestion) {
     setStructuredLocation((current) => mergeLocationSuggestion(current, suggestion));
