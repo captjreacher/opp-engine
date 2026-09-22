@@ -24,7 +24,9 @@ import {
   activeCategories,
   categoryDefaultRadius,
   categorySupportsScenario,
+  findCategoriesBySlugs,
   findCategoryBySlug,
+  formatCategorySummary,
   type OpportunityCategory,
 } from "../lib/categories";
 import {
@@ -283,6 +285,137 @@ function CandidateDrawer({
   );
 }
 
+function CategoryField(props: {
+  categories: OpportunityCategory[];
+  categoryLoading: boolean;
+  selectedCategorySlugs: string[];
+  isAllCategories: boolean;
+  onChange: (slugs: string[], isAll: boolean) => void;
+  selectedScenario: OpportunityScenario | null;
+  error?: string;
+  incompatibleNames?: string[];
+}) {
+  const {
+    categories,
+    categoryLoading,
+    selectedCategorySlugs,
+    isAllCategories,
+    onChange,
+    selectedScenario,
+    error,
+    incompatibleNames,
+  } = props;
+
+  const [open, setOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedCategoryObjects = useMemo(
+    () => findCategoriesBySlugs(categories, selectedCategorySlugs),
+    [categories, selectedCategorySlugs],
+  );
+
+  const labels = isAllCategories ? [] : selectedCategoryObjects.map((c) => c.label);
+  const summaryText = formatCategorySummary(labels, isAllCategories);
+
+  return (
+    <div className="text-sm text-slate-300 lg:col-span-2 relative block">
+      <span className="block text-sm text-slate-300 mb-1">Category *</span>
+      <div className="relative" ref={popoverRef}>
+        <button
+          type="button"
+          disabled={categoryLoading || categories.length === 0}
+          className={`${fieldClass} flex w-full items-center justify-between text-left`}
+          onClick={() => setOpen((prev) => !prev)}
+          aria-expanded={open}
+        >
+          <span className="truncate">{summaryText}</span>
+          <span className="ml-2 text-xs text-slate-400">▼</span>
+        </button>
+
+        {open && (
+          <div className="absolute left-0 top-full z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 p-2 shadow-xl">
+            <label className="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isAllCategories}
+                onChange={() => {
+                  onChange([], true);
+                }}
+                className="rounded border-slate-700 bg-slate-950 text-accent-500 focus:ring-accent-500"
+              />
+              <span className="font-medium">All categories</span>
+            </label>
+            <div className="my-1 border-t border-slate-800" />
+            {categoryLoading && (
+              <p className="px-2 py-1.5 text-xs text-slate-400">Loading categories…</p>
+            )}
+            {!categoryLoading && categories.length === 0 && (
+              <p className="px-2 py-1.5 text-xs text-slate-400">No active categories</p>
+            )}
+            {categories.map((cat) => {
+              const checked = !isAllCategories && selectedCategorySlugs.includes(cat.slug);
+              const incompatible =
+                selectedScenario && !categorySupportsScenario(cat, selectedScenario.slug);
+              return (
+                <label
+                  key={cat.slug}
+                  className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-800 cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        if (isAllCategories) {
+                          onChange([cat.slug], false);
+                        } else {
+                          if (checked) {
+                            const next = selectedCategorySlugs.filter((s) => s !== cat.slug);
+                            if (next.length === 0) {
+                              onChange([], true);
+                            } else {
+                              onChange(next, false);
+                            }
+                          } else {
+                            onChange([...selectedCategorySlugs, cat.slug], false);
+                          }
+                        }
+                      }}
+                      className="rounded border-slate-700 bg-slate-950 text-accent-500 focus:ring-accent-500"
+                    />
+                    <span className="truncate">{cat.label}</span>
+                  </div>
+                  {incompatible && (
+                    <span className="text-[10px] uppercase text-amber-400 font-semibold">
+                      Incompatible
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {error && <span className="mt-1 block text-xs text-rose-400">{error}</span>}
+      {incompatibleNames && incompatibleNames.length > 0 && (
+        <span className="mt-1 block text-xs text-amber-400">
+          {incompatibleNames.join(", ")} is not available for the {selectedScenario?.name} scenario.
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function Discovery() {
   const [form, setForm] = useState<DiscoverySearchInput>(initialForm);
   const [structuredLocation, setStructuredLocation] = useState<StructuredLocation>(EMPTY_LOCATION);
@@ -318,19 +451,27 @@ export default function Discovery() {
     return configured;
   }, [settings.radius_options_m, form.radius_m]);
 
+  const [selectedCategorySlugs, setSelectedCategorySlugs] = useState<string[]>([]);
+  const [isAllCategories, setIsAllCategories] = useState(true);
+
   const selectedScenario = useMemo(
     () => scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? null,
     [scenarios, selectedScenarioId],
   );
-  const selectedCategory = useMemo(
-    () => findCategoryBySlug(categories, form.category_slug),
-    [categories, form.category_slug],
-  );
-  const categoryIncompatible = Boolean(
-    selectedCategory &&
-      selectedScenario &&
-      !categorySupportsScenario(selectedCategory, selectedScenario.slug),
-  );
+
+  const selectedCategories = useMemo(() => {
+    if (isAllCategories) return categories;
+    return findCategoriesBySlugs(categories, selectedCategorySlugs);
+  }, [categories, isAllCategories, selectedCategorySlugs]);
+
+  const incompatibleCategories = useMemo(() => {
+    if (!selectedScenario || isAllCategories) return [];
+    return selectedCategories.filter(
+      (cat) => !categorySupportsScenario(cat, selectedScenario.slug),
+    );
+  }, [selectedCategories, selectedScenario, isAllCategories]);
+
+  const categoryIncompatible = incompatibleCategories.length > 0;
 
   const reload = useCallback(async (runId: string) => {
     const [runResponse, candidateResponse] = await Promise.all([fetchDiscoveryRun(runId), fetchDiscoveryCandidates(runId)]);
@@ -393,14 +534,24 @@ export default function Discovery() {
     return () => { active = false; };
   }, []);
 
+  const minCategoryRadius = useMemo(() => {
+    if (!selectedCategories.length) return null;
+    return selectedCategories.reduce<number | null>((acc, cat) => {
+      const r = categoryDefaultRadius(cat);
+      if (r === null) return acc;
+      return acc === null ? r : Math.min(acc, r);
+    }, null);
+  }, [selectedCategories]);
+
   // Radius follows the scenario, falling back to the category default, until the
   // operator edits it by hand.
   useEffect(() => {
     if (radiusTouched) return;
-    const next = defaultRadius(selectedScenario, selectedCategory, settings);
+    const scenarioRad = selectedScenario ? scenarioDefaultRadius(selectedScenario) : null;
+    const next = scenarioRad ?? minCategoryRadius ?? settings.default_radius_m;
     if (next === null) return;
     setForm((current) => (current.radius_m === next ? current : { ...current, radius_m: next }));
-  }, [radiusTouched, selectedCategory, selectedScenario, settings]);
+  }, [radiusTouched, minCategoryRadius, selectedScenario, settings]);
 
   useEffect(() => {
     const latestRunId = window.sessionStorage.getItem("opp-engine:last-discovery-run");
@@ -457,26 +608,40 @@ export default function Discovery() {
       setError("Choose an active opportunity scenario before starting discovery.");
       return;
     }
-    if (!selectedCategory) {
-      setError("Choose an opportunity category before starting discovery.");
+    if (!isAllCategories && selectedCategorySlugs.length === 0) {
+      setError("Choose at least one category or select All categories.");
       return;
     }
     if (categoryIncompatible) {
-      setError(`${selectedCategory.label} is not compatible with the ${selectedScenario.name} scenario.`);
+      setError(
+        `${incompatibleCategories.map((c) => c.label).join(", ")} is not compatible with the ${selectedScenario.name} scenario.`,
+      );
       return;
     }
     if (Object.keys(validation).length) return;
     setBusy("discover"); setError(null); setNotice(null); setCandidates([]); setSelected(new Set());
     try {
+      const selectedCategoryObjects = isAllCategories
+        ? []
+        : findCategoriesBySlugs(categories, selectedCategorySlugs);
+      const selectedLabels = isAllCategories ? [] : selectedCategoryObjects.map((c) => c.label);
+      const summaryLabel = formatCategorySummary(selectedLabels, isAllCategories);
+
       const payload: DiscoverySearchInput = {
         ...form,
         location: structuredLocation.label.trim(),
         location_place_id: structuredLocation.place_id,
         location_latitude: structuredLocation.latitude,
         location_longitude: structuredLocation.longitude,
-        category_slug: selectedCategory.slug,
-        category_label: selectedCategory.label,
-        industry: selectedCategory.label,
+        category_slugs: isAllCategories ? [] : selectedCategorySlugs,
+        category_labels: selectedLabels,
+        all_categories: isAllCategories,
+        category_slug:
+          !isAllCategories && selectedCategoryObjects.length === 1
+            ? selectedCategoryObjects[0].slug
+            : null,
+        category_label: summaryLabel,
+        industry: summaryLabel,
         scenario_id: selectedScenario.id,
       };
       const response = await startDiscoveryRun(payload);
@@ -581,19 +746,19 @@ export default function Discovery() {
           <div className="lg:col-span-2">
             <LocationField value={structuredLocation} error={errors.location} onSelect={selectLocation} onChange={changeLocationText} />
           </div>
-          <label className="text-sm text-slate-300 lg:col-span-2">Category *
-            <select
-              className={fieldClass}
-              value={selectedCategory?.slug ?? ""}
-              disabled={categoryLoading || categories.length === 0}
-              onChange={(event) => chooseCategory(event.target.value)}
-            >
-              {categories.length === 0 && <option value="">{categoryLoading ? "Loading categories…" : "No active categories"}</option>}
-              {categories.map((category) => <option key={category.slug} value={category.slug}>{category.label}</option>)}
-            </select>
-            {(errors.industry ?? errors.category_slug) && <span className="mt-1 block text-xs text-rose-400">{errors.industry ?? errors.category_slug}</span>}
-            {categoryIncompatible && <span className="mt-1 block text-xs text-amber-400">{selectedCategory?.label} is not available for the {selectedScenario?.name} scenario.</span>}
-          </label>
+          <CategoryField
+            categories={categories}
+            categoryLoading={categoryLoading}
+            selectedCategorySlugs={selectedCategorySlugs}
+            isAllCategories={isAllCategories}
+            onChange={(slugs, isAll) => {
+              setSelectedCategorySlugs(slugs);
+              setIsAllCategories(isAll);
+            }}
+            selectedScenario={selectedScenario}
+            error={errors.industry ?? errors.category_slug}
+            incompatibleNames={incompatibleCategories.map((c) => c.label)}
+          />
           <label className="text-sm text-slate-300">Maximum results<input className={fieldClass} type="number" min={1} max={settings.max_result_limit} value={form.result_limit} onChange={(event) => setForm({ ...form, result_limit: Number(event.target.value) })} />{errors.result_limit && <span className="mt-1 block text-xs text-rose-400">{errors.result_limit}</span>}</label>
           <label className="text-sm text-slate-300 lg:col-span-3">Search keywords<input className={fieldClass} value={form.keywords} onChange={(event) => setForm({ ...form, keywords: event.target.value })} placeholder="Optional services or qualifiers" /></label>
           <label className="text-sm text-slate-300">Radius (km)
@@ -604,7 +769,7 @@ export default function Discovery() {
             {errors.radius_m && <span className="mt-1 block text-xs text-rose-400">{errors.radius_m}</span>}
             <span className="mt-1 block text-xs text-slate-500">Options come from Admin · Discovery settings.</span>
           </label>
-          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || !selectedCategory || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
+          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || (!isAllCategories && selectedCategorySlugs.length === 0) || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setSelectedCategorySlugs([]); setIsAllCategories(true); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
         </div>
       </section>
 

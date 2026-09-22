@@ -1089,7 +1089,7 @@ async function executeDiscoveryRun(
         regionCode: countryBias,
         ...(radiusM && latitude !== null && longitude !== null
           ? {
-              locationRestriction: {
+              locationBias: {
                 circle: {
                   center: { latitude, longitude },
                   radius: radiusM,
