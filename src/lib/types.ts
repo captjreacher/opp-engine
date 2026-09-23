@@ -359,6 +359,9 @@ export interface DiscoverySearchInput {
   /** Controlled registry slug. Null/absent for legacy free-text categories. */
   category_slug?: string | null;
   category_label?: string | null;
+  category_slugs?: string[];
+  category_labels?: string[];
+  all_categories?: boolean;
   /** Active, executable opportunity scenario selected for this run. */
   scenario_id?: string | null;
 }

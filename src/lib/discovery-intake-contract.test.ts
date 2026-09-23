@@ -101,10 +101,9 @@ describe("controlled category contract", () => {
   it("expands the selected category into configured provider search terms", () => {
     // The bound is now an operator setting, itself clamped to MAX_DISCOVERY_SEARCH_TERMS.
     expect(edgeSource).toContain(
-      "expandCategorySearchTerms(category, keywords, settings.max_search_terms)",
+      "expandCategoriesSearchTerms(",
     );
     expect(edgeSource).toContain("MAX_DISCOVERY_SEARCH_TERMS");
-    expect(edgeSource).toContain("const terms = category");
     expect(createDiscoveryRunBlock()).toContain("discovery_terms: terms");
   });
 
@@ -115,8 +114,8 @@ describe("controlled category contract", () => {
 
   it("stores the category on the run by stable slug, never by free text alone", () => {
     const block = createDiscoveryRunBlock();
-    expect(block).toContain("category_slug: category?.slug ?? null");
-    expect(block).toContain("category_label: categoryLabel");
+    expect(block).toContain("category_slugs:");
+    expect(block).toContain("category_label: categoryLabelSummary");
   });
 });
 

@@ -159,9 +159,9 @@ describe("admin category contract", () => {
     // A run resolves the category from the registry at creation time and stores
     // its own snapshot, so editing a category cannot rewrite history.
     const runBlock = createDiscoveryRunBlock();
-    expect(runBlock).toContain("findActiveCategory(categorySlug)");
-    expect(runBlock).toContain("category_slug: category?.slug ?? null");
-    expect(runBlock).toContain("category_label: categoryLabel");
+    expect(runBlock).toContain("findActiveCategories");
+    expect(runBlock).toContain("category_slugs:");
+    expect(runBlock).toContain("category_label: categoryLabelSummary");
     expect(runBlock).toContain("discovery_terms: terms");
     // No admin mutation writes back into an existing run.
     expect(adminBlock()).not.toMatch(
@@ -236,7 +236,7 @@ describe("discovery settings are respected", () => {
     expect(block).toContain("settings.max_result_limit");
     expect(block).toContain("settings.max_search_terms");
     expect(block).toContain("settings.location_country_bias");
-    expect(block).toContain("expandCategorySearchTerms(category, keywords, settings.max_search_terms)");
+    expect(block).toContain("expandCategoriesSearchTerms(");
   });
 
   it("applies the autocomplete limit and country bias to location search", () => {

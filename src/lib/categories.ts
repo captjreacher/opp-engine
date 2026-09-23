@@ -117,8 +117,10 @@ export function categorySupportsScenario(
 export function expandCategorySearchTerms(
   category: Pick<OpportunityCategory, "label" | "search_terms"> | null,
   keywords: string | null | undefined,
+  limit: number = MAX_DISCOVERY_SEARCH_TERMS,
 ): string[] {
   if (!category) return [];
+  const max = Math.max(1, limit);
   const refinement = toText(keywords, 200);
   const base = category.search_terms.length
     ? category.search_terms
@@ -132,7 +134,72 @@ export function expandCategorySearchTerms(
     if (seen.has(key)) continue;
     seen.add(key);
     terms.push(refinement ? `${term} ${refinement}` : term);
-    if (terms.length >= MAX_DISCOVERY_SEARCH_TERMS) break;
+    if (terms.length >= max) break;
   }
   return terms;
+}
+
+/**
+ * Formats a collapsed category label summary for the UI.
+ * - All categories (or empty list when isAll is true) -> "All categories"
+ * - Single category -> "Commercial Interiors"
+ * - Multiple categories -> "Commercial Interiors + 2 more"
+ */
+export function formatCategorySummary(
+  labels: string[],
+  isAll = false,
+): string {
+  if (isAll || labels.length === 0) return "All categories";
+  if (labels.length === 1) return labels[0];
+  return `${labels[0]} + ${labels.length - 1} more`;
+}
+
+export function findCategoriesBySlugs(
+  categories: OpportunityCategory[],
+  slugs: string[],
+): OpportunityCategory[] {
+  if (!slugs.length) return [];
+  const set = new Set(slugs);
+  return categories.filter((cat) => set.has(cat.slug));
+}
+
+/**
+ * Expands search terms for multiple categories.
+ * Each category expands its configured search terms (or fallback label) refined with optional keywords.
+ * Terms are interleaved round-robin across categories to distribute discovery, then deduplicated deterministically.
+ */
+export function expandCategoriesSearchTerms(
+  categories: Pick<OpportunityCategory, "label" | "search_terms">[],
+  keywords: string | null | undefined,
+  limitPerCategory: number = MAX_DISCOVERY_SEARCH_TERMS,
+): string[] {
+  if (!categories.length) return [];
+
+  const perCategoryTerms: string[][] = categories.map((category) =>
+    expandCategorySearchTerms(category, keywords, limitPerCategory),
+  );
+
+  const seen = new Set<string>();
+  const combined: string[] = [];
+
+  let maxTerms = 0;
+  for (const terms of perCategoryTerms) {
+    if (terms.length > maxTerms) maxTerms = terms.length;
+  }
+
+  // Interleave round-robin across categories
+  for (let step = 0; step < maxTerms; step++) {
+    for (const terms of perCategoryTerms) {
+      if (step < terms.length) {
+        const term = terms[step];
+        const key = term.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push(term);
+        }
+      }
+    }
+  }
+
+  return combined;
 }

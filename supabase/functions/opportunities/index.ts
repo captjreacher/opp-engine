@@ -1089,7 +1089,7 @@ async function executeDiscoveryRun(
         regionCode: countryBias,
         ...(radiusM && latitude !== null && longitude !== null
           ? {
-              locationRestriction: {
+              locationBias: {
                 circle: {
                   center: { latitude, longitude },
                   radius: radiusM,
@@ -1215,14 +1215,19 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
   const latitude = numberInRange(payload.location_latitude, -90, 90);
   const longitude = numberInRange(payload.location_longitude, -180, 180);
 
-  // Category: registry slug (preferred) with a free-text label fallback for
-  // legacy callers. `industry` remains the human-readable label snapshot.
-  const categorySlug = cleanText(payload.category_slug, 80);
+  // Category collection input parsing
+  const rawSlugs = Array.isArray(payload.category_slugs)
+    ? (payload.category_slugs
+        .map((s) => cleanText(s, 80))
+        .filter(Boolean) as string[])
+    : null;
+  const singleSlug = cleanText(payload.category_slug, 80);
+  const explicitAll = payload.all_categories === true;
   const legacyIndustry = cleanText(payload.industry ?? payload.category, 120);
+
   const keywords = cleanText(payload.keywords, 200);
   const scenarioId = cleanText(payload.scenario_id, 64);
-  // Discovery-wide settings supply the fallbacks; they are already clamped to the
-  // code ceilings, so an operator cannot widen provider usage past them.
+
   const settings = await loadDiscoverySettings();
   const resultLimit =
     payload.result_limit == null || payload.result_limit === ""
@@ -1236,24 +1241,63 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
   const validation: Record<string, string> = {};
   if (!location) validation.location = "Choose a search location.";
 
-  let category: CategoryRecord | null = null;
-  if (categorySlug) {
-    category = await findActiveCategory(categorySlug);
-    if (!category)
-      validation.category_slug = `Category "${categorySlug}" is not an active discovery category.`;
+  // Reject "all" inside category_slugs or category_slug
+  if (rawSlugs && rawSlugs.some((s) => s.toLowerCase() === "all")) {
+    validation.category_slugs =
+      "Use all_categories: true or select individual categories.";
+  }
+  if (singleSlug && singleSlug.toLowerCase() === "all") {
+    validation.category_slugs =
+      "Use all_categories: true or select individual categories.";
+  }
+
+  let requestedCategorySlugs: string[] = [];
+  let isAllCategories = false;
+
+  if (explicitAll) {
+    isAllCategories = true;
+  } else if (rawSlugs !== null) {
+    if (rawSlugs.length === 0) {
+      validation.category_slugs =
+        "Choose at least one category or set all_categories: true.";
+    } else {
+      requestedCategorySlugs = rawSlugs;
+    }
+  } else if (singleSlug && singleSlug.toLowerCase() !== "all") {
+    requestedCategorySlugs = [singleSlug];
   } else if (!legacyIndustry) {
     validation.category = "Choose an opportunity category.";
   }
-  const categoryLabel = category?.label ?? legacyIndustry;
 
-  // The scenario is now validated explicitly: it must be active AND executable.
   const scenarioResult = await resolveDiscoveryScenario(scenarioId);
   if (!scenarioResult.ok)
     return json(scenarioResult.body, scenarioResult.status);
   const scenario = scenarioResult.scenario;
 
-  if (category && !categorySupportsScenario(category, scenario.slug))
-    validation.category_slug = `Category "${category.label}" is not compatible with the ${scenario.name} scenario.`;
+  let resolvedCategories: CategoryRecord[] = [];
+  if (isAllCategories) {
+    const allActive = await listAllActiveCategories();
+    resolvedCategories = allActive.filter((cat) =>
+      categorySupportsScenario(cat, scenario.slug),
+    );
+    if (!resolvedCategories.length) {
+      validation.category_slugs = `No active categories available for the ${scenario.name} scenario.`;
+    }
+  } else if (requestedCategorySlugs.length) {
+    const activeMatch = await findActiveCategories(requestedCategorySlugs);
+    if (activeMatch.length !== requestedCategorySlugs.length) {
+      validation.category_slugs =
+        "One or more selected categories are not active discovery categories.";
+    } else {
+      resolvedCategories = activeMatch;
+      for (const cat of resolvedCategories) {
+        if (!categorySupportsScenario(cat, scenario.slug)) {
+          validation.category_slugs = `Category "${cat.label}" is not compatible with the ${scenario.name} scenario.`;
+          break;
+        }
+      }
+    }
+  }
 
   if (
     !Number.isInteger(resultLimit) ||
@@ -1268,13 +1312,22 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
     MIN_RADIUS_M,
     MAX_RADIUS_M,
   );
-  // Resolution order: explicit request -> scenario default -> category default ->
-  // operator-configured global default.
+
+  const minCategoryRadius = resolvedCategories.reduce<number | null>(
+    (acc, cat) => {
+      const catRadius = cat.default_radius_m;
+      if (catRadius === null) return acc;
+      return acc === null ? catRadius : Math.min(acc, catRadius);
+    },
+    null,
+  );
+
   const radius =
     requestedRadius ??
     scenarioRadius ??
-    category?.default_radius_m ??
+    minCategoryRadius ??
     settings.default_radius_m;
+
   if (
     radius !== null &&
     (!Number.isInteger(radius) || radius < MIN_RADIUS_M || radius > MAX_RADIUS_M)
@@ -1292,15 +1345,30 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
       503,
     );
 
-  const terms = category
-    ? expandCategorySearchTerms(category, keywords, settings.max_search_terms)
+  const resolvedLabels = resolvedCategories.length
+    ? resolvedCategories.map((c) => c.label)
+    : legacyIndustry
+      ? [legacyIndustry]
+      : [];
+
+  const categoryLabelSummary = formatCategorySummary(
+    resolvedLabels,
+    isAllCategories,
+  );
+
+  const terms = resolvedCategories.length
+    ? expandCategoriesSearchTerms(
+        resolvedCategories,
+        keywords,
+        settings.max_search_terms,
+      )
     : [];
 
   const { data: run, error: runError } = await supabase
     .from("opportunity_discovery_runs")
     .insert({
       location,
-      industry: categoryLabel,
+      industry: categoryLabelSummary,
       keywords,
       radius_m: radius,
       result_limit: resultLimit,
@@ -1310,9 +1378,16 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
       location_place_id: locationPlaceId,
       location_latitude: latitude,
       location_longitude: longitude,
-      category_id: category?.id ?? null,
-      category_slug: category?.slug ?? null,
-      category_label: categoryLabel,
+      category_id:
+        resolvedCategories.length === 1 ? resolvedCategories[0].id : null,
+      category_slug:
+        resolvedCategories.length === 1 ? resolvedCategories[0].slug : null,
+      category_label: categoryLabelSummary,
+      category_slugs: isAllCategories
+        ? []
+        : resolvedCategories.map((c) => c.slug),
+      category_labels: resolvedLabels,
+      all_categories: isAllCategories,
       discovery_terms: terms,
     })
     .select("*")
@@ -1320,7 +1395,7 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
   if (runError) throw runError;
   const work = executeDiscoveryRun(run.id, {
     location: location!,
-    industry: categoryLabel!,
+    industry: categoryLabelSummary,
     keywords,
     resultLimit,
     terms,
@@ -1328,6 +1403,11 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
     latitude,
     longitude,
     countryBias: settings.location_country_bias,
+    categorySlugs: isAllCategories
+      ? []
+      : resolvedCategories.map((c) => c.slug),
+    categoryLabels: resolvedLabels,
+    allCategories: isAllCategories,
   });
   const runtime = globalThis as typeof globalThis & {
     EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
