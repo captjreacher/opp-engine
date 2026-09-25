@@ -100,9 +100,7 @@ describe("Multi-category discovery test suite", () => {
     })).toEqual({});
 
     // Server-side validation rejects "all" string in category_slugs
-    expect(edgeSource).toContain(
-      'validation.category_slugs =\n      "Use all_categories: true or select individual categories.";',
-    );
+    expect(edgeSource).toMatch(/validation\.category_slugs\s*=\s*"Use all_categories: true or select individual categories\.";/);
   });
 
   it("4. handles state transition: switching All -> individual category", () => {

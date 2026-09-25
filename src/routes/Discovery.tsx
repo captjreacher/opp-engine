@@ -29,10 +29,12 @@ import {
   type OpportunityCategory,
 } from "../lib/categories";
 import {
+  INITIAL_DISCOVERY_CATEGORY_STATE,
   candidateEligibilityClassification,
   candidateEligibilityDisplay,
   candidateMayProceed,
   candidateNeedsEligibilityAcknowledgement,
+  categorySelectionPayload,
   isActiveDiscoveryStatus,
   validateDiscoveryInput,
 } from "../lib/discovery";
@@ -53,7 +55,12 @@ import {
 } from "../lib/scenarios";
 import type { DiscoveryCandidate, DiscoveryRun, DiscoverySearchInput } from "../lib/types";
 
-const initialForm: DiscoverySearchInput = {
+type DiscoveryFormState = DiscoverySearchInput & {
+  all_categories: boolean;
+  category_slugs: string[];
+};
+
+const initialForm: DiscoveryFormState = {
   location: "",
   industry: "",
   keywords: "",
@@ -64,6 +71,8 @@ const initialForm: DiscoverySearchInput = {
   location_longitude: null,
   category_slug: null,
   category_label: null,
+  ...INITIAL_DISCOVERY_CATEGORY_STATE,
+  category_labels: [],
 };
 
 const fieldClass = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-accent-500";
@@ -337,7 +346,7 @@ function CategoryField(props: {
                 type="checkbox"
                 checked={isAllCategories}
                 onChange={() => {
-                  onChange([], true);
+                  onChange([], !isAllCategories);
                 }}
                 className="rounded border-slate-700 bg-slate-950 text-accent-500 focus:ring-accent-500"
               />
@@ -369,11 +378,7 @@ function CategoryField(props: {
                         } else {
                           if (checked) {
                             const next = selectedCategorySlugs.filter((s) => s !== cat.slug);
-                            if (next.length === 0) {
-                              onChange([], true);
-                            } else {
-                              onChange(next, false);
-                            }
+                            onChange(next, false);
                           } else {
                             onChange([...selectedCategorySlugs, cat.slug], false);
                           }
@@ -405,7 +410,7 @@ function CategoryField(props: {
 }
 
 export default function Discovery() {
-  const [form, setForm] = useState<DiscoverySearchInput>(initialForm);
+  const [form, setForm] = useState<DiscoveryFormState>(initialForm);
   const [structuredLocation, setStructuredLocation] = useState<StructuredLocation>(EMPTY_LOCATION);
   const [radiusTouched, setRadiusTouched] = useState(false);
   const [errors, setErrors] = useState<ReturnType<typeof validateDiscoveryInput>>({});
@@ -439,25 +444,22 @@ export default function Discovery() {
     return configured;
   }, [settings.radius_options_m, form.radius_m]);
 
-  const [selectedCategorySlugs, setSelectedCategorySlugs] = useState<string[]>([]);
-  const [isAllCategories, setIsAllCategories] = useState(true);
-
   const selectedScenario = useMemo(
     () => scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? null,
     [scenarios, selectedScenarioId],
   );
 
   const selectedCategories = useMemo(() => {
-    if (isAllCategories) return categories;
-    return findCategoriesBySlugs(categories, selectedCategorySlugs);
-  }, [categories, isAllCategories, selectedCategorySlugs]);
+    if (form.all_categories) return categories;
+    return findCategoriesBySlugs(categories, form.category_slugs);
+  }, [categories, form.all_categories, form.category_slugs]);
 
   const incompatibleCategories = useMemo(() => {
-    if (!selectedScenario || isAllCategories) return [];
+    if (!selectedScenario || form.all_categories) return [];
     return selectedCategories.filter(
       (cat) => !categorySupportsScenario(cat, selectedScenario.slug),
     );
-  }, [selectedCategories, selectedScenario, isAllCategories]);
+  }, [selectedCategories, selectedScenario, form.all_categories]);
 
   const categoryIncompatible = incompatibleCategories.length > 0;
 
@@ -579,16 +581,13 @@ export default function Discovery() {
   }
 
   async function start() {
-    const validation = validateDiscoveryInput(form, {
+    const categoryPayload = categorySelectionPayload(form, categories);
+    const validation = validateDiscoveryInput({ ...form, ...categoryPayload }, {
       maxResultLimit: settings.max_result_limit,
     });
     setErrors(validation);
     if (!selectedScenario) {
       setError("Choose an active opportunity scenario before starting discovery.");
-      return;
-    }
-    if (!isAllCategories && selectedCategorySlugs.length === 0) {
-      setError("Choose at least one category or select All categories.");
       return;
     }
     if (categoryIncompatible) {
@@ -600,27 +599,13 @@ export default function Discovery() {
     if (Object.keys(validation).length) return;
     setBusy("discover"); setError(null); setNotice(null); setCandidates([]); setSelected(new Set());
     try {
-      const selectedCategoryObjects = isAllCategories
-        ? []
-        : findCategoriesBySlugs(categories, selectedCategorySlugs);
-      const selectedLabels = isAllCategories ? [] : selectedCategoryObjects.map((c) => c.label);
-      const summaryLabel = formatCategorySummary(selectedLabels, isAllCategories);
-
       const payload: DiscoverySearchInput = {
         ...form,
         location: structuredLocation.label.trim(),
         location_place_id: structuredLocation.place_id,
         location_latitude: structuredLocation.latitude,
         location_longitude: structuredLocation.longitude,
-        category_slugs: isAllCategories ? [] : selectedCategorySlugs,
-        category_labels: selectedLabels,
-        all_categories: isAllCategories,
-        category_slug:
-          !isAllCategories && selectedCategoryObjects.length === 1
-            ? selectedCategoryObjects[0].slug
-            : null,
-        category_label: summaryLabel,
-        industry: summaryLabel,
+        ...categoryPayload,
         scenario_id: selectedScenario.id,
       };
       const response = await startDiscoveryRun(payload);
@@ -728,11 +713,11 @@ export default function Discovery() {
           <CategoryField
             categories={categories}
             categoryLoading={categoryLoading}
-            selectedCategorySlugs={selectedCategorySlugs}
-            isAllCategories={isAllCategories}
+            selectedCategorySlugs={form.category_slugs}
+            isAllCategories={form.all_categories}
             onChange={(slugs, isAll) => {
-              setSelectedCategorySlugs(slugs);
-              setIsAllCategories(isAll);
+              setForm((current) => ({ ...current, category_slugs: slugs, all_categories: isAll }));
+              setErrors((current) => ({ ...current, industry: undefined }));
             }}
             selectedScenario={selectedScenario}
             error={errors.industry ?? errors.category_slug}
@@ -748,7 +733,7 @@ export default function Discovery() {
             {errors.radius_m && <span className="mt-1 block text-xs text-rose-400">{errors.radius_m}</span>}
             <span className="mt-1 block text-xs text-slate-500">Options come from Admin · Discovery settings.</span>
           </label>
-          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || (!isAllCategories && selectedCategorySlugs.length === 0) || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setSelectedCategorySlugs([]); setIsAllCategories(true); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
+          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
         </div>
       </section>
 
