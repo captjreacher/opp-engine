@@ -940,6 +940,61 @@ function expandCategorySearchTerms(
   return terms;
 }
 
+interface DiscoverySearchTerm {
+  term: string;
+  category_slug: string | null;
+  category_label: string | null;
+}
+
+/** Interleave categories under one run-wide term ceiling, retaining provenance. */
+function expandCategoriesSearchTerms(
+  categories: Array<{ slug: string; label: string; search_terms: unknown }>,
+  keywords: string | null,
+  limit: number = MAX_DISCOVERY_SEARCH_TERMS,
+): DiscoverySearchTerm[] {
+  const bounded = clampInteger(limit, 1, MAX_DISCOVERY_SEARCH_TERMS, MAX_DISCOVERY_SEARCH_TERMS);
+  const perCategory = categories.map((category) =>
+    expandCategorySearchTerms(category, keywords, bounded),
+  );
+  const terms: DiscoverySearchTerm[] = [];
+  const seen = new Set<string>();
+  const offsets = perCategory.map(() => 0);
+  while (perCategory.some((categoryTerms, index) => offsets[index] < categoryTerms.length)) {
+    for (let index = 0; index < perCategory.length; index++) {
+      const categoryTerms = perCategory[index];
+      while (offsets[index] < categoryTerms.length) {
+        const term = categoryTerms[offsets[index]++];
+        const key = term.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        terms.push({
+          term,
+          category_slug: categories[index].slug,
+          category_label: categories[index].label,
+        });
+        if (terms.length >= bounded) return terms;
+        break;
+      }
+    }
+  }
+  return terms;
+}
+
+function discoveryExecutionEvidence(terms: DiscoverySearchTerm[]) {
+  return {
+    discovery_terms: terms.map(({ term }) => term),
+    category_labels: [...new Set(terms.map(({ category_label }) => category_label).filter(
+      (label): label is string => Boolean(label),
+    ))],
+  };
+}
+
+function formatCategorySummary(labels: string[], isAll: boolean): string {
+  if (isAll) return "All categories";
+  if (labels.length === 0) return "";
+  return labels.length === 1 ? labels[0] : `${labels[0]} + ${labels.length - 1} more`;
+}
+
 /** Registry categories are operator-selectable by slug only while active. */
 async function findActiveCategory(slug: string): Promise<CategoryRecord | null> {
   const { data, error } = await supabase
@@ -953,6 +1008,35 @@ async function findActiveCategory(slug: string): Promise<CategoryRecord | null> 
   if (!data) return null;
   const record = data as unknown as CategoryRecord & { status?: string };
   return record.status === "active" ? record : null;
+}
+
+async function findActiveCategories(slugs: string[]): Promise<CategoryRecord[]> {
+  const uniqueSlugs = [...new Set(slugs)];
+  if (!uniqueSlugs.length) return [];
+  const { data, error } = await supabase
+    .from("opportunity_categories")
+    .select("id,slug,label,description,search_terms,google_types,default_radius_m,compatible_scenarios,status")
+    .in("slug", uniqueSlugs);
+  if (error) throw error;
+  const bySlug = new Map(
+    ((data ?? []) as Array<CategoryRecord & { status?: string }>)
+      .filter((record) => record.status === "active")
+      .map((record) => [record.slug, record]),
+  );
+  return uniqueSlugs
+    .map((slug) => bySlug.get(slug))
+    .filter((record): record is CategoryRecord => Boolean(record));
+}
+
+async function listAllActiveCategories(): Promise<CategoryRecord[]> {
+  const { data, error } = await supabase
+    .from("opportunity_categories")
+    .select("id,slug,label,description,search_terms,google_types,default_radius_m,compatible_scenarios,status")
+    .eq("status", "active")
+    .order("sort_order", { ascending: true })
+    .order("label", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as CategoryRecord[];
 }
 
 /** Empty compatible_scenarios means the category is compatible with everything. */
@@ -1044,8 +1128,8 @@ async function executeDiscoveryRun(
     industry: string;
     keywords: string | null;
     resultLimit: number;
-    /** Expanded provider search terms; falls back to the legacy label query. */
-    terms?: string[];
+    /** Capped provider search plan; falls back to the legacy label query. */
+    searchPlan?: DiscoverySearchTerm[];
     radiusM?: number | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -1058,7 +1142,10 @@ async function executeDiscoveryRun(
   const latitude = input.latitude ?? null;
   const longitude = input.longitude ?? null;
   const countryBias = cleanText(input.countryBias, 8) ?? DEFAULT_LOCATION_COUNTRY_BIAS;
-  const terms = input.terms && input.terms.length ? input.terms : [industry];
+  const searchPlan: DiscoverySearchTerm[] = input.searchPlan?.length
+    ? input.searchPlan
+    : [{ term: industry, category_slug: null, category_label: industry }];
+  const executedTerms: DiscoverySearchTerm[] = [];
   try {
     const { error: startError } = await supabase
       .from("opportunity_discovery_runs")
@@ -1081,9 +1168,10 @@ async function executeDiscoveryRun(
     // place id so category expansion never duplicates a business.
     const places: PlacesResult[] = [];
     const seenPlaceIds = new Set<string>();
-    for (const term of terms) {
+    for (const searchTerm of searchPlan) {
+      executedTerms.push(searchTerm);
       const page = await searchPlacesText({
-        textQuery: [term, location].filter(Boolean).join(" "),
+        textQuery: [searchTerm.term, location].filter(Boolean).join(" "),
         maxResultCount: resultLimit,
         languageCode: "en",
         regionCode: countryBias,
@@ -1107,6 +1195,11 @@ async function executeDiscoveryRun(
       }
       if (places.length >= resultLimit) break;
     }
+    const { error: evidenceError } = await supabase
+      .from("opportunity_discovery_runs")
+      .update(discoveryExecutionEvidence(executedTerms))
+      .eq("id", runId);
+    if (evidenceError) throw evidenceError;
     const candidates = [];
     for (const place of places) {
       const businessName = cleanText(place.displayName?.text, 200);
@@ -1191,6 +1284,7 @@ async function executeDiscoveryRun(
       .update({
         status: "failed",
         current_stage: "discovery_failed",
+        ...discoveryExecutionEvidence(executedTerms),
         failures: 1,
         error_summary: [{ stage: "discovering", detail }],
         completed_at: new Date().toISOString(),
@@ -1217,9 +1311,9 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
 
   // Category collection input parsing
   const rawSlugs = Array.isArray(payload.category_slugs)
-    ? (payload.category_slugs
+    ? [...new Set(payload.category_slugs
         .map((s) => cleanText(s, 80))
-        .filter(Boolean) as string[])
+        .filter(Boolean) as string[])]
     : null;
   const singleSlug = cleanText(payload.category_slug, 80);
   const explicitAll = payload.all_categories === true;
@@ -1356,7 +1450,7 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
     isAllCategories,
   );
 
-  const terms = resolvedCategories.length
+  const searchPlan = resolvedCategories.length
     ? expandCategoriesSearchTerms(
         resolvedCategories,
         keywords,
@@ -1386,9 +1480,9 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
       category_slugs: isAllCategories
         ? []
         : resolvedCategories.map((c) => c.slug),
-      category_labels: resolvedLabels,
+      category_labels: [],
       all_categories: isAllCategories,
-      discovery_terms: terms,
+      discovery_terms: [],
     })
     .select("*")
     .single();
@@ -1398,16 +1492,11 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
     industry: categoryLabelSummary,
     keywords,
     resultLimit,
-    terms,
+    searchPlan,
     radiusM: radius,
     latitude,
     longitude,
     countryBias: settings.location_country_bias,
-    categorySlugs: isAllCategories
-      ? []
-      : resolvedCategories.map((c) => c.slug),
-    categoryLabels: resolvedLabels,
-    allCategories: isAllCategories,
   });
   const runtime = globalThis as typeof globalThis & {
     EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };

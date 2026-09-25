@@ -104,7 +104,8 @@ describe("controlled category contract", () => {
       "expandCategoriesSearchTerms(",
     );
     expect(edgeSource).toContain("MAX_DISCOVERY_SEARCH_TERMS");
-    expect(createDiscoveryRunBlock()).toContain("discovery_terms: terms");
+    expect(createDiscoveryRunBlock()).toContain("searchPlan");
+    expect(edgeSource).toContain(".update(discoveryExecutionEvidence(executedTerms))");
   });
 
   it("keeps free-text keywords optional and the legacy free-text category alive", () => {

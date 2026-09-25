@@ -1,4 +1,29 @@
 import type { DiscoveryCandidate, DiscoverySearchInput } from "./types";
+import { findCategoriesBySlugs, formatCategorySummary, type OpportunityCategory } from "./categories";
+
+export const INITIAL_DISCOVERY_CATEGORY_STATE = {
+  all_categories: true,
+  category_slugs: [] as string[],
+};
+
+export function categorySelectionPayload(
+  selection: Pick<DiscoverySearchInput, "all_categories" | "category_slugs">,
+  categories: OpportunityCategory[],
+) {
+  const allCategories = selection.all_categories === true;
+  const selected = allCategories ? [] : findCategoriesBySlugs(categories, selection.category_slugs ?? []);
+  const slugs = selected.map((category) => category.slug);
+  const labels = allCategories ? [] : selected.map((category) => category.label);
+  const summary = formatCategorySummary(labels, allCategories);
+  return {
+    all_categories: allCategories,
+    category_slugs: slugs,
+    category_labels: labels,
+    category_slug: !allCategories && selected.length === 1 ? selected[0].slug : null,
+    category_label: summary,
+    industry: summary,
+  };
+}
 
 export type DiscoveryValidationErrors = Partial<Record<keyof DiscoverySearchInput, string>>;
 
@@ -166,9 +191,10 @@ export function validateDiscoveryInput(
   const maxResultLimit = options.maxResultLimit ?? 20;
   const errors: DiscoveryValidationErrors = {};
   if (!input.location.trim()) errors.location = "Choose a search location.";
-  // A registry slug is the controlled path; the label keeps legacy runs valid.
-  const categorySelected =
-    Boolean(input.category_slug?.trim()) || Boolean(input.industry?.trim());
+  const categorySelected = input.all_categories === true ||
+    (Array.isArray(input.category_slugs)
+      ? input.category_slugs.length > 0
+      : Boolean(input.category_slug?.trim()) || Boolean(input.industry?.trim()));
   if (!categorySelected)
     errors.industry = "Choose an opportunity category.";
   if (

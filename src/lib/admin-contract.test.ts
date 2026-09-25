@@ -162,7 +162,8 @@ describe("admin category contract", () => {
     expect(runBlock).toContain("findActiveCategories");
     expect(runBlock).toContain("category_slugs:");
     expect(runBlock).toContain("category_label: categoryLabelSummary");
-    expect(runBlock).toContain("discovery_terms: terms");
+    expect(runBlock).toContain("discovery_terms: []");
+    expect(edgeSource).toContain(".update(discoveryExecutionEvidence(executedTerms))");
     // No admin mutation writes back into an existing run.
     expect(adminBlock()).not.toMatch(
       /opportunity_discovery_runs[\s\S]{0,400}?\.update\(/,

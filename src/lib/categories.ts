@@ -141,7 +141,8 @@ export function expandCategorySearchTerms(
 
 /**
  * Formats a collapsed category label summary for the UI.
- * - All categories (or empty list when isAll is true) -> "All categories"
+ * - Explicit All selection -> "All categories"
+ * - No selection -> "Choose categories"
  * - Single category -> "Commercial Interiors"
  * - Multiple categories -> "Commercial Interiors + 2 more"
  */
@@ -149,7 +150,8 @@ export function formatCategorySummary(
   labels: string[],
   isAll = false,
 ): string {
-  if (isAll || labels.length === 0) return "All categories";
+  if (isAll) return "All categories";
+  if (labels.length === 0) return "Choose categories";
   if (labels.length === 1) return labels[0];
   return `${labels[0]} + ${labels.length - 1} more`;
 }
