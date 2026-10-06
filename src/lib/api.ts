@@ -140,6 +140,24 @@ export function fetchOpportunityDetail(id: string): Promise<OppDetail> {
   return request<OppDetail>(`/${encodeURIComponent(id)}`);
 }
 
+export interface OpportunityBatch {
+  id: string;
+  name: string;
+  purpose: string;
+  record_filter: import("../../supabase/functions/_shared/opportunityBatches").BatchRecordFilter;
+  created_at: string;
+  updated_at: string;
+  member_count?: number;
+}
+export function createOpportunityBatch(input: { id: string; name: string; lead_ids: string[]; record_filter: OpportunityBatch["record_filter"] }): Promise<{ batch: OpportunityBatch }> {
+  return request("/batches", { method: "POST", body: JSON.stringify(input) });
+}
+export function fetchOpportunityBatches(): Promise<{ batches: OpportunityBatch[] }> { return request("/batches"); }
+export function fetchOpportunityBatch(id: string): Promise<{ batch: OpportunityBatch; opportunities: import("./types").OppRow[] }> { return request(`/batches/${encodeURIComponent(id)}`); }
+export function updateOpportunityBatch(id: string, fields: Pick<OpportunityBatch, "name" | "purpose" | "record_filter">): Promise<{ batch: OpportunityBatch }> {
+  return request(`/batches/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(fields) });
+}
+
 /** POST {VITE_API_BASE}/{id}/outreach -> { draft } (201) */
 export function createOutreachDraft(
   id: string,
