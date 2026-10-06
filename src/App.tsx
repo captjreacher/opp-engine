@@ -6,6 +6,7 @@ import OpportunityList from "./routes/OpportunityList";
 import OpportunityDetail from "./routes/OpportunityDetail";
 import OpportunityPipeline from "./routes/OpportunityPipeline";
 import Discovery from "./routes/Discovery";
+import OpportunityBatches from "./routes/OpportunityBatches";
 import Admin from "./routes/Admin";
 
 export default function App() {
@@ -18,6 +19,8 @@ export default function App() {
           <Route path="/" element={<Navigate to="/opportunities" replace />} />
           <Route path="/discovery" element={<Discovery />} />
           <Route path="/opportunities" element={<OpportunityList />} />
+          <Route path="/batches" element={<OpportunityBatches />} />
+          <Route path="/batches/:id" element={<OpportunityBatches />} />
           <Route path="/pipeline" element={<OpportunityPipeline />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/opportunities/:id" element={<OpportunityDetail />} />

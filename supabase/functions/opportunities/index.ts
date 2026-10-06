@@ -1,3 +1,5 @@
+import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
+import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Supabase Edge Function: `opportunities`
 // Standalone Local Business Opportunity Engine — the API boundary (Phase 1-5).
 //
@@ -3259,13 +3261,13 @@ async function listOpportunities(): Promise<Response> {
   const [leadRes, draftRes, auditRes, analysisEventRes] = await Promise.all([
     supabase
       .from("local_business_leads")
-      .select("id, business_name, suburb, region, category, status, updated_at")
+      .select("id, business_name, suburb, region, category, status, updated_at, enrichment_status, enrichment_diagnostics")
       .order("updated_at", { ascending: false }),
     supabase
       .from("local_business_outreach_drafts")
       .select("lead_id, status, created_at")
       .order("created_at", { ascending: false }),
-    supabase.from("local_business_audit_reports").select("lead_id"),
+    supabase.from("local_business_audit_reports").select("lead_id,assessment_id"),
     supabase
       .from("opportunity_console_audit_log")
       .select("lead_id, metadata, created_at")
@@ -3305,25 +3307,24 @@ async function listOpportunities(): Promise<Response> {
       created_at: string;
     }>,
   );
-  const auditLeadIds = new Set(
-    (auditRes.data ?? []).map((row) =>
-      String((row as { lead_id: string }).lead_id),
-    ),
-  );
   const opportunities = (
     (leadRes.data ?? []) as Array<Record<string, unknown>>
   ).map((lead) => {
     const analysisEvent = latestAnalysis.get(String(lead.id));
     const assessmentId = cleanText(analysisEvent?.metadata?.assessment_id, 80);
-    const assessment = assessmentId
+    const candidateAssessment = assessmentId
       ? (assessmentMap.get(assessmentId) ?? null)
       : null;
+    const assessment = candidateAssessment && assessmentIsCurrent(candidateAssessment.assessed_at, lead.enrichment_diagnostics) ? candidateAssessment : null;
     return {
       id: lead.id,
       business_name: lead.business_name,
       location: lead.suburb ?? lead.region ?? null,
       industry: lead.category ?? null,
       pipeline_status: lead.status ?? null,
+      enrichment_status: lead.enrichment_status ?? null,
+      enrichment_ready: enrichmentReadiness(lead.enrichment_status, lead.enrichment_diagnostics).ready,
+      enrichment_running: enrichmentReadiness(lead.enrichment_status, lead.enrichment_diagnostics).running,
       opportunity_score: assessment?.opportunity_score ?? null,
       demand_signal_score: assessment?.demand_signal_score ?? 0,
       trust_leakage_score: assessment?.trust_leakage_score ?? 0,
@@ -3332,7 +3333,7 @@ async function listOpportunities(): Promise<Response> {
       recommended_outreach_angle:
         assessment?.recommended_outreach_angle ?? null,
       assessed_at: assessment?.assessed_at ?? null,
-      has_audit: auditLeadIds.has(String(lead.id)),
+      has_audit: !!assessment && (auditRes.data ?? []).some((report) => report.lead_id === lead.id && report.assessment_id === assessment.id),
       outreach_status: latestDrafts.get(String(lead.id))?.status ?? null,
       updated_at: lead.updated_at,
     };
@@ -3342,7 +3343,13 @@ async function listOpportunities(): Promise<Response> {
       parseNumber(b.opportunity_score, Number.NEGATIVE_INFINITY) -
       parseNumber(a.opportunity_score, Number.NEGATIVE_INFINITY),
   );
-  return json({ opportunities });
+  const { data: tags, error: tagError } = await supabase.from("opportunity_batch_members")
+    .select("lead_id,opportunity_batches(id,name)");
+  if (tagError) throw tagError;
+  return json({ opportunities: opportunities.map((opportunity) => ({
+    ...opportunity,
+    batches: (tags ?? []).filter((tag) => tag.lead_id === opportunity.id).map((tag) => tag.opportunity_batches),
+  })) });
 }
 
 async function getOpportunity(id: string): Promise<Response> {
@@ -3409,7 +3416,7 @@ async function getOpportunity(id: string): Promise<Response> {
       ? "sent"
       : null;
   const visibleAssessment = resolveVisibleAssessment(
-    (assessments.data ?? []) as AssessmentRecord[],
+    ((assessments.data ?? []) as AssessmentRecord[]).filter((assessment) => assessmentIsCurrent(assessment.assessed_at, lead.enrichment_diagnostics)),
     cEvents as Array<{
       action: string;
       metadata?: JsonObject | null;
@@ -3421,6 +3428,10 @@ async function getOpportunity(id: string): Promise<Response> {
         (report) => report.assessment_id === visibleAssessment.id,
       ) ?? null)
     : null;
+
+  const { data: batchTags, error: batchTagsError } = await supabase.from("opportunity_batch_members")
+    .select("opportunity_batches(id,name)").eq("lead_id", id);
+  if (batchTagsError) throw batchTagsError;
 
   return json({
     lead,
@@ -3434,6 +3445,7 @@ async function getOpportunity(id: string): Promise<Response> {
     outcome_state,
     console_events: cEvents,
     visual_evidence: visualEvidence.data ?? [],
+    batches: (batchTags ?? []).map((tag) => tag.opportunity_batches),
   });
 }
 
@@ -3854,6 +3866,64 @@ async function setOutcome(
 // rows (source = operator_upload | licensed_external) from an operator-supplied
 // hosted image URL, explicitly flagged analysis_allowed = true and
 // storage_mode = managed. No image bytes are uploaded, downloaded or proxied.
+async function listOpportunityBatches(): Promise<Response> {
+  const { data, error } = await supabase.from("opportunity_batches")
+    .select("*,opportunity_batch_members(count)").order("created_at", { ascending: false });
+  if (error) throw error;
+  return json({ batches: (data ?? []).map((batch) => ({ ...batch, member_count: batch.opportunity_batch_members?.[0]?.count ?? 0 })) });
+}
+
+async function createOpportunityBatch(payload: JsonObject): Promise<Response> {
+  let recordFilter;
+  try { recordFilter = validateBatchFilter(payload.record_filter ?? {}); }
+  catch (error) { return json({ error: "invalid_filter", detail: String((error as Error).message) }, 400); }
+  const name = cleanText(payload.name, 120);
+  const ids = payload.lead_ids;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!name || !uuid.test(String(payload.id ?? "")) || !Array.isArray(ids) || ids.length > 500 || new Set(ids).size < 2 || ids.some((id) => typeof id !== "string" || !uuid.test(id))) {
+    return json({ error: "invalid_batch", detail: "Select 2–500 opportunities and provide a batch name." }, 400);
+  }
+  const { data, error } = await supabase.rpc("create_opportunity_batch", {
+    p_batch_id: payload.id, p_name: name, p_lead_ids: ids, p_record_filter: recordFilter,
+  });
+  if (error) return json({ error: "batch_creation_failed", detail: error.message }, 409);
+  return json({ batch: data }, 201);
+}
+
+async function getOpportunityBatch(id: string): Promise<Response> {
+  const [{ data: batch, error }, { data: members, error: memberError }] = await Promise.all([
+    supabase.from("opportunity_batches").select("*").eq("id", id).maybeSingle(),
+    supabase.from("opportunity_batch_members").select("lead_id").eq("batch_id", id),
+  ]);
+  if (error || memberError) throw error ?? memberError;
+  if (!batch) return json({ error: "not_found" }, 404);
+  const response = await listOpportunities();
+  const list = await response.json();
+  const memberIds = new Set((members ?? []).map((member) => member.lead_id));
+  return json({ batch, opportunities: list.opportunities.filter((row: { id: string }) => memberIds.has(row.id)) });
+}
+
+async function updateOpportunityBatch(id: string, payload: JsonObject): Promise<Response> {
+  const fields: JsonObject = { updated_at: new Date().toISOString() };
+  try {
+    if (Object.keys(payload).some((key) => !["name", "purpose", "record_filter"].includes(key))) throw new Error("Only name, purpose and record filter can be edited.");
+    if (payload.name !== undefined) {
+      if (typeof payload.name !== "string" || !payload.name.trim() || payload.name.length > 120) throw new Error("Name is required and must be at most 120 characters.");
+      fields.name = payload.name.trim();
+    }
+    if (payload.purpose !== undefined) {
+      if (typeof payload.purpose !== "string" || payload.purpose.length > 2000) throw new Error("Purpose must be at most 2000 characters.");
+      fields.purpose = payload.purpose.trim();
+    }
+    if (payload.record_filter !== undefined) fields.record_filter = validateBatchFilter(payload.record_filter);
+  } catch (error) { return json({ error: "invalid_batch", detail: String((error as Error).message) }, 400); }
+  const { data, error } = await supabase.from("opportunity_batches").update(fields).eq("id", id).select("*").maybeSingle();
+  if (error) throw error;
+  return data ? json({ batch: data }) : json({ error: "not_found" }, 404);
+}
+
+// ---- Batch handlers end
+
 async function addVisualEvidence(
   id: string,
   payload: Record<string, unknown>,
@@ -4033,6 +4103,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (!authorized(req)) return json({ error: "unauthorized" }, 401);
 
   try {
+    if (parts[0] === "batches") {
+      if (req.method === "GET" && parts.length === 1) return await listOpportunityBatches();
+      if (req.method === "POST" && parts.length === 1) return await createOpportunityBatch(await req.json());
+      if (req.method === "GET" && parts.length === 2) return await getOpportunityBatch(parts[1]);
+      if (req.method === "PATCH" && parts.length === 2) return await updateOpportunityBatch(parts[1], await req.json());
+      return json({ error: "not_found" }, 404);
+    }
     if (req.method === "GET" && parts.length === 0)
       return await listOpportunities();
     if (req.method === "GET" && parts.length === 1 && parts[0] === "pipeline")

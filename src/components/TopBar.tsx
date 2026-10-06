@@ -31,6 +31,7 @@ export default function TopBar() {
         <nav className="flex items-center gap-1">
           <NavLink to="/discovery" className={navClass}>Discovery</NavLink>
           <NavLink to="/opportunities" className={navClass}>Opportunities</NavLink>
+          <NavLink to="/batches" className={navClass}>Batches</NavLink>
           <NavLink to="/pipeline" className={navClass}>Pipeline</NavLink>
           <NavLink to="/admin" className={navClass}>Admin</NavLink>
         </nav>

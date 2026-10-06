@@ -11,6 +11,10 @@ export interface OppRow {
   location: string | null;
   industry: string | null;
   pipeline_status: string;
+  enrichment_status?: string | null;
+  enrichment_ready?: boolean;
+  enrichment_running?: boolean;
+  batches?: { id: string; name: string }[];
   /** Decimal string from Postgres numeric, e.g. "168.00". Parse with parseFloat. */
   opportunity_score: string | null;
   demand_signal_score: number;
@@ -237,6 +241,7 @@ export interface AddAnalysableEvidenceInput {
 
 /** Full detail response (GET {VITE_API_BASE}/{id}). */
 export interface OppDetail {
+  batches?: { id: string; name: string }[];
   lead: Lead;
   latest_assessment: Assessment | null;
   assessments: Assessment[];

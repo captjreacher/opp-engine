@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
   ApiNotConfiguredError,
   fetchOpportunities,
   isApiConfigured,
+  enrichOpportunity,
+  createOpportunityBatch,
 } from "../lib/api";
 import type { OppRow } from "../lib/types";
+import { canSelectOpportunity, enrichSelectedOpportunities, toggleOpportunitySelection } from "../lib/bulk-enrichment";
 import Badge, { toneForStatus } from "../components/Badge";
 import ScoreBar from "../components/ScoreBar";
 import Filters, {
@@ -38,6 +41,14 @@ export default function OpportunityList() {
   const [rows, setRows] = useState<OppRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPending, setBulkPending] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkTotal, setBulkTotal] = useState(0);
+  const [bulkFailures, setBulkFailures] = useState<{ id: string; name: string; error: string }[]>([]);
+  const [createdBatch, setCreatedBatch] = useState<{ id: string; name: string } | null>(null);
+  const pendingBatch = useRef<{ key: string; id: string; name: string } | null>(null);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTER_STATE);
 
   async function load() {
@@ -48,6 +59,7 @@ export default function OpportunityList() {
     try {
       const res = await fetchOpportunities();
       setRows(res.opportunities);
+      setSelected((current) => new Set([...current].filter((id) => res.opportunities.some((row) => row.id === id && canSelectOpportunity(row)))));
     } catch (err) {
       if (err instanceof ApiNotConfiguredError) {
         setError(err.message);
@@ -65,6 +77,43 @@ export default function OpportunityList() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!rows.some((row) => row.enrichment_running)) return;
+    const timer = setInterval(() => void load(), 5_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.some((row) => row.enrichment_running)]);
+
+  async function runBulkEnrichment() {
+    if (bulkPending) return;
+    const targets = rows.filter((row) => selected.has(row.id));
+    if (!targets.length) return;
+    setBulkPending(true);
+    setBulkProgress(0);
+    setBulkTotal(targets.length);
+    setBulkFailures([]);
+    setNotice(null);
+    setError(null);
+    try {
+      if (targets.length > 1) {
+        const key = targets.map((row) => row.id).sort().join(",");
+        if (pendingBatch.current?.key !== key) pendingBatch.current = { key, id: crypto.randomUUID(), name: `Batch ${new Date().toLocaleString()}` };
+        const result = await createOpportunityBatch({ id: pendingBatch.current.id, name: pendingBatch.current.name, lead_ids: targets.map((row) => row.id), record_filter: { search: "", ...filters } });
+        setCreatedBatch(result.batch);
+        pendingBatch.current = null;
+      }
+      const result = await enrichSelectedOpportunities(targets, enrichOpportunity, setBulkProgress);
+      setSelected((current) => toggleOpportunitySelection(current, result.started, false));
+      setBulkFailures(result.failures);
+      setNotice(`${result.started.length} of ${targets.length} selected opportunities queued for enrichment.${result.failures.length ? ` ${result.failures.length} failed to start; details below.` : " Status will refresh automatically."}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Batch creation failed. Enrichment was not started.");
+    } finally {
+      setBulkPending(false);
+    }
+  }
 
   const pipelineStatusOptions = useMemo(
     () => Array.from(new Set(rows.map((r) => r.pipeline_status))).sort(),
@@ -126,6 +175,11 @@ export default function OpportunityList() {
       );
   }, [rows, filters]);
 
+  const selectableVisible = filteredSortedRows.filter(canSelectOpportunity);
+  const visibleSelectedCount = filteredSortedRows.filter((row) => selected.has(row.id)).length;
+  const allVisibleSelected = selectableVisible.length > 0 && selectableVisible.every((row) => selected.has(row.id));
+  const selectionBusy = bulkPending;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -164,6 +218,11 @@ export default function OpportunityList() {
         </button>
       </div>
 
+      {notice && <p role="status" className="text-sm text-emerald-300">{notice}</p>}
+      {createdBatch && <Link className="block text-sm text-accent-400 hover:underline" to={`/batches/${createdBatch.id}`}>Open {createdBatch.name} — edit details and assess enriched records</Link>}
+      {bulkFailures.length > 0 && <ul role="alert" className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+        {bulkFailures.map((failure) => <li key={failure.id}>{failure.name}: {failure.error}</li>)}
+      </ul>}
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
           {error}
@@ -180,10 +239,27 @@ export default function OpportunityList() {
         />
       )}
 
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+        <span className="mr-auto text-sm text-slate-300">{selected.size} selected{selected.size > visibleSelectedCount ? ` (${selected.size - visibleSelectedCount} hidden by filters)` : ""}</span>
+        {selected.size > 1 && <span className="text-xs text-slate-400">Enriching this selection creates a batch.</span>}
+        <button type="button" disabled={selectionBusy || !selected.size} onClick={() => setSelected(new Set())}
+          className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-200 disabled:opacity-50">Clear selection</button>
+        <button type="button" onClick={() => void runBulkEnrichment()} disabled={selectionBusy || loading || !selected.size}
+          className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-50">
+          {bulkPending ? `Queuing ${bulkProgress} of ${bulkTotal}…` : `Enrich selected (${selected.size})`}
+        </button>
+      </div>
       <div className="overflow-x-auto rounded-lg border border-slate-800">
         <table className="min-w-full divide-y divide-slate-800 text-sm">
           <thead className="bg-slate-900/80">
             <tr>
+              <th className="px-3 py-2">
+                <input type="checkbox" aria-label="Select all visible eligible opportunities" checked={allVisibleSelected}
+                  ref={(input) => { if (input) input.indeterminate = !allVisibleSelected && selectableVisible.some((row) => selected.has(row.id)); }}
+                  disabled={selectionBusy || !selectableVisible.length}
+                  onChange={(event) => setSelected((current) => toggleOpportunitySelection(current, selectableVisible.map((row) => row.id), event.target.checked))}
+                  className="h-4 w-4 accent-sky-500" />
+              </th>
               <th className="px-3 py-2 text-left font-medium text-slate-400">
                 Business
               </th>
@@ -216,7 +292,14 @@ export default function OpportunityList() {
               const status = assessmentStatus(row);
 
               return (
-                <tr key={row.id} className="hover:bg-slate-900/50">
+                <tr key={row.id} className={selected.has(row.id) ? "bg-sky-500/10 hover:bg-sky-500/15" : "hover:bg-slate-900/50"}>
+                  <td className="px-3 py-2.5">
+                    <input type="checkbox" aria-label={`Select ${row.business_name}`} checked={selected.has(row.id)}
+                      disabled={selectionBusy || !canSelectOpportunity(row)}
+                      title={!canSelectOpportunity(row) ? "Already enriching or marked not suitable" : undefined}
+                      onChange={(event) => setSelected((current) => toggleOpportunitySelection(current, [row.id], event.target.checked))}
+                      className="h-4 w-4 accent-sky-500" />
+                  </td>
                   <td className="px-3 py-2.5">
                     <Link
                       to={`/opportunities/${row.id}`}
@@ -224,6 +307,7 @@ export default function OpportunityList() {
                     >
                       {row.business_name}
                     </Link>
+                    {row.batches?.map((batch) => <Link key={batch.id} to={`/batches/${batch.id}`} className="mt-1 mr-2 inline-block rounded bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300 hover:underline">{batch.name}</Link>)}
                     <div className="text-xs text-slate-500">
                       updated {formatTimestamp(row.updated_at)}
                     </div>
