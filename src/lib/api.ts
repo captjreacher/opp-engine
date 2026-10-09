@@ -141,6 +141,7 @@ export function fetchOpportunityDetail(id: string): Promise<OppDetail> {
 }
 
 export interface OpportunityBatch {
+  archived_at?: string | null;
   id: string;
   name: string;
   purpose: string;
@@ -161,7 +162,7 @@ export function updateOpportunityBatch(id: string, fields: Pick<OpportunityBatch
 /** POST {VITE_API_BASE}/{id}/outreach -> { draft } (201) */
 export function createOutreachDraft(
   id: string,
-  payload?: { subject?: string; body?: string },
+  payload?: { subject?: string; body?: string; template_id?: string },
 ): Promise<DraftResponse> {
   return request<DraftResponse>(`/${encodeURIComponent(id)}/outreach`, {
     method: "POST",
@@ -181,6 +182,7 @@ export function updateOutreachDraft(
     subject?: string;
     body?: string;
     status?: Exclude<DraftStatus, "sent">;
+    reviewed?: boolean;
   },
 ): Promise<DraftResponse> {
   return request<DraftResponse>(
@@ -204,9 +206,12 @@ export function sendOutreachDraft(
 ): Promise<SendResponse> {
   return request<SendResponse>(
     `/${encodeURIComponent(id)}/outreach/${encodeURIComponent(draftId)}/send`,
-    { method: "POST", body: JSON.stringify({}) },
+    { method: "POST", body: JSON.stringify({confirm_send:true}) },
   );
 }
+
+export function moveBatchMember(id:string,from:string,to:string) { return request(`/${encodeURIComponent(id)}/batch-membership`,{method:"POST",body:JSON.stringify({from,to,confirm_move:true})}); }
+export function archiveBatch(id:string) { return request(`/batches/${encodeURIComponent(id)}/archive`,{method:"POST",body:JSON.stringify({})}); }
 
 /** POST {VITE_API_BASE}/{id}/review -> { review_state, event } (201) */
 export function setReviewState(

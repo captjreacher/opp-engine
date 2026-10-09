@@ -109,13 +109,14 @@ function harness(
   });
   const createRun = new Function(
     "deps",
-    `const { cleanText, numberInRange, loadDiscoverySettings, resolveDiscoveryScenario, listAllActiveCategories, findActiveCategories, findActiveCategory, categorySupportsScenario, json, supabase, GOOGLE_PLACES_API_KEY, expandCategoriesSearchTerms, executeDiscoveryRun, formatCategorySummary, MIN_RADIUS_M, MAX_RADIUS_M } = deps;\n${createSource}\nreturn createDiscoveryRun;`,
+    `const { cleanText, numberInRange, loadDiscoverySettings, enabledCompanyScenarios, resolveDiscoveryScenario, listAllActiveCategories, findActiveCategories, findActiveCategory, categorySupportsScenario, json, supabase, GOOGLE_PLACES_API_KEY, expandCategoriesSearchTerms, executeDiscoveryRun, formatCategorySummary, MIN_RADIUS_M, MAX_RADIUS_M } = deps;\n${createSource}\nreturn createDiscoveryRun;`,
   )({
     cleanText,
     numberInRange: (value: unknown, min: number, max: number) => {
       const number = Number(value);
       return value == null || !Number.isFinite(number) || number < min || number > max ? null : number;
     },
+    enabledCompanyScenarios: async () => [{id:"scenario-1",slug:"local-digital-presence",version:1,status:"active",assessment_config:{},discovery_config:{}}],
     loadDiscoverySettings: async () => ({
       default_result_limit: 10,
       max_result_limit: 20,

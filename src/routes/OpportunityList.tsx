@@ -296,7 +296,7 @@ export default function OpportunityList() {
                   <td className="px-3 py-2.5">
                     <input type="checkbox" aria-label={`Select ${row.business_name}`} checked={selected.has(row.id)}
                       disabled={selectionBusy || !canSelectOpportunity(row)}
-                      title={!canSelectOpportunity(row) ? "Already enriching or marked not suitable" : undefined}
+                      title={row.batches?.some(batch=>batch.active) ? `Already in active batch: ${row.batches.filter(batch=>batch.active).map(batch=>batch.name).join(", ")}. Open the record to move it explicitly.` : !canSelectOpportunity(row) ? "Already enriching or marked not suitable" : undefined}
                       onChange={(event) => setSelected((current) => toggleOpportunitySelection(current, [row.id], event.target.checked))}
                       className="h-4 w-4 accent-sky-500" />
                   </td>
@@ -307,6 +307,7 @@ export default function OpportunityList() {
                     >
                       {row.business_name}
                     </Link>
+                    {row.company_scenarios?.map(match=><span key={match.scenario_key} className="mr-2 text-xs text-slate-400">{match.scenario_key}: {match.state}</span>)}
                     {row.batches?.map((batch) => <Link key={batch.id} to={`/batches/${batch.id}`} className="mt-1 mr-2 inline-block rounded bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300 hover:underline">{batch.name}</Link>)}
                     <div className="text-xs text-slate-500">
                       updated {formatTimestamp(row.updated_at)}
