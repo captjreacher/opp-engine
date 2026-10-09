@@ -3120,8 +3120,6 @@ async function processCandidateBatch(
         entityRef: candidate.business_name,
         status: "failed",
         payload: {
-          run_id: runId,
-          lead_id: leadId,
           error: "eligibility_gate_blocked",
           ...errorInfo,
         },
@@ -3601,6 +3599,43 @@ async function pipelineView(): Promise<Response> {
     conversions: distinct("opportunity_converted"),
   };
   return json({ metrics, opportunities });
+}
+
+// PATCH /:id — the supported disposition is "not suitable", never arbitrary lead edits.
+async function updateOpportunityLead(id: string, payload: Record<string, unknown>): Promise<Response> {
+  if (!payload || typeof payload !== "object" || payload.status !== "disqualified" || Object.keys(payload).some((key) => key !== "status")) {
+    return json({ error: "invalid_status", detail: "Only marking an opportunity not suitable is supported." }, 400);
+  }
+  const { data, error } = await supabase.from("local_business_leads")
+    .update({ status: "disqualified", updated_at: new Date().toISOString() })
+    .eq("id", id).or(recordMutationFilter())
+    .select("id,status").maybeSingle();
+  if (error) throw error;
+  if (!data) return await recordUnavailable(id);
+  return json({ id: data.id, status: data.status });
+}
+
+async function recordUnavailable(id: string): Promise<Response> {
+  const { data, error } = await supabase.from("local_business_leads")
+    .select("id").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data
+    ? json({ error: "enrichment_running", detail: "Wait for enrichment to finish before changing this record." }, 409)
+    : json({ error: "not_found" }, 404);
+}
+
+function recordMutationFilter(): string {
+  // Apply the console's three-minute abandonment rule in the mutation itself;
+  // a newly queued enrichment run must not slip through a separate pre-check.
+  const cutoff = new Date(Date.now() - 180_000).toISOString();
+  const queued = "enrichment_diagnostics->>queue_requested_at";
+  const started = "enrichment_diagnostics->enrichment_execution->>started_at";
+  return [
+    "enrichment_status.is.null", "enrichment_status.neq.enriching",
+    `${queued}.lte.${cutoff}`,
+    `and(${queued}.is.null,${started}.lte.${cutoff})`,
+    `and(${queued}.is.null,${started}.is.null)`,
+  ].join(",");
 }
 
 async function createOutreach(

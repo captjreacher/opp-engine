@@ -173,11 +173,28 @@ upgrade. Set `OPP_TEST_DATABASE` to a disposable `opp_company_test*` database an
 `OPP_TEST_PSQL` to psql; localhost port defaults to 55482. The suite recreates that
 database's public schema. Without these variables the eight integration tests skip.
 
-Final validation: all 320 tests across 28 files pass, including eight local
-PostgreSQL integration tests. Frontend build/typecheck and `git diff --check` pass.
-The new shared scenario helper passes Deno check. Four existing Windows
-CRLF-sensitive contract tests are corrected by normalizing line endings. Three
-existing Deno type-check errors remain in the foundation (duplicate run/lead
-keys and the undefined `updateOpportunityLead` handler). These are release
-blockers to resolve separately before deploying. No real email, credential
-change, production seed/migration, merge or deployment is authorized by this PR.
+PR #10 contains 25 changed files against main. This follow-up changes only the
+Edge Function, this report and the new disposition-handler regression tests.
+The four formerly uncommitted edits are incorporated in `65a26cb`; that was a
+clean, synchronized starting point, with no unrelated local edits to stage.
+
+Final validation: 85 focused tests across seven files pass; all 331 full-suite
+tests across 29 files pass with zero skipped tests. All eight PostgreSQL
+integration tests execute on the disposable `opp_company_test` database at
+`127.0.0.1:55482`, including during the full suite. Frontend build/typecheck,
+the full Edge Function Deno check and `git diff --check` pass.
+
+The duplicate event payload keys were removed because the existing diagnostics
+object already carries the same run/lead IDs. The missing `PATCH /:id` handler is
+restored to its intended narrow contract: only `{status: "disqualified"}` is
+accepted, and an atomic enrichment-freshness predicate prevents changing a record
+while enrichment runs. Missing records return 404; active enrichment returns
+409; database errors propagate. No arbitrary lead-edit or delete endpoint is
+added. Eleven handler regression tests cover these boundaries.
+
+The four Windows CRLF-sensitive tests were corrected in the earlier hardening
+commit. No Deno/typecheck or test failures remain. Release still requires verified
+Billing/website/scenario/template configuration, a full production-schema upgrade
+review and explicit resolution of any legacy overlapping memberships. Hermes
+weekly GBP jobs/results delivery remain unverified. PR #10 remains draft. No real
+email, credential change, production seed/migration, merge or deployment occurred.
