@@ -695,7 +695,7 @@ export default function Discovery() {
 
       <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
         <div className="mb-5 grid gap-3 border-b border-slate-800 pb-5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <label className="text-sm text-slate-300">Opportunity scenario *
+          <label className="text-sm text-slate-300">Discovery search profile *
             <select className={fieldClass} value={selectedScenarioId} disabled={scenarioLoading || scenarios.length === 0} onChange={(event) => chooseScenario(event.target.value)}>
               {scenarios.length === 0 && <option value="">{scenarioLoading ? "Loading scenarios…" : "No active scenarios"}</option>}
               {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name} · v{scenario.version}</option>)}
@@ -703,7 +703,7 @@ export default function Discovery() {
           </label>
           <div className="rounded-md border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-400">
             <p className="font-medium text-slate-200">{selectedScenario?.name ?? "Scenario required"}</p>
-            <p className="mt-1">{selectedScenario?.description ?? "The scenario determines the assessment, report and commercial outcome path."}</p>
+            <p className="mt-1">{selectedScenario?.description}</p><p className="mt-1">Each company is evaluated against all enabled scenarios relevant to this search; this profile controls provider search defaults.</p>
           </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -762,7 +762,7 @@ export default function Discovery() {
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 p-4"><h2 className="mr-auto text-sm font-semibold text-slate-200">Candidates <span className="text-slate-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before importing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before scoring." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("assess")}>Score selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before auditing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("audit")}>Generate audits</button></div>
         {!run ? <p className="p-8 text-center text-sm text-slate-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-950/50 text-xs text-slate-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Eligibility", "Score", "Assessment", "Audit", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-slate-800">{candidates.map((candidate) => { const eligibility = candidateEligibilityDisplay(candidate); return <tr key={candidate.id} className="hover:bg-slate-800/30">
           <td className="px-3 py-3"><input aria-label={`Select ${candidate.business_name}`} type="checkbox" checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(candidate.id) ? next.delete(candidate.id) : next.add(candidate.id); return next; })} /></td>
-          <td className="whitespace-nowrap px-3 py-3 font-medium text-slate-200">{candidate.business_name}</td><td className="px-3 py-3 text-slate-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.industry ?? "—"}</td>
+          <td className="whitespace-nowrap px-3 py-3 font-medium text-slate-200">{candidate.business_name}<div className="mt-1 text-xs text-slate-400">{candidate.scenario_matches?.map(match => `${match.scenario_key}: ${match.state}`).join(" · ")}</div></td><td className="px-3 py-3 text-slate-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.industry ?? "—"}</td>
           <td className="max-w-44 truncate px-3 py-3">{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">Visit</a> : "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.email ? "Email" : candidate.phone ? "Phone" : "None"}</td>
           <td className="px-3 py-3"><Badge tone={candidate.duplicate_lead_id ? "warning" : "success"}>{candidate.duplicate_lead_id ? "existing" : "new"}</Badge></td>
           <td className="whitespace-nowrap px-3 py-3"><Badge tone={eligibility.tone} title={candidate.eligibility_result?.reason ?? undefined}>{eligibility.label}</Badge></td>

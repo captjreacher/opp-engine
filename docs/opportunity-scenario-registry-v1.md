@@ -34,7 +34,7 @@ The existing scoring and audit implementation remains unchanged in the first mig
 
 The Discovery screen loads active scenarios through the read-only `opportunity-scenarios` Edge Function and requires the operator to choose a scenario before starting discovery.
 
-The selected scenario supplies discovery defaults such as result limit and radius. The client also includes `scenario_id` in the discovery request payload.
+The selected scenario remains the search profile supplying discovery defaults such as result limit and radius. The client includes `scenario_id`, but this no longer limits company evaluation to a single scenario. Each run snapshots all active scenarios compatible with its selected categories in `scenario_set`; each company receives every evaluation without first-match stopping. Stable scenario keys, version, confirmed/uncertain/unassessed state, observations, source and assessment date are retained. Missing evidence never establishes absence. Assessment and outreach continue to respect the originating category compatibility rules.
 
 The `opportunities` discovery handler now validates the requested scenario and persists it explicitly on the run (plus the immutable snapshot, filled by the database trigger).
 
@@ -70,7 +70,7 @@ Cockpit eligibility and the local duplicate state remain separate contracts; nei
 
 ## Next wiring steps
 
-1. Extend `SUPPORTED_DISCOVERY_SCENARIO_SLUGS` once a second scenario's discovery/assessment orchestration is genuinely implemented.
-2. Pass scenario provenance through assessment, report and outreach writes rather than relying on compatibility defaults.
-3. Add Cockpit pre-assessment eligibility and post-send handoff contracts.
-4. Render scenario CTAs in the customer-ready report and resolve Billing offer references.
+1. Review evidence rules for each draft scenario before activating it; the existing executable search profile is separate from multi-scenario company evaluation.
+2. Configure versioned outreach templates with Billing-owned offer IDs and verified destinations. Missing mappings block drafting and sending.
+3. Preserve the existing Cockpit eligibility/possible-match and post-send handoff contracts; send-time eligibility is freshly rechecked.
+4. Keep the Digital Assessment free. Resolve website and GBP offer journeys before enabling their templates; Growth Readiness Assessment is separate future work.

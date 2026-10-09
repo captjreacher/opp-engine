@@ -63,7 +63,7 @@ describe("batch API validation and persistence", () => {
     });
     const compiled = ts.transpileModule(handlersSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
     const get = new Function("supabase", "json", "listOpportunities", `${compiled}; return getOpportunityBatch;`)({ from }, (body: unknown) => new Response(JSON.stringify(body)), async () => new Response(JSON.stringify({ opportunities: [{ id: "a" }, { id: "b" }, { id: "outside" }] })));
-    expect((await (await get("batch")).json()).opportunities).toEqual([{ id: "a" }, { id: "b" }]);
+    expect((await (await get("batch")).json()).opportunities).toEqual([{ id: "a",batch_member_active:true }, { id: "b",batch_member_active:true }]);
     expect(from.mock.calls.map(([table]) => table)).toEqual(["opportunity_batches", "opportunity_batch_members"]);
   });
   it("requires at least two distinct opportunity records", async () => {
