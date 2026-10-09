@@ -2773,7 +2773,7 @@ async function runOpportunityAnalysis(
   let assessment = (assessments ?? [])[0] as AssessmentRecord | undefined;
   const leadUpdatedAt = Date.parse(String(lead.updated_at ?? ""));
   const assessmentUpdatedAt = Date.parse(String(assessment?.assessed_at ?? ""));
-  const activeScenarios=await enabledCompanyScenarios();
+  const activeScenarios=await applicableCompanyScenarios(leadId);
   const previousMatches=(assessment as unknown as {scenario_matches?:ScenarioMatch[]} | undefined)?.scenario_matches??[];
   const scenarioSetCurrent=previousMatches.length===activeScenarios.length && activeScenarios.every(s=>previousMatches.some(m=>m.scenario_id===s.id && m.scenario_version===s.version));
   const canPromoteExisting =
@@ -3282,19 +3282,33 @@ async function enabledCompanyScenarios(): Promise<CompanyScenario[]> {
   for(const scenario of (data??[]) as CompanyScenario[]) if(!latest.has(scenario.slug) || latest.get(scenario.slug)!.version<scenario.version) latest.set(scenario.slug,scenario);
   return [...latest.values()];
 }
+async function applicableCompanyScenarios(leadId:string): Promise<CompanyScenario[]> {
+  const active=await enabledCompanyScenarios();
+  const candidate=await candidateForLead(leadId);
+  if(!candidate?.run_id) return active; // Legacy companies have no category restriction.
+  const {data:run,error}=await supabase.from("opportunity_discovery_runs").select("category_slugs,category_slug,all_categories,scenario_set").eq("id",candidate.run_id).single();
+  if(error) throw error;
+  const slugs=Array.isArray(run.category_slugs)&&run.category_slugs.length?run.category_slugs:run.category_slug?[run.category_slug]:[];
+  if(run.all_categories || !slugs.length) return active;
+  const {data:categories,error:categoryError}=await supabase.from("opportunity_categories").select("slug,compatible_scenarios").in("slug",slugs);
+  if(categoryError) throw categoryError;
+  if(!categories?.length) {
+    const snapshot=(run.scenario_set??[]) as CompanyScenario[];
+    return active.filter(scenario=>snapshot.some(previous=>previous.slug===scenario.slug));
+  }
+  return active.filter(scenario=>categories.some(category=>categorySupportsScenario(category,scenario.slug)));
+}
 async function companyMatches(leadId:string): Promise<ScenarioMatch[]> {
   const {data,error}=await supabase.from("opportunity_company_scenarios").select("*").eq("lead_id",leadId);
   if(error) throw error; return (data ?? []) as ScenarioMatch[];
 }
 async function persistCompanyMatches(leadId:string,matches:ScenarioMatch[],replace=false) {
-  const previous=replace?[]:await companyMatches(leadId);
-  matches=matches.filter(match=>!previous.some(old=>old.scenario_key===match.scenario_key && old.state=== "confirmed"));
   if(!matches.length) return;
-  const {error}=await supabase.from("opportunity_company_scenarios").upsert(matches.map(m=>({...m,lead_id:leadId})),{onConflict:"lead_id,scenario_key"});
+  const {error}=await supabase.rpc("persist_opportunity_company_scenarios",{p_lead_id:leadId,p_matches:matches,p_replace:replace});
   if(error) throw error;
 }
 async function outreachOptions(id:string) {
-  const active=await enabledCompanyScenarios();
+  const active=await applicableCompanyScenarios(id);
   const {data:assessment,error:assessmentError}=await supabase.from("local_business_lead_assessments").select("scenario_matches,assessed_at").eq("lead_id",id).order("assessed_at",{ascending:false}).limit(1).maybeSingle();
   if(assessmentError) throw assessmentError;
   const matches=((assessment?.scenario_matches??[]) as ScenarioMatch[]).filter(m=>active.some(s=>s.id===m.scenario_id && s.version===m.scenario_version));
@@ -3783,9 +3797,12 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
   if(candidate && !classificationAllowsProgress(eligibilityClassification(candidate as JsonObject),candidate.eligibility_acknowledged===true)) return json({error:"outreach_not_commercially_eligible"},422);
   const { data: lead } = await supabase
     .from("local_business_leads")
-    .select("business_name, email")
+    .select("business_name, email, phone, status")
     .eq("id", id)
     .maybeSingle();
+  if(!lead || lead.status==="disqualified") return json({error:"outreach_not_commercially_eligible"},422);
+  const {data:eligibility,error:eligibilityError}=await supabase.rpc("check_prospect_eligibility",{p_business_name:lead.business_name,p_email:lead.email,p_phone:lead.phone});
+  if(eligibilityError || !classificationAllowsProgress(String(eligibility?.classification??"unknown"),candidate?.eligibility_acknowledged===true)) return json({error:"outreach_not_commercially_eligible",detail:"Current Cockpit eligibility could not be confirmed."},422);
   const prospectEmail = (lead?.email ?? "").trim();
 
   const recipient = OVERRIDE_TO || (LIVE ? prospectEmail : "");
@@ -3816,7 +3833,7 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
       ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
       : "") + htmlFromBody(String(draft.body ?? ""));
 
-  const {error:claimError}=await supabase.from("opportunity_outreach_send_claims").insert({draft_id:draftId});
+  const {error:claimError}=await supabase.from("opportunity_outreach_send_claims").insert({draft_id:draftId,lead_id:id});
   if(claimError) return json({error:"send_claim_exists",detail:"A prior send attempt requires explicit reconciliation."},409);
   try {
     await sendSmtpEmail(smtp, { subject, text, html }, draftId, recipient);
@@ -3969,7 +3986,11 @@ async function createOpportunityBatch(payload: JsonObject): Promise<Response> {
   const { data, error } = await supabase.rpc("create_opportunity_batch", {
     p_batch_id: payload.id, p_name: name, p_lead_ids: ids, p_record_filter: recordFilter,
   });
-  if (error) return json({ error: "batch_creation_failed", detail: error.message }, 409);
+  if (error) {
+    const {data:memberships,error:membershipError}=await supabase.from("opportunity_batch_members").select("lead_id,opportunity_batches(id,name)").in("lead_id",ids).is("released_at",null);
+    if(membershipError) throw membershipError;
+    return json({ error: "batch_creation_failed", detail: error.message, existing_memberships:memberships??[] }, 409);
+  }
   return json({ batch: data }, 201);
 }
 

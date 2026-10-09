@@ -165,6 +165,8 @@ export default function OpportunityDetail() {
   }
 
   useEffect(() => {
+    // A manual choice belongs to this company, never the previously viewed one.
+    setSelectedTemplate("");
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);

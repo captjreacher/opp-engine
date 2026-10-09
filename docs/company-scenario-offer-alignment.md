@@ -16,6 +16,8 @@ The six more specific scenarios are drafts, not enabled: website-improvement,
 local-search-visibility, reputation-trust, lead-capture-conversion,
 business-systems-gap and automation-opportunity. This PR does not activate them.
 Their evidence rules and offer mappings require configuration review first.
+Category compatibility is reapplied during assessment and outreach, so an enabled
+scenario unrelated to the company's discovery categories cannot supply outreach.
 
 Existing canonical import deduplication is reused. Tags are unique by canonical
 lead and scenario slug; slug is stable across registry versions, while version,
@@ -34,10 +36,11 @@ rules the existing umbrella scenario uses recorded enrichment trust signals;
 other scenarios remain unassessed rather than gaining fabricated findings.
 
 The existing generated score is `1.5 * demand_signal_score + trust_leakage_score`
-(0–250). Demand retains its existing calculation. Trust uses the greater of the
-existing trust score and strongest supported finding. Other independent findings
-add one twentieth of their score each, capped at ten points; trust remains capped
-at 100. Evidence keys are deduplicated, taking the strongest score for a shared
+(0–250). Demand retains its existing calculation. Supported scenario evidence uses
+the strongest finding plus one twentieth of each other independent finding's
+score, capped at ten extra points. Trust takes the greater of this combined signal
+and the existing trust score, capped at 100; support is not added again on top of
+the baseline. Evidence keys are deduplicated, taking the strongest score for a shared
 key. Configure the same key for the same underlying observation across scenarios.
 Scenario count alone adds nothing and does not indicate buying readiness.
 
@@ -51,10 +54,14 @@ Archiving releases active members without deleting history. Historical members
 remain visible but are excluded from processing in their former Batch. The Batch
 record filter and text-search UX remain intact.
 
-The migration preserves legacy overlap rows and chooses the most recently
-created Batch as active, with Batch ID as a deterministic tie-breaker. Review
-actual overlaps and this policy before applying the migration. No production
-migration or history repair has been performed.
+The migration stops if legacy overlap rows exist. It never silently chooses an
+active Batch or deletes historical membership. Before applying it, inspect
+`select lead_id, array_agg(batch_id) from opportunity_batch_members group by
+lead_id having count(*) > 1`. If overlaps exist, prepare an explicitly reviewed
+resolution retaining history as part of the upgrade; this is a release prerequisite.
+No production migration or history repair has been performed. Canonical-company
+locks also serialize discovery tag persistence so incomplete reimports cannot
+overwrite confirmed assessment findings.
 
 ## Templates, review and send
 
@@ -82,7 +89,9 @@ discovery nor assessment nor selection sends anything. Send-time validation
 rechecks the mapping/render and assessment currency, and preserves the existing
 eligibility/suppression/possible-match rules and sent-state protections.
 
-An atomic draft send claim prevents concurrent attempts. Failed or ambiguous
+An atomic send claim unique by both company and draft prevents concurrent attempts,
+including attempts using different drafts for the same company. Cockpit eligibility
+is freshly checked before SMTP; unknown or failed checks block sending. Failed or ambiguous
 delivery retains the claim and requires explicit delivery reconciliation; no
 automatic retry or claim-reset endpoint is introduced. Selection, scenario keys,
 template version, offer, destination, findings and send outcome are retained.
@@ -105,6 +114,16 @@ Existing identities and proposed mapping, all currently blocked for outreach:
 | GBP creation plus optimisation | No identity found in inspected catalogue, drafts/history; propose one-off creation/optimisation offer plus recurring reporting plan for Billing review | Separate GBP offer page required; no route invented |
 | Existing GBP optimisation | No identity found; propose a separate one-off optimisation offer using the reviewed recurring reporting plans | Separate GBP offer page required |
 | Digital Assessment | Free CTA; no paid product created | Verify the assessment request destination before enabling a template |
+
+Proposed compatible templates for `website-improvement` are Small Business Single
+Service (`plan-maximisedai-small-business-website-1-service`), Small Business
+Multi-Service (`plan-maximisedai-small-business-website-3-services`) and Tradie
+(`plan-maximisedai-tradie-website`), selected through explicit business/service-count
+review. For `local-search-visibility`, propose separate GBP creation/optimisation
+and existing-profile optimisation templates; their Billing IDs remain unresolved.
+The umbrella scenario may use a free Digital Assessment template once its request
+destination is approved. These are mapping proposals, not enabled records. No
+combined template is implied or automatically synthesized.
 
 HTTP checks returned 200 for `https://maximisedai.com/products/` and
 `https://maximisedai.com/contact/`. These are generic pages, not verified dedicated
@@ -152,15 +171,13 @@ and this migration against a minimal disposable fixture, including concurrent
 membership and send-claim requests. It does not validate a full production schema
 upgrade. Set `OPP_TEST_DATABASE` to a disposable `opp_company_test*` database and
 `OPP_TEST_PSQL` to psql; localhost port defaults to 55482. The suite recreates that
-database's public schema. Without these variables the six integration tests skip.
+database's public schema. Without these variables the eight integration tests skip.
 
-Final validation: 62 focused tests passed across six files; the full suite ran
-308 tests across 28 files, with 304 passed and the four inherited failures below.
-The six real PostgreSQL integration tests were enabled and passed. `npm run build`
-and `git diff --check` passed. Deno checking found only the three baseline errors.
-Four existing Windows
-CRLF-sensitive contract tests fail on the unmodified foundation baseline, and
-three existing Deno type-check errors were reproduced there (duplicate run/lead
+Final validation: all 320 tests across 28 files pass, including eight local
+PostgreSQL integration tests. Frontend build/typecheck and `git diff --check` pass.
+The new shared scenario helper passes Deno check. Four existing Windows
+CRLF-sensitive contract tests are corrected by normalizing line endings. Three
+existing Deno type-check errors remain in the foundation (duplicate run/lead
 keys and the undefined `updateOpportunityLead` handler). These are release
 blockers to resolve separately before deploying. No real email, credential
 change, production seed/migration, merge or deployment is authorized by this PR.
