@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import ConfigBanner from "./components/ConfigBanner";
 import { isApiConfigured } from "./lib/api";
@@ -9,6 +9,9 @@ import Discovery from "./routes/Discovery";
 import OpportunityBatches from "./routes/OpportunityBatches";
 import Admin from "./routes/Admin";
 
+import BatchWorkspace from "./components/BatchWorkspace";
+import Dashboard from "./routes/Dashboard";
+
 export default function App() {
   return (
     <div className="min-h-full bg-slate-950">
@@ -16,10 +19,10 @@ export default function App() {
       {!isApiConfigured && <ConfigBanner />}
       <main className="mx-auto max-w-7xl px-4 py-6">
         <Routes>
-          <Route path="/" element={<Navigate to="/opportunities" replace />} />
+          <Route path="/" element={<Dashboard />} />
           <Route path="/discovery" element={<Discovery />} />
           <Route path="/opportunities" element={<OpportunityList />} />
-          <Route path="/batches" element={<OpportunityBatches />} />
+          <Route path="/batches" element={<BatchWorkspace />} />
           <Route path="/batches/:id" element={<OpportunityBatches />} />
           <Route path="/pipeline" element={<OpportunityPipeline />} />
           <Route path="/admin" element={<Admin />} />

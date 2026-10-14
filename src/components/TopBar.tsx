@@ -11,7 +11,7 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
 export default function TopBar() {
   return (
     <header className="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/95 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-3">
         <Link to="/opportunities" className="flex items-center gap-2">
           <span className="inline-flex h-6 w-6 items-center justify-center rounded bg-accent-500/20 text-accent-300 ring-1 ring-inset ring-accent-500/40">
             <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
@@ -28,7 +28,8 @@ export default function TopBar() {
           <span className="hidden text-sm text-slate-500 sm:inline">· Operator Console</span>
         </Link>
 
-        <nav className="flex items-center gap-1">
+        <nav className="flex flex-wrap items-center gap-1">
+          <NavLink to="/" end className={navClass}>Dashboard</NavLink>
           <NavLink to="/discovery" className={navClass}>Discovery</NavLink>
           <NavLink to="/opportunities" className={navClass}>Opportunities</NavLink>
           <NavLink to="/batches" className={navClass}>Batches</NavLink>
