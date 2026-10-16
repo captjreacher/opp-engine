@@ -3650,5 +3650,7 @@ export async function handler(req: Request) {
     // Never leave the watchdog armed past the response.
     clearTimeout(hardStopTimer);
   }
-if (import.meta.main) Deno.serve(handler);}
+}
+
+Deno.serve(handler);
 
