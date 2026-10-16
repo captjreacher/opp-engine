@@ -121,7 +121,8 @@ export default function OpportunityBatches() {
       <label className="block text-sm text-slate-300">Purpose<textarea className={`${input} mt-1`} value={purpose} maxLength={2000} rows={2} disabled={busy} onChange={(event) => setPurpose(event.target.value)} /></label>
       <h2 className="text-sm font-semibold text-slate-200">Record filter</h2>
       <p className="text-xs text-slate-400">Filters control which tagged records are shown and processed. Batch membership stays fixed.</p>
-      <label className="block text-sm text-slate-300">Business, location or industry<input className={`${input} mt-1`} value={filter.search} maxLength={300} disabled={busy} onChange={(event) => setFilter({ ...filter, search: event.target.value })} /></label>
+      <label className="block text-sm text-slate-300">Business, location or industry<input className={`${input} mt-1`} value={filter.search} placeholder="Search business, location or industry…" maxLength={300} disabled={busy} onChange={(event) => setFilter({ ...filter, search: event.target.value })} /></label>
+      {filter.search && <button type="button" className={button} disabled={busy} onClick={() => setFilter({ ...filter, search: "" })}>Clear text filter</button>}
       <fieldset disabled={busy}><Filters state={filter} onChange={(next) => setFilter({ ...filter, ...next })} pipelineStatusOptions={[...new Set(rows.map((row) => row.pipeline_status))]} outreachStatusOptions={[...new Set(rows.map((row) => row.outreach_status ?? "None"))]} maxScore={Math.max(1, ...rows.map((row) => Number(row.opportunity_score) || 0))} /></fieldset>
       <button className={button} type="button" disabled={busy || !dirty || !name.trim()} onClick={() => void save()}>Save batch details</button>
       {dirty && <span className="ml-3 text-xs text-amber-300">Save changes before processing records.</span>}
