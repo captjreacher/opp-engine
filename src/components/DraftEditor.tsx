@@ -51,6 +51,7 @@ export default function DraftEditor({
     setConfirmingSend(false);
   }, [draft.id, draft.subject, draft.body, draft.status]);
 
+  const mapped=Boolean(draft.selection);
   const isDraftStatus = draft.status === "draft";
   const isApproved = draft.status === "approved";
   const isSent = draft.status === "sent";
@@ -76,13 +77,14 @@ export default function DraftEditor({
         </div>
       )}
 
+      {draft.selection && <p className="text-sm">Template {draft.selection.template_id} v{draft.selection.template_version} · Scenarios {draft.selection.scenario_keys.join(", ")} · Offer {draft.selection.offer_id} · Destination {draft.selection.destination}. Recorded findings: {draft.selection.findings.map(f=>f.description).join("; ")}</p>}
       <div>
         <label className="mb-1 block text-xs font-medium text-slate-400">Subject</label>
         <input
           type="text"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
-          disabled={busy || isSent}
+          disabled={busy || isSent || mapped}
           className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft subject"
         />
@@ -93,7 +95,7 @@ export default function DraftEditor({
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          disabled={busy || isSent}
+          disabled={busy || isSent || mapped}
           rows={10}
           className="w-full resize-y rounded border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft body"
@@ -120,7 +122,7 @@ export default function DraftEditor({
           <button
             type="button"
             onClick={onApprove}
-            disabled={busy || !isDraftStatus}
+            disabled={busy || !isDraftStatus || dirty}
             title={!isDraftStatus ? "Only drafts in 'draft' status can be approved" : undefined}
             className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -131,10 +133,10 @@ export default function DraftEditor({
             <button
               type="button"
               onClick={() => setConfirmingSend(true)}
-              disabled={busy}
+              disabled={busy || dirty || sendFailed}
               className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {sendFailed ? "Retry send…" : "Send…"}
+              {sendFailed ? "Reconciliation required" : "Send…"}
             </button>
           )}
 
@@ -144,7 +146,7 @@ export default function DraftEditor({
               <button
                 type="button"
                 onClick={onSend}
-                disabled={busy}
+                disabled={busy || dirty || sendFailed}
                 className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {sending ? "Sending…" : "Confirm send"}
@@ -166,7 +168,7 @@ export default function DraftEditor({
 
       {isApproved && sendFailed && (
         <p className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          Last send attempt failed. You can retry — the draft is still approved.
+          The last send attempt failed or its delivery is uncertain. Reconcile the delivery outcome before another attempt.
         </p>
       )}
       {isApproved && !sendFailed && (

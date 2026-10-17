@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { analyzeOpportunity, enrichOpportunity, fetchOpportunityBatch, fetchOpportunityBatches, updateOpportunityBatch, type OpportunityBatch } from "../lib/api";
+import { archiveBatch, analyzeOpportunity, enrichOpportunity, fetchOpportunityBatch, fetchOpportunityBatches, updateOpportunityBatch, type OpportunityBatch } from "../lib/api";
 import type { OppRow } from "../lib/types";
 import Filters from "../components/Filters";
 import { canSelectOpportunity, enrichSelectedOpportunities } from "../lib/bulk-enrichment";
@@ -57,8 +57,10 @@ export default function OpportunityBatches() {
   }, [id, running, busy]);
 
   const matching = useMemo(() => rows.filter((row) => matchesBatchFilter(row, filter)), [rows, filter]);
-  const enrichTargets = matching.filter((row) => canSelectOpportunity(row) && !row.enrichment_ready);
-  const assessTargets = matching.filter((row) => canSelectOpportunity(row) && row.enrichment_ready && !row.assessed_at);
+  // Existing active membership prevents creating another batch, not work in its owning batch.
+  const actionable = matching.filter(row=>!batch?.archived_at && row.batch_member_active !== false && canSelectOpportunity({...row,batches:[]}));
+  const enrichTargets = actionable.filter(row=>!row.enrichment_ready);
+  const assessTargets = actionable.filter(row=>row.enrichment_ready && !row.assessed_at);
   const dirty = !!batch && (name !== batch.name || purpose !== batch.purpose || JSON.stringify(filter) !== JSON.stringify({ ...DEFAULT_BATCH_FILTER, ...batch.record_filter }));
 
   async function save() {
@@ -80,7 +82,7 @@ export default function OpportunityBatches() {
     const errors: string[] = [];
     try {
       if (action === "enrich") {
-        const result = await enrichSelectedOpportunities(targets, enrichOpportunity, (count) => setProgress(`Queuing ${count} of ${targets.length}…`));
+        const result = await enrichSelectedOpportunities(targets.map(row=>({...row,batches:[]})), enrichOpportunity, (count) => setProgress(`Queuing ${count} of ${targets.length}…`));
         succeeded = result.started.length;
         errors.push(...result.failures.map((failure) => `${failure.name}: ${failure.error}`));
       } else {
@@ -116,6 +118,7 @@ export default function OpportunityBatches() {
   return <div className="space-y-4">
     <Link className="text-sm text-accent-400" to="/batches">← All batches</Link>
     <h1 className="text-xl font-semibold text-slate-100">{batch.name}</h1>
+    {batch.archived_at ? <p className="text-sm text-slate-400">Archived — historical membership retained.</p> : <button className={button} disabled={busy} onClick={async()=>{if(!window.confirm("Archive this batch and release its active members? Historical membership is retained."))return;try{await archiveBatch(batch.id);setBatch({...batch,archived_at:new Date().toISOString()});}catch(err){setError(err instanceof Error?err.message:"Archive failed");}}}>Archive batch</button>}
     <section className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
       <label className="block text-sm text-slate-300">Name<input className={`${input} mt-1`} value={name} maxLength={120} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
       <label className="block text-sm text-slate-300">Purpose<textarea className={`${input} mt-1`} value={purpose} maxLength={2000} rows={2} disabled={busy} onChange={(event) => setPurpose(event.target.value)} /></label>

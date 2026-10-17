@@ -63,7 +63,7 @@ function autocompleteBlock(): string {
 /** SQL statements only: migration doc comments legitimately name what they must not touch. */
 function withoutSqlComments(source: string): string {
   return source
-    .split("\n")
+    .split(/\r?\n/)
     .map((line) => line.replace(/--.*$/, ""))
     .join("\n");
 }

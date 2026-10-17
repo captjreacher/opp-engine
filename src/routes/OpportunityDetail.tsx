@@ -1,3 +1,4 @@
+import CompanyScenarioPanel from "../components/CompanyScenarioPanel";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -120,6 +121,7 @@ export default function OpportunityDetail() {
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
 
   const [generatingDraft, setGeneratingDraft] = useState(false);
+  const [selectedTemplate,setSelectedTemplate]=useState("");
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [approvingDraft, setApprovingDraft] = useState(false);
@@ -147,6 +149,8 @@ export default function OpportunityDetail() {
     try {
       const res = await fetchOpportunityDetail(id);
       setDetail(res);
+      const options=res.outreach_options??[];
+      setSelectedTemplate(current=>options.some(t=>t.id===current)?current:(res.company_scenarios??[]).filter(m=>m.state==="confirmed").length===1 && options.length===1?options[0].id:"");
     } catch (err) {
       if (!silent) {
         setLoadError(errorMessage(err));
@@ -161,6 +165,8 @@ export default function OpportunityDetail() {
   }
 
   useEffect(() => {
+    // A manual choice belongs to this company, never the previously viewed one.
+    setSelectedTemplate("");
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -267,7 +273,7 @@ export default function OpportunityDetail() {
     setGeneratingDraft(true);
     setGenerateError(null);
     try {
-      await createOutreachDraft(id);
+      await createOutreachDraft(id,{template_id:selectedTemplate || undefined});
       await load();
     } catch (err) {
       setGenerateError(errorMessage(err));
@@ -295,10 +301,11 @@ export default function OpportunityDetail() {
 
   async function handleApproveDraft(draftId: string) {
     if (!id) return;
+    if(!window.confirm("I have reviewed the recorded findings, selected template, offer destination and rendered message.")) return;
     setApprovingDraft(true);
     setDraftMutationError(null);
     try {
-      await updateOutreachDraft(id, draftId, { status: "approved" });
+      await updateOutreachDraft(id, draftId, { status: "approved",reviewed:true });
       await load();
     } catch (err) {
       setDraftMutationError(errorMessage(err));
@@ -1346,6 +1353,8 @@ Enrichment
             </div>
           )}
 
+          <CompanyScenarioPanel detail={detail} selected={selectedTemplate} onSelect={setSelectedTemplate} onRefresh={()=>load({silent:true})} />
+          {!!latestDraft && <button type="button" disabled={generatingDraft || !selectedTemplate} onClick={handleGenerateDraft}>Regenerate from selected template</button>}
           {/* Draft workspace */}
           {!latestDraft ? (
             <div className="space-y-3">

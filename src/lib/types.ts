@@ -6,6 +6,7 @@
 
 /** A single row in the board/list response (GET {VITE_API_BASE}). */
 export interface OppRow {
+  company_scenarios?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
   id: string;
   business_name: string;
   location: string | null;
@@ -14,7 +15,8 @@ export interface OppRow {
   enrichment_status?: string | null;
   enrichment_ready?: boolean;
   enrichment_running?: boolean;
-  batches?: { id: string; name: string }[];
+  batches?: { id: string; name: string; active?: boolean }[];
+  batch_member_active?: boolean;
   /** Decimal string from Postgres numeric, e.g. "168.00". Parse with parseFloat. */
   opportunity_score: string | null;
   demand_signal_score: number;
@@ -95,6 +97,7 @@ export interface AuditReport {
 export type DraftStatus = "draft" | "approved" | "sent";
 
 export interface Draft {
+  selection?: { template_id: string; template_version: number; scenario_keys: string[]; offer_id: string; destination: string; findings: {description:string}[] };
   id: string;
   subject: string | null;
   body: string;
@@ -241,7 +244,9 @@ export interface AddAnalysableEvidenceInput {
 
 /** Full detail response (GET {VITE_API_BASE}/{id}). */
 export interface OppDetail {
-  batches?: { id: string; name: string }[];
+  batches?: { id: string; name: string; active?: boolean }[];
+  company_scenarios?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
+  outreach_options?: import("../../supabase/functions/_shared/companyScenarios").OutreachTemplate[];
   lead: Lead;
   latest_assessment: Assessment | null;
   assessments: Assessment[];
@@ -426,6 +431,7 @@ export interface DiscoveryEligibilityResult {
 }
 
 export interface DiscoveryCandidate {
+  scenario_matches?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
   id: string;
   run_id: string;
   source: string;

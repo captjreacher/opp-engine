@@ -1,7 +1,7 @@
 import type { OppRow, EnrichmentResponse } from "./types";
 
 export function canSelectOpportunity(row: OppRow): boolean {
-  return row.pipeline_status !== "disqualified" && !row.enrichment_running;
+  return row.pipeline_status !== "disqualified" && !row.enrichment_running && !row.batches?.some(batch => batch.active);
 }
 
 export function toggleOpportunitySelection(selected: ReadonlySet<string>, ids: string[], checked: boolean): Set<string> {
