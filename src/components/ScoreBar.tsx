@@ -28,13 +28,13 @@ export default function ScoreBar({
   return (
     <div className={compact ? "w-24" : "w-full"}>
       {!compact && (label || showValue) && (
-        <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
+        <div className="mb-1 flex items-center justify-between text-xs text-graphite-400">
           {label && <span>{label}</span>}
-          {showValue && <span className="font-mono text-slate-300">{value}</span>}
+          {showValue && <span className="font-mono text-graphite-300">{value}</span>}
         </div>
       )}
       <div
-        className={`relative overflow-hidden rounded-full bg-slate-800 ${
+        className={`relative overflow-hidden rounded-full bg-graphite-800 ${
           compact ? "h-1.5" : "h-2"
         }`}
       >
@@ -44,7 +44,7 @@ export default function ScoreBar({
         />
       </div>
       {compact && showValue && (
-        <span className="mt-0.5 block text-right text-[10px] font-mono text-slate-500">
+        <span className="mt-0.5 block text-right text-[10px] font-mono text-graphite-500">
           {value}
         </span>
       )}

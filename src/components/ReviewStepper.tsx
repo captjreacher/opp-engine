@@ -16,7 +16,7 @@ export default function ReviewStepper({ current }: ReviewStepperProps) {
   const currentIndex = REVIEW_STATE_ORDER.indexOf(current);
 
   return (
-    <ol className="flex items-center gap-2">
+    <ol className="flex flex-wrap items-center gap-2">
       {REVIEW_STATE_ORDER.map((state, idx) => {
         const isDone = idx < currentIndex;
         const isCurrent = idx === currentIndex;
@@ -28,16 +28,16 @@ export default function ReviewStepper({ current }: ReviewStepperProps) {
                   ? "bg-accent-500/20 text-accent-200 ring-1 ring-inset ring-accent-500/50"
                   : isDone
                     ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-inset ring-emerald-500/30"
-                    : "bg-slate-800/60 text-slate-500 ring-1 ring-inset ring-slate-700/50"
+                    : "bg-graphite-800/60 text-graphite-500 ring-1 ring-inset ring-graphite-700/50"
               }`}
             >
               <span
                 className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] ${
                   isCurrent
-                    ? "bg-accent-500 text-slate-950"
+                    ? "bg-accent-600 text-white"
                     : isDone
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-700 text-slate-400"
+                      ? "bg-emerald-500 text-graphite-950"
+                      : "bg-graphite-700 text-graphite-400"
                 }`}
               >
                 {isDone ? "✓" : idx + 1}
@@ -46,7 +46,7 @@ export default function ReviewStepper({ current }: ReviewStepperProps) {
             </div>
             {idx < REVIEW_STATE_ORDER.length - 1 && (
               <span
-                className={`h-px w-6 ${isDone ? "bg-emerald-500/40" : "bg-slate-700"}`}
+                className={`h-px w-6 ${isDone ? "bg-emerald-500/40" : "bg-graphite-700"}`}
                 aria-hidden="true"
               />
             )}

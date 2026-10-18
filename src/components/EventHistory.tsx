@@ -33,7 +33,7 @@ interface EventHistoryProps {
 /** Chronological timeline of operator console events (review transitions, draft actions). */
 export default function EventHistory({ events }: EventHistoryProps) {
   if (events.length === 0) {
-    return <p className="text-sm text-slate-500">No console events yet.</p>;
+    return <p className="text-sm text-graphite-500">No console events yet.</p>;
   }
 
   return (
@@ -44,16 +44,16 @@ export default function EventHistory({ events }: EventHistoryProps) {
             className="absolute left-0 top-1.5 h-2 w-2 rounded-full bg-accent-500"
             aria-hidden="true"
           />
-          <div className="flex-1 border-l border-slate-800 pb-1 pl-4 -ml-2">
+          <div className="flex-1 border-l border-graphite-800 pb-1 pl-4 -ml-2">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="text-sm font-medium text-slate-200">
+              <span className="text-sm font-medium text-graphite-200">
                 {humaniseAction(event.action)}
               </span>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-graphite-500">
                 {formatTimestamp(event.created_at)}
               </span>
             </div>
-            <div className="mt-0.5 text-xs text-slate-500">
+            <div className="mt-0.5 text-xs text-graphite-500">
               by {event.actor}
               {event.draft_id ? ` · draft ${event.draft_id.slice(0, 8)}` : ""}
             </div>

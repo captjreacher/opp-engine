@@ -220,18 +220,18 @@ export default function GuidedWorkflow({ state, onStepAction }: GuidedWorkflowPr
                   min-h-[2.25rem] text-xs font-medium whitespace-nowrap
                   ring-1 ring-inset transition-all duration-200
                   ${step.closedTerminal
-                    ? "bg-slate-800/60 text-slate-300 ring-slate-600/60"
+                    ? "bg-graphite-800/60 text-graphite-300 ring-graphite-600/60"
                     : step.isComplete
                       ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30"
                       : step.isCurrent
-                        ? `${colors.bg} ${colors.ring} text-slate-100`
-                        : "bg-slate-800/40 text-slate-500 ring-slate-700/50"
+                        ? `${colors.bg} ${colors.ring} text-graphite-100`
+                        : "bg-graphite-800/40 text-graphite-500 ring-graphite-700/50"
                   }
                   ${step.actionable
                     ? "cursor-pointer hover:brightness-125 hover:scale-105 active:scale-95"
                     : "cursor-default"
                   }
-                  ${step.isCurrent && step.actionable ? "ring-2 ring-accent-400/70 ring-offset-1 ring-offset-slate-900" : ""}
+                  ${step.isCurrent && step.actionable ? "ring-2 ring-accent-400/70 ring-offset-1 ring-offset-graphite-900" : ""}
                   ${step.isCurrent && step.actionable ? "shadow-[0_0_8px_-1px_rgba(72,182,255,0.45)]" : ""}
                 `}
               >
@@ -242,12 +242,12 @@ export default function GuidedWorkflow({ state, onStepAction }: GuidedWorkflowPr
                     text-[10px] font-bold leading-none
                     transition-all duration-200
                     ${step.closedTerminal
-                      ? "bg-slate-600 text-slate-300"
+                      ? "bg-graphite-600 text-graphite-300"
                       : step.isComplete
-                        ? "bg-emerald-500 text-slate-950"
+                        ? "bg-emerald-500 text-graphite-950"
                         : step.isCurrent
                           ? `${colors.dot} text-white`
-                          : "bg-slate-700 text-slate-400"
+                          : "bg-graphite-700 text-graphite-400"
                     }
                   `}
                   style={{ width: "1.125rem", height: "1.125rem" }}
@@ -306,15 +306,15 @@ export default function GuidedWorkflow({ state, onStepAction }: GuidedWorkflowPr
  */
 function connectorColor(steps: WorkflowStep[], idx: number): string {
   const next = steps[idx + 1];
-  if (!next) return "bg-slate-700";
+  if (!next) return "bg-graphite-700";
   if (next.closedTerminal) {
     // Lead-in to the closed-terminal node: muted, not emerald.
-    return allCompleteBefore(steps, idx) ? "bg-slate-600" : "bg-slate-700";
+    return allCompleteBefore(steps, idx) ? "bg-graphite-600" : "bg-graphite-700";
   }
   if (steps[idx].isComplete && allCompleteBefore(steps, idx)) {
     return "bg-emerald-500/40";
   }
-  return "bg-slate-700";
+  return "bg-graphite-700";
 }
 
 function allCompleteBefore(steps: WorkflowStep[], idx: number): boolean {
