@@ -1,3 +1,4 @@
+import { lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, type OpportunityLifecycleView } from "../_shared/opportunityLifecycle.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
 import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Supabase Edge Function: `opportunities`
@@ -77,7 +78,7 @@ const cors = {
   "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers":
     "authorization, x-operator-token, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   Vary: "Origin",
 };
 
@@ -2755,6 +2756,7 @@ async function runOpportunityAnalysis(
     };
   }
   if (!lead) return { ok: false, error: "opportunity_not_found" };
+  if (lead.archived_at) return { ok: false, error: "opportunity_archived" };
   const enrichmentResult =
     ((lead.enrichment_diagnostics as JsonObject | null)
       ?.enrichment_result as JsonObject | null) ?? null;
@@ -2867,6 +2869,7 @@ async function auditOpportunity(
       .maybeSingle(),
   ]);
   if (!lead) return { ok: false, error: "opportunity_not_found" };
+  if (lead.archived_at) return { ok: false, error: "opportunity_archived" };
   if (!assessment) return { ok: false, error: "assessment_required" };
   const { data: existing } = await supabase
     .from("local_business_audit_reports")
@@ -3257,11 +3260,11 @@ async function singleIntelligenceAction(
 
 // ---- Existing opportunity / outreach handlers ------------------------------
 
-async function listOpportunities(): Promise<Response> {
+async function listOpportunities(view: OpportunityLifecycleView = "active"): Promise<Response> {
   const [leadRes, draftRes, auditRes, analysisEventRes] = await Promise.all([
     supabase
       .from("local_business_leads")
-      .select("id, business_name, suburb, region, category, status, updated_at, enrichment_status, enrichment_diagnostics")
+      .select("id, business_name, suburb, region, category, status, updated_at, enrichment_status, enrichment_diagnostics, archived_at, archived_by, archive_reason")
       .order("updated_at", { ascending: false }),
     supabase
       .from("local_business_outreach_drafts")
@@ -3309,7 +3312,7 @@ async function listOpportunities(): Promise<Response> {
   );
   const opportunities = (
     (leadRes.data ?? []) as Array<Record<string, unknown>>
-  ).map((lead) => {
+  ).filter((lead) => lifecycleMatches(lead.archived_at, view)).map((lead) => {
     const analysisEvent = latestAnalysis.get(String(lead.id));
     const assessmentId = cleanText(analysisEvent?.metadata?.assessment_id, 80);
     const candidateAssessment = assessmentId
@@ -3322,6 +3325,9 @@ async function listOpportunities(): Promise<Response> {
       location: lead.suburb ?? lead.region ?? null,
       industry: lead.category ?? null,
       pipeline_status: lead.status ?? null,
+      archived_at: lead.archived_at ?? null,
+      archived_by: lead.archived_by ?? null,
+      archive_reason: lead.archive_reason ?? null,
       enrichment_status: lead.enrichment_status ?? null,
       enrichment_ready: enrichmentReadiness(lead.enrichment_status, lead.enrichment_diagnostics).ready,
       enrichment_running: enrichmentReadiness(lead.enrichment_status, lead.enrichment_diagnostics).running,
@@ -3346,7 +3352,7 @@ async function listOpportunities(): Promise<Response> {
   const { data: tags, error: tagError } = await supabase.from("opportunity_batch_members")
     .select("lead_id,opportunity_batches(id,name)");
   if (tagError) throw tagError;
-  return json({ opportunities: opportunities.map((opportunity) => ({
+  return json({ lifecycle_capabilities: LIFECYCLE_CAPABILITIES, opportunities: opportunities.map((opportunity) => ({
     ...opportunity,
     batches: (tags ?? []).filter((tag) => tag.lead_id === opportunity.id).map((tag) => tag.opportunity_batches),
   })) });
@@ -3435,6 +3441,7 @@ async function getOpportunity(id: string): Promise<Response> {
 
   return json({
     lead,
+    lifecycle_capabilities: LIFECYCLE_CAPABILITIES,
     latest_assessment: visibleAssessment,
     assessments: assessments.data ?? [],
     audit_report: visibleAudit,
@@ -3451,7 +3458,7 @@ async function getOpportunity(id: string): Promise<Response> {
 
 // GET /opportunities/pipeline — outcome buckets + summary metrics (existing data only).
 async function pipelineView(): Promise<Response> {
-  const [listRes, draftsRes, eventsRes] = await Promise.all([
+  const [listRes, draftsRes, eventsRes, archivedRes] = await Promise.all([
     supabase
       .from("v_opportunity_list")
       .select("id, business_name, industry, opportunity_score, has_audit"),
@@ -3461,8 +3468,9 @@ async function pipelineView(): Promise<Response> {
       .select("lead_id, action, created_at")
       .in("action", Object.keys(OUTCOME_EVENT_TO_STATE))
       .order("created_at", { ascending: false }),
+    supabase.from("local_business_leads").select("id").not("archived_at", "is", null),
   ]);
-  for (const r of [listRes, draftsRes, eventsRes]) {
+  for (const r of [listRes, draftsRes, eventsRes, archivedRes]) {
     if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
   }
   const leads = (listRes.data ?? []) as Array<Record<string, unknown>>;
@@ -3485,9 +3493,11 @@ async function pipelineView(): Promise<Response> {
     drafts.filter((d) => d.status === "sent").map((d) => d.lead_id),
   );
 
+  const archivedIds = new Set((archivedRes.data ?? []).map((row) => row.id));
   const opportunities: Array<Record<string, unknown>> = [];
   for (const l of leads) {
     const id = l.id as string;
+    if (archivedIds.has(id)) continue;
     const outcome =
       latestOutcome.get(id) ?? (sentLeadIds.has(id) ? "sent" : null);
     if (!outcome) continue; // only sent+ opportunities appear on the pipeline
@@ -3934,7 +3944,7 @@ async function getOpportunityBatch(id: string): Promise<Response> {
   ]);
   if (error || memberError) throw error ?? memberError;
   if (!batch) return json({ error: "not_found" }, 404);
-  const response = await listOpportunities();
+  const response = await listOpportunities("all");
   const list = await response.json();
   const memberIds = new Set((members ?? []).map((member) => member.lead_id));
   return json({ batch, opportunities: list.opportunities.filter((row: { id: string }) => memberIds.has(row.id)) });
@@ -4115,6 +4125,30 @@ async function requestVisualInspection(
   return json({ inspection: body }, response.status);
 }
 
+async function requireActiveOpportunity(id: string): Promise<Response | null> {
+  const { data, error } = await supabase.from("local_business_leads").select("id,archived_at").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!data) return json({ error: "not_found" }, 404);
+  return data.archived_at ? json({ error: "opportunity_archived", detail: "Restore this opportunity before starting or changing operational work." }, 409) : null;
+}
+
+async function setOpportunityLifecycle(id: string, archived: boolean, payload: unknown): Promise<Response> {
+  const input = validateLifecyclePayload(payload);
+  if (!input.valid) return json({ error: "confirmation_required", detail: "Confirm the lifecycle action explicitly; reason must be at most 500 characters." }, 400);
+  const { data, error } = await supabase.rpc("set_opportunity_archived", { p_lead_id: id, p_archived: archived, p_reason: input.reason });
+  if (error) {
+    const code = ["enrichment_running", "approved_outreach_conflict", "opportunity_archived"].find(value => error.message.includes(value));
+    if (code) return json({ error: code, detail: code === "approved_outreach_conflict" ? "Resolve approved outreach before archiving. An approved draft may be sending." : "Wait for enrichment or other operational work to finish before archiving." }, 409);
+    throw error;
+  }
+  if (!data || !data.ok) return json({ error: data?.error ?? "lifecycle_update_failed" }, data?.error === "not_found" ? 404 : 500);
+  return json(data);
+}
+
+function denyPermanentOpportunityDeletion(): Response {
+  return json({ error: "permanent_deletion_unavailable", detail: PERMANENT_DELETION_UNAVAILABLE }, 403);
+}
+
 // ---- Router -----------------------------------------------------------------
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -4147,8 +4181,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (req.method === "PATCH" && parts.length === 2) return await updateOpportunityBatch(parts[1], await req.json());
       return json({ error: "not_found" }, 404);
     }
-    if (req.method === "GET" && parts.length === 0)
-      return await listOpportunities();
+    if (req.method === "GET" && parts.length === 0) {
+      const view = lifecycleView(url.searchParams.get("lifecycle"));
+      return view ? await listOpportunities(view) : json({ error: "invalid_lifecycle_view" }, 400);
+    }
     if (req.method === "GET" && parts.length === 1 && parts[0] === "pipeline")
       return await pipelineView();
     if (
@@ -4301,6 +4337,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         decodeURIComponent(parts[2]),
         await req.json().catch(() => ({})),
       );
+    }
+    const recordPath = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(parts[0] ?? "");
+    if (recordPath && req.method === "DELETE" && parts.length === 1) return denyPermanentOpportunityDeletion();
+    if (recordPath && req.method === "POST" && parts.length === 2 && ["archive", "restore"].includes(parts[1])) {
+      return await setOpportunityLifecycle(parts[0], parts[1] === "archive", await req.json().catch(() => null));
+    }
+    if (recordPath && ["POST", "PATCH"].includes(req.method)) {
+      const blocked = await requireActiveOpportunity(parts[0]);
+      if (blocked) return blocked;
     }
     if (req.method === "GET" && parts.length === 1)
       return await getOpportunity(parts[0]);

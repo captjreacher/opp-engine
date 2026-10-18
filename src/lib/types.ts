@@ -6,6 +6,9 @@
 
 /** A single row in the board/list response (GET {VITE_API_BASE}). */
 export interface OppRow {
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   id: string;
   business_name: string;
   location: string | null;
@@ -156,6 +159,9 @@ export interface ConsoleEvent {
 
 /** The lead/business record embedded in the detail response. */
 export interface Lead {
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   id: string;
   business_name: string;
   slug: string | null;
