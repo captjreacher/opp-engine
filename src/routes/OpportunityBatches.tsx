@@ -138,7 +138,7 @@ export default function OpportunityBatches() {
     {busy && progress && <p role="status" className="text-sm text-sky-300">{progress}</p>}
     <div className="overflow-x-auto rounded-lg border border-graphite-800"><table className="w-full text-left text-sm text-graphite-300">
       <thead className="bg-graphite-900"><tr><th className="p-3">Business</th><th className="p-3">Enrichment</th><th className="p-3">Assessment</th><th className="p-3">Pipeline status</th></tr></thead>
-      <tbody>{matching.map((row) => <tr key={row.id} className="border-t border-graphite-800"><td className="p-3"><Link to={`/opportunities/${row.id}`} className="text-accent-400 hover:underline">{row.business_name}</Link></td><td className="p-3">{row.enrichment_running ? "Running…" : row.enrichment_ready ? "Enriched" : row.enrichment_status ?? "Not started"}</td><td className="p-3">{row.assessed_at ? "Assessed" : "Not assessed"}</td><td className="p-3">{row.pipeline_status === "disqualified" ? "Not suitable" : row.pipeline_status}</td></tr>)}</tbody>
+      <tbody>{matching.map((row) => <tr key={row.id} className="border-t border-graphite-800"><td className="p-3"><Link to={`/opportunities/${row.id}`} className="text-accent-400 hover:underline">{row.business_name}</Link></td><td className="p-3">{row.enrichment_running ? "Running…" : row.enrichment_ready ? "Enriched" : row.enrichment_status ?? "Not started"}</td><td className="p-3">{row.assessed_at ? "Assessed" : "Not assessed"}</td><td className="p-3">{row.archived_at ? "Archived" : row.pipeline_status === "disqualified" ? "Not suitable" : row.pipeline_status}</td></tr>)}</tbody>
     </table>{!matching.length && <p className="p-4 text-sm text-graphite-500">No batch records match this filter.</p>}</div>
   </div>;
 }

@@ -1,3 +1,4 @@
+import OpportunityActions from "../components/OpportunityActions";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -543,7 +544,7 @@ export default function OpportunityDetail() {
     latest_assessment?.opportunity_score !== undefined
       ? parseFloat(latest_assessment.opportunity_score)
       : null;
-  const outreachBlockedReason = !audit_report
+  const outreachBlockedReason = lead.archived_at ? "Restore this opportunity before creating outreach." : !audit_report
     ? "Generate an audit report before creating outreach."
     : review_state !== "contact_ready"
       ? "Complete review and mark this opportunity contact ready before outreach."
@@ -612,20 +613,26 @@ export default function OpportunityDetail() {
                 .join(" · ") || "—"}
             </p>
           </div>
-          <Badge tone={lead.status ? "info" : "neutral"}>
-            {lead.status ?? "unknown"}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            {lead.archived_at && <Badge>Archived</Badge>}
+            <Badge tone={lead.status ? "info" : "neutral"}>{lead.status ?? "unknown"}</Badge>
+            <OpportunityActions opportunity={lead} disabled={intelligencePending !== null || sendingDraft || approvingDraft || savingDraft || generatingDraft || reviewPending !== null || outcomePending !== null} onChanged={load} />
+          </div>
         </div>
 
         {/* Guided workflow — replaces the old 4-step ReviewStepper */}
-        <div className="border-t border-graphite-800 pt-3">
+        <fieldset disabled={Boolean(lead.archived_at)} className="min-w-0 border-0 border-t border-graphite-800 p-0 pt-3">
           <GuidedWorkflow
             state={workflowState}
-            onStepAction={handleWorkflowStep}
+            onStepAction={lead.archived_at ? undefined : handleWorkflowStep}
           />
-        </div>
+        </fieldset>
       </div>
 
+      {lead.archived_at && <div role="status" className="rounded border border-graphite-700 bg-graphite-900 p-3 text-sm text-graphite-300">
+        Archived {formatTimestamp(lead.archived_at)}. Restore from Actions to resume work. Evidence and history are retained.
+        {lead.archive_reason && <p className="mt-1 break-words">Reason: {lead.archive_reason}</p>}
+      </div>}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <SectionHeading>
@@ -682,7 +689,7 @@ Enrichment
         ? handleRefreshEnrichmentStatus()
         : handleEnrich(enrichmentStale))
     }
-    disabled={intelligencePending !== null}
+    disabled={Boolean(lead.archived_at) || intelligencePending !== null}
     className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
   >
     {intelligencePending === "enrich"
@@ -716,7 +723,7 @@ Enrichment
               <button
                 type="button"
                 onClick={() => void handleAnalyze(Boolean(latest_assessment))}
-                disabled={intelligencePending !== null || !hasEnrichment}
+                disabled={Boolean(lead.archived_at) || intelligencePending !== null || !hasEnrichment}
                 className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {intelligencePending === "analyze"
@@ -746,7 +753,7 @@ Enrichment
               <button
                 type="button"
                 onClick={() => void handleAudit(Boolean(audit_report))}
-                disabled={intelligencePending !== null || latest_assessment === null}
+                disabled={Boolean(lead.archived_at) || intelligencePending !== null || latest_assessment === null}
                 className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {intelligencePending === "audit"
@@ -1180,6 +1187,7 @@ Enrichment
 
       {/* ── Visual Evidence (Phase 5.1 — street view reference evidence + analysable image entry point) ── */}
       <VisualEvidencePanel
+        readOnly={Boolean(lead.archived_at)}
         leadId={lead.id}
         evidence={detail.visual_evidence ?? []}
         onAdded={load}
@@ -1278,7 +1286,7 @@ Enrichment
             {REVIEW_ACTIONS.map((action) => {
               const targetIndex = REVIEW_STATE_ORDER.indexOf(action.toState);
               const isAheadOfCurrent = targetIndex > currentReviewIndex;
-              const disabled = !isAheadOfCurrent || reviewPending !== null;
+              const disabled = Boolean(lead.archived_at) || !isAheadOfCurrent || reviewPending !== null;
               return (
                 <button
                   key={action.toState}
@@ -1386,6 +1394,7 @@ Enrichment
           ) : (
             <div className="space-y-3">
               <DraftEditor
+                readOnly={Boolean(lead.archived_at)}
                 draft={latestDraft}
                 onSave={(fields) => handleSaveDraft(latestDraft.id, fields)}
                 onApprove={() => handleApproveDraft(latestDraft.id)}
@@ -1522,7 +1531,7 @@ Enrichment
             <div className="flex flex-wrap gap-2">
               {OUTCOME_ACTIONS.map((action) => {
                 const isCurrent = outcome_state === action.toState;
-                const disabled = isCurrent || outcomePending !== null;
+                const disabled = Boolean(lead.archived_at) || isCurrent || outcomePending !== null;
                 return (
                   <button
                     key={action.toState}

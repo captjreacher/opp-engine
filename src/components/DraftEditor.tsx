@@ -10,6 +10,7 @@ function formatTimestamp(iso: string | null | undefined): string {
 }
 
 interface DraftEditorProps {
+  readOnly?: boolean;
   draft: Draft;
   onSave: (fields: { subject: string; body: string }) => Promise<void>;
   onApprove: () => Promise<void>;
@@ -30,6 +31,7 @@ interface DraftEditorProps {
  * and can be retried.
  */
 export default function DraftEditor({
+  readOnly = false,
   draft,
   onSave,
   onApprove,
@@ -55,7 +57,7 @@ export default function DraftEditor({
   const isApproved = draft.status === "approved";
   const isSent = draft.status === "sent";
   const dirty = subject !== (draft.subject ?? "") || body !== draft.body;
-  const busy = saving || approving || sending;
+  const busy = readOnly || saving || approving || sending;
 
   return (
     <div className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-4">
