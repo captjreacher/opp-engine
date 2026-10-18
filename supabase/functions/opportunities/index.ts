@@ -2950,11 +2950,13 @@ async function auditOpportunity(
         scoringSource: assessment.assessed_by,
       },
     };
+    // generated_by is an auth.users UUID; shared operator auth has no user ID.
+    // Omit it to preserve existing user attribution on updates. Application
+    // attribution remains in reportModel.metadata.generatedBy above.
     const insert = {
       lead_id: leadId,
       assessment_id: assessment.id,
       report_version: AUDIT_REPORT_VERSION,
-      generated_by: "opportunity-engine",
       generated_at: new Date().toISOString(),
       metadata_json: {
         report_model: reportModel,
