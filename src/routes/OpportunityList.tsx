@@ -1,5 +1,7 @@
+import OpportunityActions from "../components/OpportunityActions";
+import { lifecycleView, lifecycleMatches } from "../../supabase/functions/_shared/opportunityLifecycle";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   ApiNotConfiguredError,
@@ -38,6 +40,14 @@ function formatTimestamp(iso: string | null | undefined): string {
 }
 
 export default function OpportunityList() {
+  const [params, setParams] = useSearchParams();
+  const view = lifecycleView(params.get("lifecycle")) ?? "active";
+  const search = params.get("search") ?? "";
+  const loadVersion = useRef(0);
+  function changeQuery(key: string, value: string) {
+    const next = new URLSearchParams(params); value ? next.set(key, value) : next.delete(key);
+    setParams(next, { replace: true });
+  }
   const [rows, setRows] = useState<OppRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,13 +64,16 @@ export default function OpportunityList() {
   async function load() {
     if (!isApiConfigured) return;
 
+    const version = ++loadVersion.current;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchOpportunities();
+      const res = await fetchOpportunities(view);
+      if (version !== loadVersion.current) return;
       setRows(res.opportunities);
       setSelected((current) => new Set([...current].filter((id) => res.opportunities.some((row) => row.id === id && canSelectOpportunity(row)))));
     } catch (err) {
+      if (version !== loadVersion.current) return;
       if (err instanceof ApiNotConfiguredError) {
         setError(err.message);
       } else if (err instanceof ApiError) {
@@ -69,21 +82,23 @@ export default function OpportunityList() {
         setError("Failed to load opportunities: unknown error.");
       }
     } finally {
-      setLoading(false);
+      if (version === loadVersion.current) setLoading(false);
     }
   }
 
   useEffect(() => {
+    setSelected(new Set());
     void load();
+    return () => { loadVersion.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     if (!rows.some((row) => row.enrichment_running)) return;
     const timer = setInterval(() => void load(), 5_000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows.some((row) => row.enrichment_running)]);
+  }, [rows.some((row) => row.enrichment_running), view]);
 
   async function runBulkEnrichment() {
     if (bulkPending) return;
@@ -140,6 +155,8 @@ export default function OpportunityList() {
 
   const filteredSortedRows = useMemo(() => {
     return rows
+      .filter((row) => lifecycleMatches(row.archived_at, view))
+      .filter((row) => !search.trim() || [row.business_name, row.location, row.industry].some(value => value?.toLowerCase().includes(search.trim().toLowerCase())))
 .filter((row) => {
   const score = parseOpportunityScore(row);
 
@@ -173,7 +190,7 @@ export default function OpportunityList() {
           (parseOpportunityScore(b) ?? Number.NEGATIVE_INFINITY) -
           (parseOpportunityScore(a) ?? Number.NEGATIVE_INFINITY),
       );
-  }, [rows, filters]);
+  }, [rows, filters, view, search]);
 
   const selectableVisible = filteredSortedRows.filter(canSelectOpportunity);
   const visibleSelectedCount = filteredSortedRows.filter((row) => selected.has(row.id)).length;
@@ -216,6 +233,18 @@ export default function OpportunityList() {
           </svg>
           Refresh
         </button>
+      </div>
+
+      <div className="grid gap-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-3 sm:grid-cols-2">
+        <div>
+          <label htmlFor="lifecycle-view" className="text-xs text-graphite-400">Opportunity lifecycle</label>
+          <select id="lifecycle-view" className="mt-1 block min-h-9 w-full rounded border border-graphite-700 bg-graphite-950 px-2 text-sm text-graphite-100" value={view} onChange={(event) => changeQuery("lifecycle", event.target.value)}>
+            <option value="active">Active opportunities</option><option value="archived">Archived opportunities</option><option value="all">All opportunities</option>
+          </select>
+        </div>
+        <label className="text-xs text-graphite-400">Search opportunities
+          <input type="search" placeholder="Business, location or category" value={search} onChange={(event) => changeQuery("search", event.target.value)} className="mt-1 block min-h-9 w-full rounded border border-graphite-700 bg-graphite-950 px-2 text-sm text-graphite-100" />
+        </label>
       </div>
 
       {notice && <p role="status" className="text-sm text-emerald-300">{notice}</p>}
@@ -284,6 +313,7 @@ export default function OpportunityList() {
               <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Outreach
               </th>
+              <th className="px-3 py-2 text-left text-graphite-400">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-graphite-800/70 bg-graphite-950/40">
@@ -296,18 +326,19 @@ export default function OpportunityList() {
                   <td className="px-3 py-2.5">
                     <input type="checkbox" aria-label={`Select ${row.business_name}`} checked={selected.has(row.id)}
                       disabled={selectionBusy || !canSelectOpportunity(row)}
-                      title={row.batches?.some(batch=>batch.active) ? `Already in active batch: ${row.batches.filter(batch=>batch.active).map(batch=>batch.name).join(", ")}. Open the record to move it explicitly.` : !canSelectOpportunity(row) ? "Already enriching or marked not suitable" : undefined}
+                      title={row.batches?.some(batch=>batch.active) ? `Already in active batch: ${row.batches.filter(batch=>batch.active).map(batch=>batch.name).join(", ")}. Open the record to move it explicitly.` : !canSelectOpportunity(row) ? "Archived, already enriching or marked not suitable" : undefined}
                       onChange={(event) => setSelected((current) => toggleOpportunitySelection(current, [row.id], event.target.checked))}
                       className="h-4 w-4 accent-sky-500" />
                   </td>
                   <td className="px-3 py-2.5">
                     <Link
                       to={`/opportunities/${row.id}`}
-                      className="font-medium text-graphite-100 hover:text-accent-400 hover:underline"
+                      className="inline-block font-medium text-graphite-100 hover:text-accent-400 hover:underline"
                     >
                       {row.business_name}
                     </Link>
                     {row.company_scenarios?.map(match=><span key={match.scenario_key} className="mr-2 text-xs text-slate-400">{match.scenario_key}: {match.state}</span>)}
+                    {row.archived_at && <span className="ml-2"><Badge>Archived</Badge></span>}
                     {row.batches?.map((batch) => <Link key={batch.id} to={`/batches/${batch.id}`} className="mt-1 mr-2 inline-block rounded bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300 hover:underline">{batch.name}</Link>)}
                     <div className="text-xs text-graphite-500">
                       updated {formatTimestamp(row.updated_at)}
@@ -358,6 +389,7 @@ export default function OpportunityList() {
                       {row.outreach_status ?? "None"}
                     </Badge>
                   </td>
+                  <td className="px-3 py-2.5"><OpportunityActions opportunity={row} disabled={selectionBusy} onChanged={async () => { await load(); setNotice(row.archived_at ? "Opportunity restored." : "Opportunity archived."); }} /></td>
                 </tr>
               );
             })}

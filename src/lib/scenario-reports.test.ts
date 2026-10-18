@@ -5,6 +5,7 @@ import {
   reportEmail,
   validateEmailEdit,
   canonicalJson,
+  billingReadConfiguration,
 } from "../../supabase/functions/_shared/scenarioReports";
 import type {
   ScenarioMatch,
@@ -276,5 +277,18 @@ describe("reproducible reports and one reviewed business email", () => {
     expect(canonicalJson({ b: 1, a: { y: 2, x: 3 } })).toBe(
       canonicalJson({ a: { x: 3, y: 2 }, b: 1 }),
     );
+  });
+});
+
+describe("existing shared Billing configuration",()=>{
+  it("reuses the existing API key and normalises the shared API base",async()=>{
+    const env:Record<string,string>={BILLING_API_BASE_URL:'https://billing.example/',BILLING_CATALOGUE_API_KEY:'existing-fixture-reader'};
+    const config=billingReadConfiguration(key=>env[key]);expect(config).toEqual({base:'https://billing.example/api/v1',token:'existing-fixture-reader',scheme:'ApiKey'});
+    const request=billing();await resolveOffer(template,config,request);
+    expect(request).toHaveBeenNthCalledWith(1,expect.any(String),expect.objectContaining({headers:expect.objectContaining({Authorization:'ApiKey existing-fixture-reader'})}));
+  });
+  it("does not replace partially configured shared credentials with preview credentials",()=>{
+    const env:Record<string,string>={BILLING_API_BASE_URL:'https://billing.example/api/v1',BILLING_CATALOGUE_BEARER_TOKEN:'preview-only'};
+    expect(billingReadConfiguration(key=>env[key])).toEqual({base:'https://billing.example/api/v1',token:'',scheme:'ApiKey'});
   });
 });

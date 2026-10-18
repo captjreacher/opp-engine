@@ -7,6 +7,9 @@
 /** A single row in the board/list response (GET {VITE_API_BASE}). */
 export interface OppRow {
   company_scenarios?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   id: string;
   business_name: string;
   location: string | null;
@@ -98,6 +101,7 @@ export interface AuditReport {
 export type DraftStatus = "draft" | "approved" | "sent";
 
 export interface Draft {
+  updated_at?: string;
   selection?: { template_id: string; template_version: number; scenario_keys: string[]; offer_id: string; destination: string; findings?: {description:string}[]; reports?: import("../../supabase/functions/_shared/scenarioReports").ScenarioReport[] };
   id: string;
   subject: string | null;
@@ -160,6 +164,9 @@ export interface ConsoleEvent {
 
 /** The lead/business record embedded in the detail response. */
 export interface Lead {
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   id: string;
   business_name: string;
   slug: string | null;

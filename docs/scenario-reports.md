@@ -1,5 +1,7 @@
 # Scenario reports and approved offer outreach
 
+For the reconciled local release candidate, current evidence and blockers, see [release validation](scenario-release-validation.md). The original PR #17 validation below is historical; the release follow-up completes browser review and adds archive/send compatibility.
+
 Prepared 21 October 2026. No production mutation, deployment, merge, configuration seed or real outreach was performed.
 
 ## Baseline and PR compatibility
@@ -34,7 +36,7 @@ The existing `opportunity_outreach_templates.offer_id` must identify an existing
 - `GET /catalogue/products/:productId`: owning product must be published.
 - `GET /catalogue/plans/:planId/prices/current`: effective published/superseded price version, amount/currency, GST treatment and rate. Future, expired, draft and incomplete prices are refused. Explicit published POA remains POA, never zero/free.
 
-Server-only configuration: `BILLING_CATALOGUE_API_BASE_URL` (HTTPS admin API base, typically ending `/api/v1`) and `BILLING_CATALOGUE_BEARER_TOKEN` with read-only `catalogue.read` permission. Never set these as `VITE_*` variables. Fetches have a ten-second timeout, do not follow redirects and never forward credentials to a client. No credentials were read or created in this task.
+Server-only configuration: reuse `BILLING_API_BASE_URL` and `BILLING_CATALOGUE_API_KEY` with read-only `catalogue.read` permission, using the existing `Authorization: ApiKey` contract and `/api/v1` base normalisation. Explicit preview configurations may still use `BILLING_CATALOGUE_API_BASE_URL` and `BILLING_CATALOGUE_BEARER_TOKEN`; partial shared credentials fail closed rather than silently falling back. Never set these as `VITE_*` variables. Fetches have a ten-second timeout, do not follow redirects and never forward credentials to a client. No credentials were read or created in this task.
 
 Billing's inspected plan model does not carry an offer's full inclusion breakdown or detailed commercial terms. The existing approved offer configuration is therefore extended with nullable `approved_details`: `{ approved_at, inclusions: string[], terms: string[] }`. Both lists and a nonfuture approval date are required. These supplement the same Billing plan identity; prices/GST are always fetched from Billing. Configure reviewed `edit_phrases: string[]` when needed. Increment the template version when commercial text or copy changes. No templates, inclusions, terms, mappings, destinations, prices or activation flags are seeded by this migration.
 

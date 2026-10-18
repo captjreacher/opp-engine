@@ -1,3 +1,4 @@
+import type { OpportunityLifecycleView } from "../../supabase/functions/_shared/opportunityLifecycle";
 // Typed API client for the opp-engine frontend.
 //
 // The SPA NEVER talks to Supabase directly — every call goes through the
@@ -77,6 +78,7 @@ export class ApiNotConfiguredError extends Error {
 
 function joinUrl(base: string, path: string): string {
   const trimmedBase = base.replace(/\/+$/, "");
+  if (path.startsWith("?")) return `${trimmedBase}${path}`;
   const trimmedPath = path.replace(/^\/+/, "");
   return trimmedPath ? `${trimmedBase}/${trimmedPath}` : trimmedBase;
 }
@@ -130,8 +132,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** GET {VITE_API_BASE} -> { opportunities: OppRow[] } */
-export function fetchOpportunities(): Promise<OppListResponse> {
-  return request<OppListResponse>("");
+export function fetchOpportunities(view?: OpportunityLifecycleView): Promise<OppListResponse> {
+  return request<OppListResponse>(view ? `?lifecycle=${encodeURIComponent(view)}` : "");
 }
 
 /** GET {VITE_API_BASE}/{id} -> OppDetail */
@@ -182,6 +184,7 @@ export function updateOutreachDraft(
     body?: string;
     status?: Exclude<DraftStatus, "sent">;
     reviewed?: boolean;
+    expected_updated_at?: string;
   },
 ): Promise<DraftResponse> {
   return request<DraftResponse>(
@@ -472,3 +475,10 @@ export function assessOpportunity(
 
 /** Re-exported for convenience so components can type draft state without importing types directly. */
 export type { Draft };
+
+/** Archive/restore only; the API never exposes a destructive workaround. */
+export function setOpportunityArchived(id: string, archived: boolean, reason = ""): Promise<{ ok: true; id: string; archived_at: string | null; idempotent: boolean }> {
+  return request(`/${encodeURIComponent(id)}/${archived ? "archive" : "restore"}`, {
+    method: "POST", body: JSON.stringify({ confirm: true, reason }),
+  });
+}

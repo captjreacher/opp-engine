@@ -20,6 +20,29 @@ export type Offer = {
   source: string;
 };
 type RecordValue = Record<string, unknown>;
+export function billingReadConfiguration(
+  get: (name: string) => string | undefined,
+) {
+  // Reuse the shared Billing reader contract already provisioned for this project.
+  const existingBase = get("BILLING_API_BASE_URL")?.trim().replace(/\/+$/, "");
+  const apiKey = get("BILLING_CATALOGUE_API_KEY")?.trim();
+  if (existingBase || apiKey)
+    return {
+      base: existingBase
+        ? existingBase.endsWith("/api/v1")
+          ? existingBase
+          : `${existingBase}/api/v1`
+        : "",
+      token: apiKey ?? "",
+      scheme: "ApiKey" as const,
+    };
+  // Retain compatibility with explicitly configured preview readers, without inventing credentials.
+  return {
+    base: get("BILLING_CATALOGUE_API_BASE_URL")?.trim() ?? "",
+    token: get("BILLING_CATALOGUE_BEARER_TOKEN")?.trim() ?? "",
+    scheme: "Bearer" as const,
+  };
+}
 const requiredText = (v: unknown): v is string =>
   typeof v === "string" && v.trim().length > 0;
 export function canonicalJson(value: unknown): string {
@@ -38,7 +61,7 @@ export function canonicalJson(value: unknown): string {
 /** Billing is authoritative for identity, availability, pricing and tax. No fallback catalogue. */
 export async function resolveOffer(
   template: OutreachTemplate & { approved_details?: ApprovedDetails },
-  config: { base: string; token: string },
+  config: { base: string; token: string; scheme?: "ApiKey" | "Bearer" },
   request: typeof fetch = fetch,
   now = Date.now(),
 ): Promise<Offer> {
@@ -74,7 +97,7 @@ export async function resolveOffer(
       `${config.base.replace(/\/+$/, "")}/catalogue/${path}`,
       {
         headers: {
-          Authorization: `Bearer ${config.token}`,
+          Authorization: `${config.scheme ?? "Bearer"} ${config.token}`,
           Accept: "application/json",
         },
         signal: AbortSignal.timeout(10000),

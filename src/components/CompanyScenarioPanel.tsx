@@ -23,6 +23,7 @@ export default function CompanyScenarioPanel({
   const matches = detail.company_scenarios ?? [];
   const templates = detail.outreach_options ?? [];
   const active = detail.batches?.find((batch) => batch.active);
+  const readOnly = Boolean(detail.lead.archived_at);
   const choice = templates.find((template) => template.id === selected);
   const explanation = (
     detail.latest_assessment as unknown as {
@@ -78,6 +79,7 @@ export default function CompanyScenarioPanel({
         Outreach template
         <select
           className="ml-2 rounded bg-graphite-900 p-2"
+          disabled={readOnly}
           value={selected}
           onChange={(event) => onSelect(event.target.value)}
         >
@@ -109,7 +111,7 @@ export default function CompanyScenarioPanel({
         <div className="space-y-2 text-sm">
           <p>Active batch: {active.name}</p>
           <button
-            disabled={busy}
+            disabled={readOnly || busy}
             onClick={async () => {
               try {
                 setDestinations(
@@ -127,6 +129,7 @@ export default function CompanyScenarioPanel({
           {!!destinations.length && (
             <>
               <select
+                disabled={readOnly}
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
                 className="bg-graphite-900 p-2"
@@ -139,7 +142,7 @@ export default function CompanyScenarioPanel({
                 ))}
               </select>
               <button
-                disabled={!target || busy}
+                disabled={readOnly || !target || busy}
                 onClick={async () => {
                   if (
                     !window.confirm(

@@ -1,5 +1,6 @@
 import CompanyScenarioPanel from "../components/CompanyScenarioPanel";
-import { useEffect, useState } from "react";
+import OpportunityActions from "../components/OpportunityActions";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   analyzeOpportunity,
@@ -137,6 +138,10 @@ export default function OpportunityDetail() {
     null,
   );
   const [enrichmentPollNonce, setEnrichmentPollNonce] = useState(0);
+  const approvalDialog = useRef<HTMLDialogElement>(null);
+  const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const [reviewDraftVersion, setReviewDraftVersion] = useState<string | undefined>();
 
   async function load({ silent = false }: { silent?: boolean } = {}) {
     if (!id || !isApiConfigured) return;
@@ -293,13 +298,20 @@ export default function OpportunityDetail() {
     }
   }
 
-  async function handleApproveDraft(draftId: string) {
-    if (!id) return;
-    if(!window.confirm("I have reviewed the recorded findings, selected template, offer destination and rendered message.")) return;
+  function handleApproveDraft(draftId: string) {
+    setReviewDraftId(draftId);
+    setReviewDraftVersion(detail?.outreach_drafts.find(draft => draft.id === draftId)?.updated_at);
+    setReviewConfirmed(false);
+    approvalDialog.current?.showModal();
+  }
+  async function confirmDraftApproval() {
+    if (!id || !reviewDraftId || !reviewConfirmed) return;
+    const draftId = reviewDraftId;
     setApprovingDraft(true);
     setDraftMutationError(null);
     try {
-      await updateOutreachDraft(id, draftId, { status: "approved",reviewed:true });
+      await updateOutreachDraft(id, draftId, { status: "approved",reviewed:true,expected_updated_at:reviewDraftVersion });
+      approvalDialog.current?.close();
       await load();
     } catch (err) {
       setDraftMutationError(errorMessage(err));
@@ -427,12 +439,7 @@ export default function OpportunityDetail() {
         }
         break;
       case "sent":
-        if (detail) {
-          const latestDraft = detail.outreach_drafts[0] ?? null;
-          if (latestDraft) {
-            void handleSendDraft(latestDraft.id);
-          }
-        }
+        document.getElementById("outreach-preparation")?.scrollIntoView({ behavior: "smooth", block: "start" });
         break;
       case "responded":
         void handleOutcomeTransition("awaiting_response");
@@ -526,7 +533,7 @@ export default function OpportunityDetail() {
     latest_assessment?.opportunity_score !== undefined
       ? parseFloat(latest_assessment.opportunity_score)
       : null;
-  const outreachBlockedReason = !latest_assessment
+  const outreachBlockedReason = lead.archived_at ? "Restore this opportunity before preparing outreach." : !latest_assessment
     ? "Complete assessment before preparing outreach."
     : review_state !== "contact_ready"
       ? "Complete review and mark this opportunity contact ready before outreach."
@@ -595,20 +602,26 @@ export default function OpportunityDetail() {
                 .join(" · ") || "—"}
             </p>
           </div>
-          <Badge tone={lead.status ? "info" : "neutral"}>
-            {lead.status ?? "unknown"}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            {lead.archived_at && <Badge>Archived</Badge>}
+            <Badge tone={lead.status ? "info" : "neutral"}>{lead.status ?? "unknown"}</Badge>
+            <OpportunityActions opportunity={lead} disabled={intelligencePending !== null || sendingDraft || approvingDraft || savingDraft || generatingDraft || reviewPending !== null || outcomePending !== null} onChanged={load} />
+          </div>
         </div>
 
         {/* Guided workflow — replaces the old 4-step ReviewStepper */}
-        <div className="border-t border-graphite-800 pt-3">
+        <fieldset disabled={Boolean(lead.archived_at)} className="min-w-0 border-0 border-t border-graphite-800 p-0 pt-3">
           <GuidedWorkflow
             state={workflowState}
-            onStepAction={handleWorkflowStep}
+            onStepAction={lead.archived_at ? undefined : handleWorkflowStep}
           />
-        </div>
+        </fieldset>
       </div>
 
+      {lead.archived_at && <div role="status" className="rounded border border-graphite-700 bg-graphite-900 p-3 text-sm text-graphite-300">
+        Archived {formatTimestamp(lead.archived_at)}. Restore from Actions to resume work. Evidence and history are retained.
+        {lead.archive_reason && <p className="mt-1 break-words">Reason: {lead.archive_reason}</p>}
+      </div>}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <SectionHeading>
@@ -665,7 +678,7 @@ Enrich
         ? handleRefreshEnrichmentStatus()
         : handleEnrich(enrichmentStale))
     }
-    disabled={intelligencePending !== null}
+    disabled={Boolean(lead.archived_at) || intelligencePending !== null}
     className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
   >
     {intelligencePending === "enrich"
@@ -699,7 +712,7 @@ Enrich
               <button
                 type="button"
                 onClick={() => void handleAnalyze(Boolean(latest_assessment))}
-                disabled={intelligencePending !== null || !hasEnrichment}
+                disabled={Boolean(lead.archived_at) || intelligencePending !== null || !hasEnrichment}
                 className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {intelligencePending === "analyze"
@@ -1143,6 +1156,7 @@ Enrich
 
       {/* ── Visual Evidence (Phase 5.1 — street view reference evidence + analysable image entry point) ── */}
       <VisualEvidencePanel
+        readOnly={Boolean(lead.archived_at)}
         leadId={lead.id}
         evidence={detail.visual_evidence ?? []}
         onAdded={load}
@@ -1206,7 +1220,7 @@ Enrich
             {REVIEW_ACTIONS.map((action) => {
               const targetIndex = REVIEW_STATE_ORDER.indexOf(action.toState);
               const isAheadOfCurrent = targetIndex > currentReviewIndex;
-              const disabled = !isAheadOfCurrent || reviewPending !== null;
+              const disabled = Boolean(lead.archived_at) || !isAheadOfCurrent || reviewPending !== null;
               return (
                 <button
                   key={action.toState}
@@ -1276,7 +1290,7 @@ Enrich
 
           <div id="outreach-preparation" />
       <CompanyScenarioPanel detail={detail} selected={selectedTemplate} onSelect={setSelectedTemplate} onRefresh={()=>load({silent:true})} />
-          {!!latestDraft && <button type="button" disabled={generatingDraft || !selectedTemplate} onClick={handleGenerateDraft}>Regenerate from selected template</button>}
+          {!!latestDraft && <button type="button" disabled={Boolean(lead.archived_at) || generatingDraft || !selectedTemplate} onClick={handleGenerateDraft}>Regenerate from selected template</button>}
           {latestDraft && generateError && <p role="alert" className="text-rose-300">{generateError}</p>}
           {/* Draft workspace */}
           {!latestDraft ? (
@@ -1318,6 +1332,7 @@ Enrich
           ) : (
             <div className="space-y-3">
               <DraftEditor
+                readOnly={Boolean(lead.archived_at)}
                 draft={latestDraft}
                 onSave={(fields) => handleSaveDraft(latestDraft.id, fields)}
                 onApprove={() => handleApproveDraft(latestDraft.id)}
@@ -1415,6 +1430,15 @@ Enrich
         </section>
       </div>
 
+      <dialog ref={approvalDialog} aria-labelledby="approve-email-title" onCancel={() => setReviewConfirmed(false)} className="oe-actions-dialog w-[calc(100%-2rem)] max-w-lg rounded-md border border-graphite-700 bg-console-panel p-5 text-graphite-100">
+        <h2 id="approve-email-title" className="text-lg font-semibold">Review and approve email</h2>
+        <p className="mt-2 text-sm">Check the selected scenario reports, evidence, offer inclusions, price, GST, terms and destination against the proposed email.</p>
+        <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={reviewConfirmed} onChange={event => setReviewConfirmed(event.target.checked)} />I have reviewed the evidence, approved offer details and edited email.</label>
+        <p className="mt-3 text-xs text-graphite-400">Approval does not send the email. Sending requires a separate confirmation.</p>
+        {draftMutationError && <p role="alert" className="mt-3 text-rose-300">{draftMutationError}</p>}
+        <div className="mt-4 flex gap-2"><button type="button" disabled={!reviewConfirmed || approvingDraft} onClick={() => void confirmDraftApproval()} className="oe-primary rounded bg-accent-600 px-3 py-2 text-sm disabled:opacity-50">{approvingDraft ? "Approving…" : "Confirm approval"}</button><button type="button" disabled={approvingDraft} onClick={() => approvalDialog.current?.close()} className="rounded border border-graphite-600 px-3 py-2 text-sm">Cancel review</button></div>
+      </dialog>
+
       {/* ── Outcome Tracking (Phase 4, preserved) ── */}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1454,7 +1478,7 @@ Enrich
             <div className="flex flex-wrap gap-2">
               {OUTCOME_ACTIONS.map((action) => {
                 const isCurrent = outcome_state === action.toState;
-                const disabled = isCurrent || outcomePending !== null;
+                const disabled = Boolean(lead.archived_at) || isCurrent || outcomePending !== null;
                 return (
                   <button
                     key={action.toState}
