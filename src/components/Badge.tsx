@@ -9,7 +9,7 @@ export type BadgeTone =
   | "accent";
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
-  neutral: "bg-slate-700/60 text-slate-200 ring-1 ring-inset ring-slate-600/50",
+  neutral: "bg-graphite-700/60 text-graphite-200 ring-1 ring-inset ring-graphite-600/50",
   info: "bg-sky-500/15 text-sky-300 ring-1 ring-inset ring-sky-500/30",
   success: "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-500/30",
   warning: "bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30",
@@ -28,7 +28,7 @@ export default function Badge({ children, tone = "neutral", title }: BadgeProps)
   return (
     <span
       title={title}
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${TONE_CLASSES[tone]}`}
+      className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium whitespace-nowrap ${TONE_CLASSES[tone]}`}
     >
       {children}
     </span>

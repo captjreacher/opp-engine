@@ -12,10 +12,10 @@ function formatTimestamp(iso: string | null | undefined): string {
 function NarrativeBlock({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-graphite-500">
         {label}
       </h4>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">{value}</p>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed text-graphite-300">{value}</p>
     </div>
   );
 }
@@ -28,7 +28,7 @@ interface AuditReportProps {
 export default function AuditReportDisplay({ report }: AuditReportProps) {
   if (!report) {
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-6 text-center text-sm text-slate-500">
+      <div className="rounded-lg border border-graphite-800 bg-graphite-900/40 p-6 text-center text-sm text-graphite-500">
         No audit report yet.
       </div>
     );
@@ -58,7 +58,7 @@ export default function AuditReportDisplay({ report }: AuditReportProps) {
           <Badge tone={customerReady ? "success" : "warning"}>
             {customerReady ? "Customer-ready" : "Draft"}
           </Badge>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-graphite-500">
             v{report.report_version} · generated {formatTimestamp(report.generated_at)}
           </span>
         </div>
@@ -79,22 +79,22 @@ export default function AuditReportDisplay({ report }: AuditReportProps) {
           {metrics.map((metric) => (
             <div
               key={metric.id}
-              className="rounded-lg border border-slate-800 bg-slate-900/60 p-3"
+              className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-3"
             >
-              <div className="text-xs text-slate-500">{metric.label}</div>
+              <div className="text-xs text-graphite-500">{metric.label}</div>
               <div className="mt-1 flex items-baseline justify-between gap-2">
-                <span className="text-lg font-semibold text-slate-100">{metric.value}</span>
+                <span className="text-lg font-semibold text-graphite-100">{metric.value}</span>
                 <Badge tone={toneForBand(metric.band)}>{metric.band}</Badge>
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <p className="text-sm text-slate-500">No metrics found in this report.</p>
+        <p className="text-sm text-graphite-500">No metrics found in this report.</p>
       )}
 
       {narrativeEntries.length > 0 && (
-        <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+        <div className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/40 p-4">
           {narrativeEntries.map((entry) => (
             <NarrativeBlock key={entry.label} label={entry.label} value={entry.value} />
           ))}

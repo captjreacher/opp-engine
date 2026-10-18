@@ -184,10 +184,10 @@ export default function OpportunityList() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">
+          <h1 className="text-lg font-semibold text-graphite-100">
             Opportunities
           </h1>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-graphite-500">
             {loading
               ? "Loading…"
               : `${filteredSortedRows.length} of ${rows.length} opportunit${rows.length === 1 ? "y" : "ies"}`}
@@ -198,7 +198,7 @@ export default function OpportunityList() {
           type="button"
           onClick={() => void load()}
           disabled={loading || !isApiConfigured}
-          className="flex items-center gap-1.5 rounded border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded border border-graphite-700 bg-graphite-900 px-3 py-1.5 text-sm font-medium text-graphite-200 transition-colors hover:bg-graphite-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <svg
             viewBox="0 0 24 24"
@@ -239,19 +239,19 @@ export default function OpportunityList() {
         />
       )}
 
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-        <span className="mr-auto text-sm text-slate-300">{selected.size} selected{selected.size > visibleSelectedCount ? ` (${selected.size - visibleSelectedCount} hidden by filters)` : ""}</span>
-        {selected.size > 1 && <span className="text-xs text-slate-400">Enriching this selection creates a batch.</span>}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-3">
+        <span className="mr-auto text-sm text-graphite-300">{selected.size} selected{selected.size > visibleSelectedCount ? ` (${selected.size - visibleSelectedCount} hidden by filters)` : ""}</span>
+        {selected.size > 1 && <span className="text-xs text-graphite-400">Enriching this selection creates a batch.</span>}
         <button type="button" disabled={selectionBusy || !selected.size} onClick={() => setSelected(new Set())}
-          className="rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-200 disabled:opacity-50">Clear selection</button>
+          className="rounded border border-graphite-600 px-3 py-1.5 text-sm text-graphite-200 disabled:opacity-50">Clear selection</button>
         <button type="button" onClick={() => void runBulkEnrichment()} disabled={selectionBusy || loading || !selected.size}
-          className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-50">
+          className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-50">
           {bulkPending ? `Queuing ${bulkProgress} of ${bulkTotal}…` : `Enrich selected (${selected.size})`}
         </button>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-slate-800">
-        <table className="min-w-full divide-y divide-slate-800 text-sm">
-          <thead className="bg-slate-900/80">
+      <div className="overflow-x-auto rounded-lg border border-graphite-800">
+        <table className="min-w-full divide-y divide-graphite-800 text-sm">
+          <thead className="bg-graphite-900/80">
             <tr>
               <th className="px-3 py-2">
                 <input type="checkbox" aria-label="Select all visible eligible opportunities" checked={allVisibleSelected}
@@ -260,39 +260,39 @@ export default function OpportunityList() {
                   onChange={(event) => setSelected((current) => toggleOpportunitySelection(current, selectableVisible.map((row) => row.id), event.target.checked))}
                   className="h-4 w-4 accent-sky-500" />
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Business
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Location
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Industry
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Opportunity Score
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Pipeline Status
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Assessment
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Audit
               </th>
-              <th className="px-3 py-2 text-left font-medium text-slate-400">
+              <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Outreach
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/70 bg-slate-950/40">
+          <tbody className="divide-y divide-graphite-800/70 bg-graphite-950/40">
             {filteredSortedRows.map((row) => {
               const score = parseOpportunityScore(row);
               const status = assessmentStatus(row);
 
               return (
-                <tr key={row.id} className={selected.has(row.id) ? "bg-sky-500/10 hover:bg-sky-500/15" : "hover:bg-slate-900/50"}>
+                <tr key={row.id} className={selected.has(row.id) ? "oe-selected bg-accent-500/10 hover:bg-accent-500/15" : "hover:bg-graphite-900/50"}>
                   <td className="px-3 py-2.5">
                     <input type="checkbox" aria-label={`Select ${row.business_name}`} checked={selected.has(row.id)}
                       disabled={selectionBusy || !canSelectOpportunity(row)}
@@ -303,25 +303,25 @@ export default function OpportunityList() {
                   <td className="px-3 py-2.5">
                     <Link
                       to={`/opportunities/${row.id}`}
-                      className="font-medium text-slate-100 hover:text-accent-400 hover:underline"
+                      className="font-medium text-graphite-100 hover:text-accent-400 hover:underline"
                     >
                       {row.business_name}
                     </Link>
                     {row.batches?.map((batch) => <Link key={batch.id} to={`/batches/${batch.id}`} className="mt-1 mr-2 inline-block rounded bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300 hover:underline">{batch.name}</Link>)}
-                    <div className="text-xs text-slate-500">
+                    <div className="text-xs text-graphite-500">
                       updated {formatTimestamp(row.updated_at)}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-slate-300">
+                  <td className="px-3 py-2.5 text-graphite-300">
                     {row.location ?? "—"}
                   </td>
-                  <td className="px-3 py-2.5 text-slate-300">
+                  <td className="px-3 py-2.5 text-graphite-300">
                     {row.industry ?? "—"}
                   </td>
                   <td className="px-3 py-2.5">
                     {score !== null ? (
                       <div className="flex items-center gap-2">
-                        <span className="w-14 font-mono text-sm font-semibold text-slate-100">
+                        <span className="w-14 font-mono text-sm font-semibold text-graphite-100">
                           {score.toFixed(2)}
                         </span>
                         <ScoreBar
@@ -332,7 +332,7 @@ export default function OpportunityList() {
                         />
                       </div>
                     ) : (
-                      <span className="text-sm text-slate-500">
+                      <span className="text-sm text-graphite-500">
                         Not assessed
                       </span>
                     )}
@@ -364,13 +364,13 @@ export default function OpportunityList() {
         </table>
 
         {!loading && rows.length === 0 && !error && (
-          <div className="p-8 text-center text-sm text-slate-500">
+          <div className="p-8 text-center text-sm text-graphite-500">
             No opportunities found.
           </div>
         )}
 
         {!loading && rows.length > 0 && filteredSortedRows.length === 0 && (
-          <div className="p-8 text-center text-sm text-slate-500">
+          <div className="p-8 text-center text-sm text-graphite-500">
             No opportunities match current filters.
           </div>
         )}

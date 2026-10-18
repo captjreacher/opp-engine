@@ -35,11 +35,11 @@ import {
 } from "../lib/admin";
 
 const fieldClass =
-  "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-accent-500";
+  "mt-1 w-full rounded-md border border-graphite-700 bg-graphite-950 px-3 py-2 text-sm text-graphite-100 outline-none focus:border-accent-500";
 const buttonClass =
-  "rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40";
-const primaryButtonClass = `${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`;
-const cardClass = "rounded-lg border border-slate-800 bg-slate-900/60 p-5";
+  "rounded-md border border-graphite-700 bg-graphite-800 px-3 py-2 text-sm font-medium text-graphite-100 hover:bg-graphite-700 disabled:cursor-not-allowed disabled:opacity-40";
+const primaryButtonClass = `${buttonClass} oe-primary border-accent-600 bg-accent-600 hover:bg-accent-500`;
+const cardClass = "rounded-lg border border-graphite-800 bg-graphite-900/60 p-5";
 
 type TabKey = "categories" | "scenarios" | "settings" | "diagnostics";
 
@@ -74,10 +74,10 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="block text-sm text-slate-300">
+    <label className="block text-sm text-graphite-300">
       {label}
       {children}
-      {hint && !error && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
+      {hint && !error && <span className="mt-1 block text-xs text-graphite-500">{hint}</span>}
       {error && <span className="mt-1 block text-xs text-rose-400">{error}</span>}
     </label>
   );
@@ -95,7 +95,7 @@ function Toggle({
   disabled?: boolean;
 }) {
   return (
-    <label className="flex items-center gap-3 text-sm text-slate-300">
+    <label className="flex items-center gap-3 text-sm text-graphite-300">
       <button
         type="button"
         role="switch"
@@ -104,7 +104,7 @@ function Toggle({
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40 ${
-          checked ? "bg-emerald-500/80" : "bg-slate-700"
+          checked ? "bg-emerald-500/80" : "bg-graphite-700"
         }`}
       >
         <span
@@ -162,13 +162,13 @@ function CategoryEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/70" role="dialog" aria-modal="true" aria-label={`Edit ${category.slug}`}>
-      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-700 bg-slate-900 p-6 shadow-2xl">
+    <div className="fixed inset-0 z-40 flex justify-end bg-graphite-950/70" role="dialog" aria-modal="true" aria-label={`Edit ${category.slug}`}>
+      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-graphite-700 bg-graphite-900 p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-wider text-accent-400">Category</p>
             <h2 className="mt-1 text-xl font-semibold text-white">{category.label}</h2>
-            <p className="mt-1 font-mono text-xs text-slate-500">{category.slug}</p>
+            <p className="mt-1 font-mono text-xs text-graphite-500">{category.slug}</p>
           </div>
           <button className={buttonClass} onClick={onCancel}>Close</button>
         </div>
@@ -187,7 +187,7 @@ function CategoryEditor({
           >
             <textarea className={fieldClass} rows={3} value={searchTerms} onChange={(event) => setSearchTerms(event.target.value)} />
           </Field>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-graphite-500">
             Expands to: {splitTerms(searchTerms).length ? splitTerms(searchTerms).slice(0, HARD_LIMITS.maxSearchTerms).join(" · ") : "label only"}
           </p>
           <Field
@@ -204,12 +204,12 @@ function CategoryEditor({
               <input className={fieldClass} type="number" min={0} max={10000} value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} />
             </Field>
           </div>
-          <fieldset className="rounded-md border border-slate-800 p-3">
-            <legend className="px-1 text-sm text-slate-300">Compatible scenarios</legend>
-            <p className="mb-2 text-xs text-slate-500">None selected = compatible with every scenario.</p>
+          <fieldset className="rounded-md border border-graphite-800 p-3">
+            <legend className="px-1 text-sm text-graphite-300">Compatible scenarios</legend>
+            <p className="mb-2 text-xs text-graphite-500">None selected = compatible with every scenario.</p>
             <div className="space-y-2">
               {scenarioSlugs.map((slug) => (
-                <label key={slug} className="flex items-center gap-2 text-sm text-slate-300">
+                <label key={slug} className="flex items-center gap-2 text-sm text-graphite-300">
                   <input
                     type="checkbox"
                     checked={compatible.includes(slug)}
@@ -233,7 +233,7 @@ function CategoryEditor({
             {saving ? "Saving…" : "Save category"}
           </button>
           <button className={buttonClass} disabled={saving} onClick={onCancel}>Cancel</button>
-          <span className="text-xs text-slate-500">Existing runs keep their recorded snapshot.</span>
+          <span className="text-xs text-graphite-500">Existing runs keep their recorded snapshot.</span>
         </div>
       </div>
     </div>
@@ -278,8 +278,8 @@ function CategoriesTab({
     <section className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">Category registry</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className="text-sm font-semibold text-graphite-200">Category registry</h2>
+          <p className="mt-1 text-xs text-graphite-500">
             Deactivating hides a category from Discovery. Categories are never deleted, so historical runs stay readable.
           </p>
         </div>
@@ -287,28 +287,28 @@ function CategoriesTab({
       </div>
       <div className="mt-4 overflow-x-auto">
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-950/50 text-xs text-slate-500">
+          <thead className="bg-graphite-950/50 text-xs text-graphite-500">
             <tr>
               {["Category", "Slug", "Status", "Radius", "Terms", "Scenarios", "Order", ""].map((heading) => (
                 <th key={heading} className="px-3 py-2 text-left font-medium">{heading}</th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800">
+          <tbody className="divide-y divide-graphite-800">
             {config.categories.map((category) => (
-              <tr key={category.id} className="hover:bg-slate-800/30">
+              <tr key={category.id} className="hover:bg-graphite-800/30">
                 <td className="px-3 py-3">
-                  <p className="font-medium text-slate-200">{category.label}</p>
-                  {category.description && <p className="mt-0.5 max-w-72 text-xs text-slate-500">{category.description}</p>}
+                  <p className="font-medium text-graphite-200">{category.label}</p>
+                  {category.description && <p className="mt-0.5 max-w-72 text-xs text-graphite-500">{category.description}</p>}
                 </td>
-                <td className="px-3 py-3 font-mono text-xs text-slate-400">{category.slug}</td>
+                <td className="px-3 py-3 font-mono text-xs text-graphite-400">{category.slug}</td>
                 <td className="px-3 py-3"><Badge tone={statusTone(category.status)}>{category.status}</Badge></td>
-                <td className="px-3 py-3 text-slate-300">{formatRadius(category.default_radius_m)}</td>
-                <td className="px-3 py-3 text-slate-400">{category.search_terms.length}</td>
-                <td className="px-3 py-3 font-mono text-xs text-slate-400">
+                <td className="px-3 py-3 text-graphite-300">{formatRadius(category.default_radius_m)}</td>
+                <td className="px-3 py-3 text-graphite-400">{category.search_terms.length}</td>
+                <td className="px-3 py-3 font-mono text-xs text-graphite-400">
                   {category.compatible_scenarios.length ? category.compatible_scenarios.join(", ") : "any"}
                 </td>
-                <td className="px-3 py-3 text-slate-400">{category.sort_order ?? "—"}</td>
+                <td className="px-3 py-3 text-graphite-400">{category.sort_order ?? "—"}</td>
                 <td className="px-3 py-3">
                   <button className="text-accent-400 hover:underline" onClick={() => setEditing(category)}>Edit</button>
                 </td>
@@ -379,13 +379,13 @@ function ScenarioEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/70" role="dialog" aria-modal="true" aria-label={`Edit ${scenario.slug}`}>
-      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-700 bg-slate-900 p-6 shadow-2xl">
+    <div className="fixed inset-0 z-40 flex justify-end bg-graphite-950/70" role="dialog" aria-modal="true" aria-label={`Edit ${scenario.slug}`}>
+      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-graphite-700 bg-graphite-900 p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-wider text-accent-400">Scenario</p>
             <h2 className="mt-1 text-xl font-semibold text-white">{scenario.name}</h2>
-            <p className="mt-1 font-mono text-xs text-slate-500">{scenario.slug} · v{scenario.version}</p>
+            <p className="mt-1 font-mono text-xs text-graphite-500">{scenario.slug} · v{scenario.version}</p>
           </div>
           <button className={buttonClass} onClick={onCancel}>Close</button>
         </div>
@@ -443,12 +443,12 @@ function ScenarioEditor({
           </div>
         </div>
 
-        <section className="mt-6 rounded-md border border-slate-800 p-3">
-          <h3 className="text-sm text-slate-300">Compatible categories</h3>
+        <section className="mt-6 rounded-md border border-graphite-800 p-3">
+          <h3 className="text-sm text-graphite-300">Compatible categories</h3>
           {linkedCategories.length === 0 ? (
-            <p className="mt-1 text-xs text-slate-500">No category restricts itself to this scenario.</p>
+            <p className="mt-1 text-xs text-graphite-500">No category restricts itself to this scenario.</p>
           ) : (
-            <p className="mt-1 text-xs text-slate-400">{linkedCategories.map((category) => category.label).join(" · ")}</p>
+            <p className="mt-1 text-xs text-graphite-400">{linkedCategories.map((category) => category.label).join(" · ")}</p>
           )}
         </section>
 
@@ -501,8 +501,8 @@ function ScenariosTab({
     <section className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">Scenario registry</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className="text-sm font-semibold text-graphite-200">Scenario registry</h2>
+          <p className="mt-1 text-xs text-graphite-500">
             Drafts are visible here but never in the Discovery selector. Only scenarios the execution path supports can be activated.
           </p>
         </div>
@@ -510,30 +510,30 @@ function ScenariosTab({
       </div>
       <div className="mt-4 overflow-x-auto">
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-950/50 text-xs text-slate-500">
+          <thead className="bg-graphite-950/50 text-xs text-graphite-500">
             <tr>
               {["Scenario", "Slug", "Version", "Status", "Execution", "Result limit", "Radius", ""].map((heading) => (
                 <th key={heading} className="px-3 py-2 text-left font-medium">{heading}</th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800">
+          <tbody className="divide-y divide-graphite-800">
             {config.scenarios.map((scenario) => (
-              <tr key={scenario.id} className="hover:bg-slate-800/30">
+              <tr key={scenario.id} className="hover:bg-graphite-800/30">
                 <td className="px-3 py-3">
-                  <p className="font-medium text-slate-200">{scenario.name}</p>
-                  {scenario.description && <p className="mt-0.5 max-w-72 text-xs text-slate-500">{scenario.description}</p>}
+                  <p className="font-medium text-graphite-200">{scenario.name}</p>
+                  {scenario.description && <p className="mt-0.5 max-w-72 text-xs text-graphite-500">{scenario.description}</p>}
                 </td>
-                <td className="px-3 py-3 font-mono text-xs text-slate-400">{scenario.slug}</td>
-                <td className="px-3 py-3 text-slate-400">v{scenario.version}</td>
+                <td className="px-3 py-3 font-mono text-xs text-graphite-400">{scenario.slug}</td>
+                <td className="px-3 py-3 text-graphite-400">v{scenario.version}</td>
                 <td className="px-3 py-3"><Badge tone={statusTone(scenario.status)}>{scenario.status}</Badge></td>
                 <td className="px-3 py-3">
                   <Badge tone={scenario.executable ? "success" : "warning"}>
                     {scenario.executable ? "executable" : "not yet executable"}
                   </Badge>
                 </td>
-                <td className="px-3 py-3 text-slate-300">{String(scenario.discovery_config.default_result_limit ?? "—")}</td>
-                <td className="px-3 py-3 text-slate-300">
+                <td className="px-3 py-3 text-graphite-300">{String(scenario.discovery_config.default_result_limit ?? "—")}</td>
+                <td className="px-3 py-3 text-graphite-300">
                   {formatRadius(
                     typeof scenario.discovery_config.radius_m === "number"
                       ? scenario.discovery_config.radius_m
@@ -615,8 +615,8 @@ function SettingsTab({
     <section className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">Discovery settings</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className="text-sm font-semibold text-graphite-200">Discovery settings</h2>
+          <p className="mt-1 text-xs text-graphite-500">
             Discovery-wide defaults that do not belong to a category or scenario. Applying a change affects new runs only —
             existing runs keep their recorded configuration.
           </p>
@@ -726,8 +726,8 @@ function SettingsTab({
             }}
           />
         </Field>
-        <div className="rounded-md border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-400">
-          <p className="font-medium text-slate-300">Effective now</p>
+        <div className="rounded-md border border-graphite-800 bg-graphite-950/50 p-3 text-xs text-graphite-400">
+          <p className="font-medium text-graphite-300">Effective now</p>
           <p className="mt-1">Radius {formatRadius(config.settings.default_radius_m)} · results {config.settings.default_result_limit}/{config.settings.max_result_limit} · bias {config.settings.location_country_bias.toUpperCase()}</p>
           <p className="mt-1">Bounds {bounds.min}–{bounds.max} m · editable only within the code ceilings.</p>
         </div>
@@ -799,7 +799,7 @@ function DiagnosticsTab({ onError }: { onError: (message: string) => void }) {
   if (!diagnostics) {
     return (
       <section className={cardClass}>
-        <p className="text-sm text-slate-400">{loading ? "Loading diagnostics…" : "Diagnostics unavailable."}</p>
+        <p className="text-sm text-graphite-400">{loading ? "Loading diagnostics…" : "Diagnostics unavailable."}</p>
       </section>
     );
   }
@@ -817,9 +817,9 @@ function DiagnosticsTab({ onError }: { onError: (message: string) => void }) {
     <div className="space-y-5">
       <section className={cardClass}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-slate-200">Operational snapshot</h2>
+          <h2 className="text-sm font-semibold text-graphite-200">Operational snapshot</h2>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-500">Generated {new Date(diagnostics.generated_at).toLocaleString()}</span>
+            <span className="text-xs text-graphite-500">Generated {new Date(diagnostics.generated_at).toLocaleString()}</span>
             <button className={buttonClass} disabled={loading} onClick={() => void load()}>
               {loading ? "Refreshing…" : "Refresh"}
             </button>
@@ -828,15 +828,15 @@ function DiagnosticsTab({ onError }: { onError: (message: string) => void }) {
         <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3 lg:grid-cols-6">
           {stats.map(([label, value]) => (
             <div key={label}>
-              <dt className="text-xs text-slate-500">{label}</dt>
-              <dd className="mt-1 text-slate-200">{value}</dd>
+              <dt className="text-xs text-graphite-500">{label}</dt>
+              <dd className="mt-1 text-graphite-200">{value}</dd>
             </div>
           ))}
         </dl>
       </section>
 
       <section className={cardClass}>
-        <h2 className="text-sm font-semibold text-slate-200">Environment</h2>
+        <h2 className="text-sm font-semibold text-graphite-200">Environment</h2>
         <div className="mt-3 flex flex-wrap gap-2">
           <Badge tone={diagnostics.provider.google_places_configured ? "success" : "danger"}>
             Google Places {diagnostics.provider.google_places_configured ? "configured" : "not configured"}
@@ -849,7 +849,7 @@ function DiagnosticsTab({ onError }: { onError: (message: string) => void }) {
       </section>
 
       <section className={cardClass}>
-        <h2 className="text-sm font-semibold text-slate-200">Effective discovery defaults</h2>
+        <h2 className="text-sm font-semibold text-graphite-200">Effective discovery defaults</h2>
         <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3 lg:grid-cols-6">
           {([
             ["Default radius", formatRadius(diagnostics.settings.default_radius_m)],
@@ -860,38 +860,38 @@ function DiagnosticsTab({ onError }: { onError: (message: string) => void }) {
             ["Search terms", String(diagnostics.settings.max_search_terms)],
           ] as Array<[string, string]>).map(([label, value]) => (
             <div key={label}>
-              <dt className="text-xs text-slate-500">{label}</dt>
-              <dd className="mt-1 text-slate-200">{value}</dd>
+              <dt className="text-xs text-graphite-500">{label}</dt>
+              <dd className="mt-1 text-graphite-200">{value}</dd>
             </div>
           ))}
         </dl>
       </section>
 
       <section className={cardClass}>
-        <h2 className="text-sm font-semibold text-slate-200">Recent discovery runs</h2>
+        <h2 className="text-sm font-semibold text-graphite-200">Recent discovery runs</h2>
         {diagnostics.recent_runs.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-500">No discovery runs recorded yet.</p>
+          <p className="mt-3 text-sm text-graphite-500">No discovery runs recorded yet.</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-950/50 text-xs text-slate-500">
+              <thead className="bg-graphite-950/50 text-xs text-graphite-500">
                 <tr>
                   {["Created", "Status", "Scenario", "Category", "Location", "Terms", "Results", "Radius"].map((heading) => (
                     <th key={heading} className="px-3 py-2 text-left font-medium">{heading}</th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800">
+              <tbody className="divide-y divide-graphite-800">
                 {diagnostics.recent_runs.map((run) => (
-                  <tr key={run.id} className="hover:bg-slate-800/30">
-                    <td className="whitespace-nowrap px-3 py-3 text-slate-300">{new Date(run.created_at).toLocaleString()}</td>
+                  <tr key={run.id} className="hover:bg-graphite-800/30">
+                    <td className="whitespace-nowrap px-3 py-3 text-graphite-300">{new Date(run.created_at).toLocaleString()}</td>
                     <td className="px-3 py-3"><Badge tone={run.status === "completed" ? "success" : run.status === "failed" ? "danger" : "info"}>{run.status}</Badge></td>
-                    <td className="px-3 py-3 font-mono text-xs text-slate-400">{run.scenario_slug ?? "—"}{run.scenario_version ? ` v${run.scenario_version}` : ""}</td>
-                    <td className="px-3 py-3 text-slate-300">{run.category_label ?? run.category_slug ?? "—"}</td>
-                    <td className="px-3 py-3 text-slate-400">{run.location ?? "—"}</td>
-                    <td className="px-3 py-3 text-slate-400">{run.discovery_terms?.length ? run.discovery_terms.join(" · ") : "—"}</td>
-                    <td className="px-3 py-3 text-slate-300">{run.result_limit ?? "—"}</td>
-                    <td className="px-3 py-3 text-slate-300">{formatRadius(run.radius_m)}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-graphite-400">{run.scenario_slug ?? "—"}{run.scenario_version ? ` v${run.scenario_version}` : ""}</td>
+                    <td className="px-3 py-3 text-graphite-300">{run.category_label ?? run.category_slug ?? "—"}</td>
+                    <td className="px-3 py-3 text-graphite-400">{run.location ?? "—"}</td>
+                    <td className="px-3 py-3 text-graphite-400">{run.discovery_terms?.length ? run.discovery_terms.join(" · ") : "—"}</td>
+                    <td className="px-3 py-3 text-graphite-300">{run.result_limit ?? "—"}</td>
+                    <td className="px-3 py-3 text-graphite-300">{formatRadius(run.radius_m)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -966,7 +966,7 @@ export default function Admin() {
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-accent-400">Operator console</p>
           <h1 className="mt-1 text-2xl font-semibold text-white">Admin</h1>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="mt-1 text-sm text-graphite-400">
             Tune discovery configuration without editing migrations or source. Every change is validated and audited server-side.
           </p>
         </div>
@@ -975,12 +975,12 @@ export default function Admin() {
         </button>
       </header>
 
-      <nav className="flex flex-wrap gap-2 border-b border-slate-800 pb-2">
+      <nav className="flex flex-wrap gap-2 border-b border-graphite-800 pb-2">
         {TABS.map((entry) => (
           <button
             key={entry.key}
             className={`rounded px-3 py-1.5 text-sm transition-colors ${
-              tab === entry.key ? "bg-slate-800 text-slate-100" : "text-slate-400 hover:text-slate-200"
+              tab === entry.key ? "bg-graphite-800 text-graphite-100" : "text-graphite-400 hover:text-graphite-200"
             }`}
             aria-current={tab === entry.key ? "page" : undefined}
             onClick={() => setTab(entry.key)}
@@ -1006,7 +1006,7 @@ export default function Admin() {
 
       {!config ? (
         <section className={cardClass}>
-          <p className="text-sm text-slate-400">{loading ? "Loading configuration…" : "Configuration unavailable."}</p>
+          <p className="text-sm text-graphite-400">{loading ? "Loading configuration…" : "Configuration unavailable."}</p>
         </section>
       ) : tab === "categories" ? (
         <CategoriesTab config={config} onRefresh={load} onResult={showNotice} onError={showError} />

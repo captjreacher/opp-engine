@@ -78,8 +78,8 @@ function DetailRow({
 }) {
   return (
     <div className="grid grid-cols-1 gap-x-3 gap-y-0.5 text-sm sm:grid-cols-[5rem_1fr] sm:gap-y-0">
-      <dt className="text-xs text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-200 break-words sm:truncate">
+      <dt className="text-xs text-graphite-500">{label}</dt>
+      <dd className="text-sm text-graphite-200 break-words sm:truncate">
         {children}
       </dd>
     </div>
@@ -89,7 +89,7 @@ function DetailRow({
 /** Section heading used consistently across the page. */
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+    <h2 className="flex items-center gap-2 text-sm font-semibold text-graphite-200">
       {children}
     </h2>
   );
@@ -465,14 +465,14 @@ export default function OpportunityDetail() {
 
   if (!isApiConfigured) {
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-8 text-center text-slate-400">
+      <div className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-8 text-center text-graphite-400">
         API is not configured. See the banner above.
       </div>
     );
   }
 
   if (loading && !detail) {
-    return <p className="text-sm text-slate-500">Loading opportunity…</p>;
+    return <p className="text-sm text-graphite-500">Loading opportunity…</p>;
   }
 
   if (loadError) {
@@ -492,7 +492,7 @@ export default function OpportunityDetail() {
   }
 
   if (!detail) {
-    return <p className="text-sm text-slate-500">No data.</p>;
+    return <p className="text-sm text-graphite-500">No data.</p>;
   }
 
   const {
@@ -600,13 +600,13 @@ export default function OpportunityDetail() {
       </Link>
 
       {/* ── Header card: business name + status + guided workflow ── */}
-      <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-4">
+      <div className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-slate-100 truncate">
+            <h1 className="text-xl font-semibold text-graphite-100 truncate">
               {lead.business_name}
             </h1>
-            <p className="text-sm text-slate-500 mt-0.5">
+            <p className="text-sm text-graphite-500 mt-0.5">
               {[lead.category, lead.suburb ?? lead.region]
                 .filter(Boolean)
                 .join(" · ") || "—"}
@@ -618,7 +618,7 @@ export default function OpportunityDetail() {
         </div>
 
         {/* Guided workflow — replaces the old 4-step ReviewStepper */}
-        <div className="border-t border-slate-800 pt-3">
+        <div className="border-t border-graphite-800 pt-3">
           <GuidedWorkflow
             state={workflowState}
             onStepAction={handleWorkflowStep}
@@ -626,13 +626,13 @@ export default function OpportunityDetail() {
         </div>
       </div>
 
-      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-4">
+      <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <SectionHeading>
             <svg
               viewBox="0 0 24 24"
               fill="none"
-              className="h-4 w-4 text-slate-400"
+              className="h-4 w-4 text-graphite-400"
               aria-hidden="true"
             >
               <path
@@ -652,20 +652,20 @@ export default function OpportunityDetail() {
             </svg>
             Intelligence Workflow
           </SectionHeading>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-graphite-500">
             Operator-triggered only: enrich, analyze, and audit stay explicit.
           </p>
         </div>
 
 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-<div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-<p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+<div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
+<p className="text-xs font-medium uppercase tracking-wide text-graphite-500">
 Enrichment
 </p>
-<p className="mt-1 text-sm text-slate-200">
+<p className="mt-1 text-sm text-graphite-200">
   {enrichmentRunning ? "Enrichment running…" : hasEnrichment ? "Ready" : "Not enriched"}
 </p>
-<p className="mt-1 text-xs text-slate-500">
+<p className="mt-1 text-xs text-graphite-500">
   {enrichmentRunning
     ? "Enrichment is running in the background. The page will refresh automatically."
     : enrichmentStale
@@ -683,7 +683,7 @@ Enrichment
         : handleEnrich(enrichmentStale))
     }
     disabled={intelligencePending !== null}
-    className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
+    className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
   >
     {intelligencePending === "enrich"
       ? "Working…"
@@ -698,14 +698,14 @@ Enrichment
 </div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-graphite-500">
               Analysis
             </p>
-            <p className="mt-1 text-sm text-slate-200">
+            <p className="mt-1 text-sm text-graphite-200">
               {latest_assessment ? "Assessed" : "Not assessed"}
             </p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-graphite-500">
               {latestAnalysisEvent
                 ? `Last completed ${formatTimestamp(latestAnalysisEvent.created_at)}`
                 : hasEnrichment
@@ -728,14 +728,14 @@ Enrichment
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-graphite-500">
               Audit
             </p>
-            <p className="mt-1 text-sm text-slate-200">
+            <p className="mt-1 text-sm text-graphite-200">
               {audit_report ? "Visible" : "Not generated"}
             </p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-graphite-500">
               {audit_report
                 ? `Current report generated ${formatTimestamp(audit_report.generated_at)}`
                 : latest_assessment
@@ -779,12 +779,12 @@ Enrichment
         {/* Left column: Business Details + evidence preview */}
         <div className="space-y-4">
           {/* Business Details (condensed) */}
-          <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+          <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
             <SectionHeading>
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
-                className="h-4 w-4 text-slate-400"
+                className="h-4 w-4 text-graphite-400"
                 aria-hidden="true"
               >
                 <path
@@ -807,7 +807,7 @@ Enrichment
               <DetailRow label="Category">
                 {lead.category ?? "—"}
                 {lead.categories && lead.categories.length > 0 && (
-                  <span className="ml-1 text-xs text-slate-500">
+                  <span className="ml-1 text-xs text-graphite-500">
                     ({lead.categories.join(", ")})
                   </span>
                 )}
@@ -831,7 +831,7 @@ Enrichment
                   href={lead.website_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                  className="inline-flex items-center gap-1 rounded border border-graphite-700 px-2 py-1 text-xs text-graphite-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
                 >
                   Website
                   <svg
@@ -855,7 +855,7 @@ Enrichment
                   href={lead.facebook_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                  className="rounded border border-graphite-700 px-2 py-1 text-xs text-graphite-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
                 >
                   Facebook ↗
                 </a>
@@ -865,7 +865,7 @@ Enrichment
                   href={lead.google_maps_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                  className="rounded border border-graphite-700 px-2 py-1 text-xs text-graphite-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
                 >
                   Google Maps ↗
                 </a>
@@ -873,7 +873,7 @@ Enrichment
               {lead.phone && (
                 <a
                   href={`tel:${lead.phone}`}
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                  className="rounded border border-graphite-700 px-2 py-1 text-xs text-graphite-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
                 >
                   Call {lead.phone}
                 </a>
@@ -881,7 +881,7 @@ Enrichment
               {lead.email && (
                 <a
                   href={`mailto:${lead.email}`}
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
+                  className="rounded border border-graphite-700 px-2 py-1 text-xs text-graphite-300 hover:border-accent-500 hover:text-accent-300 transition-colors"
                 >
                   Email {lead.email}
                 </a>
@@ -891,12 +891,12 @@ Enrichment
 
           {/* Business Evidence (inline usage under Business Details — fills the empty space) */}
           {evidenceItems.length > 0 && (
-            <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+            <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
               <SectionHeading>
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
-                  className="h-4 w-4 text-slate-400"
+                  className="h-4 w-4 text-graphite-400"
                   aria-hidden="true"
                 >
                   <path
@@ -918,7 +918,7 @@ Enrichment
                         ? "text-rose-400"
                         : item.status === "partial"
                           ? "text-amber-400"
-                          : "text-slate-500";
+                          : "text-graphite-500";
                   const dotColor =
                     item.status === "found"
                       ? "bg-emerald-500"
@@ -926,17 +926,17 @@ Enrichment
                         ? "bg-rose-500"
                         : item.status === "partial"
                           ? "bg-amber-500"
-                          : "bg-slate-600";
+                          : "bg-graphite-600";
                   return (
                     <div
                       key={item.label}
-                      className="flex items-center gap-2 rounded-md bg-slate-950/40 px-3 py-2 border border-slate-800/60"
+                      className="flex items-center gap-2 rounded-md bg-graphite-950/40 px-3 py-2 border border-graphite-800/60"
                     >
                       <span
                         className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`}
                         aria-hidden="true"
                       />
-                      <span className="text-xs text-slate-300">
+                      <span className="text-xs text-graphite-300">
                         {item.label}
                       </span>
                       <span
@@ -959,12 +959,12 @@ Enrichment
 
           {/* Website & Google Maps preview area */}
           {(lead.website_url || lead.google_maps_url) && (
-            <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+            <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
               <SectionHeading>
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
-                  className="h-4 w-4 text-slate-400"
+                  className="h-4 w-4 text-graphite-400"
                   aria-hidden="true"
                 >
                   <path
@@ -986,7 +986,7 @@ Enrichment
               </SectionHeading>
               <div className="space-y-2 text-sm">
                 {lead.website_url && (
-                  <div className="flex items-start gap-2 rounded-md bg-slate-950/40 px-3 py-2.5 border border-slate-800/60">
+                  <div className="flex items-start gap-2 rounded-md bg-graphite-950/40 px-3 py-2.5 border border-graphite-800/60">
                     <svg
                       viewBox="0 0 24 24"
                       fill="none"
@@ -1009,7 +1009,7 @@ Enrichment
                   </div>
                 )}
                 {lead.google_maps_url && (
-                  <div className="flex items-start gap-2 rounded-md bg-slate-950/40 px-3 py-2.5 border border-slate-800/60">
+                  <div className="flex items-start gap-2 rounded-md bg-graphite-950/40 px-3 py-2.5 border border-graphite-800/60">
                     <svg
                       viewBox="0 0 24 24"
                       fill="none"
@@ -1047,12 +1047,12 @@ Enrichment
 
           {/* AI Reasoning — assessment summary / recommended angle */}
           {latest_assessment?.recommended_outreach_angle && (
-            <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-2">
+            <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-2">
               <SectionHeading>
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
-                  className="h-4 w-4 text-slate-400"
+                  className="h-4 w-4 text-graphite-400"
                   aria-hidden="true"
                 >
                   <path
@@ -1065,7 +1065,7 @@ Enrichment
                 </svg>
                 AI Reasoning
               </SectionHeading>
-              <p className="text-sm leading-relaxed text-slate-300 bg-slate-950/40 rounded-md px-3 py-2.5 border border-slate-800/60">
+              <p className="text-sm leading-relaxed text-graphite-300 bg-graphite-950/40 rounded-md px-3 py-2.5 border border-graphite-800/60">
                 {latest_assessment.recommended_outreach_angle}
               </p>
             </section>
@@ -1080,7 +1080,7 @@ Enrichment
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
-                className="h-4 w-4 text-slate-400"
+                className="h-4 w-4 text-graphite-400"
                 aria-hidden="true"
               >
                 <path
@@ -1101,14 +1101,14 @@ Enrichment
                 subLabel={`Assessed ${formatTimestamp(latest_assessment?.assessed_at)}`}
               />
             ) : (
-              <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
-                <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500">
+              <div className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-5">
+                <p className="text-xs font-medium uppercase tracking-[0.15em] text-graphite-500">
                   Opportunity Score
                 </p>
-                <p className="mt-2 text-lg font-semibold text-slate-100">
+                <p className="mt-2 text-lg font-semibold text-graphite-100">
                   Not assessed
                 </p>
-                <p className="mt-1 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-graphite-500">
                   Run enrichment, then trigger analysis when you want this opportunity scored.
                 </p>
               </div>
@@ -1123,7 +1123,7 @@ Enrichment
                   <svg
                     viewBox="0 0 24 24"
                     fill="none"
-                    className="h-4 w-4 text-slate-400"
+                    className="h-4 w-4 text-graphite-400"
                     aria-hidden="true"
                   >
                     <path
@@ -1171,7 +1171,7 @@ Enrichment
               </div>
             </div>
           ) : (
-            <p className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-500">
+            <p className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 text-sm text-graphite-500">
               Not assessed yet. Enrichment and analysis stay operator-triggered.
             </p>
           )}
@@ -1189,12 +1189,12 @@ Enrichment
       <EvidencePanel items={evidenceItems} />
 
       {/* ── Audit Report (existing, unchanged) ── */}
-      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+      <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
         <SectionHeading>
           <svg
             viewBox="0 0 24 24"
             fill="none"
-            className="h-4 w-4 text-slate-400"
+            className="h-4 w-4 text-graphite-400"
             aria-hidden="true"
           >
             <path
@@ -1224,12 +1224,12 @@ Enrichment
       </section>
 
       {/* ── Event Timeline (vertical, replaces old EventHistory) ── */}
-      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+      <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
         <SectionHeading>
           <svg
             viewBox="0 0 24 24"
             fill="none"
-            className="h-4 w-4 text-slate-400"
+            className="h-4 w-4 text-graphite-400"
             aria-hidden="true"
           >
             <path
@@ -1256,12 +1256,12 @@ Enrichment
       {/* ── Two-column: Review actions (left) + Outreach Workspace (right) ── */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         {/* Left: Operator Review Actions */}
-        <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+        <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
           <SectionHeading>
             <svg
               viewBox="0 0 24 24"
               fill="none"
-              className="h-4 w-4 text-slate-400"
+              className="h-4 w-4 text-graphite-400"
               aria-hidden="true"
             >
               <path
@@ -1285,7 +1285,7 @@ Enrichment
                   type="button"
                   onClick={() => handleReviewTransition(action.toState)}
                   disabled={disabled}
-                  className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:opacity-60"
+                  className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:bg-graphite-700 disabled:text-graphite-400 disabled:opacity-60"
                 >
                   {reviewPending === action.toState ? "Working…" : action.label}
                 </button>
@@ -1305,12 +1305,12 @@ Enrichment
         </section>
 
         {/* Right: Outreach Workspace — redesigned with contact header */}
-        <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-4">
+        <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
           <SectionHeading>
             <svg
               viewBox="0 0 24 24"
               fill="none"
-              className="h-4 w-4 text-slate-400"
+              className="h-4 w-4 text-graphite-400"
               aria-hidden="true"
             >
               <path
@@ -1330,13 +1330,13 @@ Enrichment
               {contactInfo.map((info) => (
                 <div
                   key={info.label}
-                  className="rounded-md border border-slate-800 bg-slate-950/40 px-3 py-2"
+                  className="rounded-md border border-graphite-800 bg-graphite-950/40 px-3 py-2"
                 >
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-graphite-500">
                     {info.label}
                   </p>
                   <p
-                    className="mt-0.5 text-xs text-slate-200 break-words"
+                    className="mt-0.5 text-xs text-graphite-200 break-words"
                     title={info.value}
                   >
                     {info.value}
@@ -1349,7 +1349,7 @@ Enrichment
           {/* Draft workspace */}
           {!latestDraft ? (
             <div className="space-y-3">
-              <p className="text-sm text-slate-500">No outreach drafts yet.</p>
+              <p className="text-sm text-graphite-500">No outreach drafts yet.</p>
               {outreachBlockedReason && (
                 <p className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
                   {outreachBlockedReason}
@@ -1359,7 +1359,7 @@ Enrichment
                 type="button"
                 onClick={handleGenerateDraft}
                 disabled={generatingDraft || Boolean(outreachBlockedReason)}
-                className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -1398,7 +1398,7 @@ Enrichment
               />
 
               {/* Attachments placeholder */}
-              <div className="rounded border border-dashed border-slate-700/60 bg-slate-950/30 px-4 py-3 text-center text-xs text-slate-600">
+              <div className="rounded border border-dashed border-graphite-700/60 bg-graphite-950/30 px-4 py-3 text-center text-xs text-graphite-500">
                 Attachments — coming soon
               </div>
 
@@ -1408,7 +1408,7 @@ Enrichment
                   href={audit_report.pdf_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 rounded border border-slate-700 px-3 py-2 text-xs text-accent-400 transition-colors hover:border-accent-600 hover:text-accent-300"
+                  className="flex items-center gap-2 rounded border border-graphite-700 px-3 py-2 text-xs text-accent-400 transition-colors hover:border-accent-600 hover:text-accent-300"
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -1459,14 +1459,14 @@ Enrichment
           {/* Prior drafts */}
           {priorDrafts.length > 0 && (
             <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-graphite-500">
                 Prior Drafts
               </p>
               <ul className="space-y-1.5">
                 {priorDrafts.map((d) => (
                   <li
                     key={d.id}
-                    className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/40 px-3 py-1.5 text-xs text-slate-400"
+                    className="flex items-center justify-between rounded border border-graphite-800 bg-graphite-950/40 px-3 py-1.5 text-xs text-graphite-400"
                   >
                     <span className="truncate">
                       {d.subject ?? "(no subject)"}
@@ -1484,13 +1484,13 @@ Enrichment
       </div>
 
       {/* ── Outcome Tracking (Phase 4, preserved) ── */}
-      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+      <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SectionHeading>
             <svg
               viewBox="0 0 24 24"
               fill="none"
-              className="h-4 w-4 text-slate-400"
+              className="h-4 w-4 text-graphite-400"
               aria-hidden="true"
             >
               <path
@@ -1529,7 +1529,7 @@ Enrichment
                     type="button"
                     onClick={() => handleOutcomeTransition(action.toState)}
                     disabled={disabled}
-                    className="rounded bg-slate-700 px-3 py-1.5 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded bg-graphite-700 px-3 py-1.5 text-sm font-medium text-graphite-100 transition-colors hover:bg-graphite-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {outcomePending === action.toState
                       ? "Working…"
@@ -1545,7 +1545,7 @@ Enrichment
             )}
           </>
         ) : (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-graphite-500">
             Send an approved outreach email to start tracking outcomes for this
             opportunity.
           </p>

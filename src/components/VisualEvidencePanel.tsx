@@ -61,14 +61,14 @@ function EvidenceCard({ evidence }: EvidenceCardProps) {
   const coords = formatCoordinates(evidence);
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2.5">
+    <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3 space-y-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 shrink-0 text-graphite-400" aria-hidden="true">
             <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
             <circle cx="12" cy="9" r="2.5" stroke="currentColor" strokeWidth={1.5} />
           </svg>
-          <span className="text-sm font-medium text-slate-200 truncate">{sourceLabel(evidence.source)}</span>
+          <span className="text-sm font-medium text-graphite-200 truncate">{sourceLabel(evidence.source)}</span>
           {evidence.media_type !== "image" && (
             <Badge tone="neutral">{evidence.media_type}</Badge>
           )}
@@ -89,39 +89,39 @@ function EvidenceCard({ evidence }: EvidenceCardProps) {
       <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-2">
         {evidence.provider_reference && (
           <div className="min-w-0">
-            <dt className="text-slate-500">Provider reference</dt>
-            <dd className="text-slate-300 truncate" title={evidence.provider_reference}>
+            <dt className="text-graphite-500">Provider reference</dt>
+            <dd className="text-graphite-300 truncate" title={evidence.provider_reference}>
               {evidence.provider_reference}
             </dd>
           </div>
         )}
         <div>
-          <dt className="text-slate-500">Capture date</dt>
-          <dd className="text-slate-300">
+          <dt className="text-graphite-500">Capture date</dt>
+          <dd className="text-graphite-300">
             {captureDate}
             {evidence.capture_date_precision === "month" && (
-              <span className="ml-1 text-slate-500">(month precision)</span>
+              <span className="ml-1 text-graphite-500">(month precision)</span>
             )}
             {evidence.capture_date_precision === "year" && (
-              <span className="ml-1 text-slate-500">(year precision)</span>
+              <span className="ml-1 text-graphite-500">(year precision)</span>
             )}
           </dd>
         </div>
         {age && (
           <div>
-            <dt className="text-slate-500">Evidence age</dt>
-            <dd className="text-slate-300">{age}</dd>
+            <dt className="text-graphite-500">Evidence age</dt>
+            <dd className="text-graphite-300">{age}</dd>
           </div>
         )}
         {coords && (
           <div>
-            <dt className="text-slate-500">Location</dt>
-            <dd className="text-slate-300 font-mono">{coords}</dd>
+            <dt className="text-graphite-500">Location</dt>
+            <dd className="text-graphite-300 font-mono">{coords}</dd>
           </div>
         )}
         <div>
-          <dt className="text-slate-500">Status</dt>
-          <dd className="text-slate-300 capitalize">{evidence.status}</dd>
+          <dt className="text-graphite-500">Status</dt>
+          <dd className="text-graphite-300 capitalize">{evidence.status}</dd>
         </div>
       </dl>
 
@@ -138,7 +138,7 @@ function EvidenceCard({ evidence }: EvidenceCardProps) {
             href={streetViewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded border border-slate-700 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:border-accent-500 hover:text-accent-300"
+            className="inline-flex items-center gap-1 rounded border border-graphite-700 px-2.5 py-1 text-xs text-graphite-300 transition-colors hover:border-accent-500 hover:text-accent-300"
           >
             Open Street View
             <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3" aria-hidden="true">
@@ -210,7 +210,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded bg-accent-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-500"
+        className="inline-flex items-center gap-1.5 oe-primary rounded bg-accent-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-500"
       >
         <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
           <path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
@@ -221,16 +221,16 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
   }
 
   const inputClass =
-    "w-full rounded border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:border-accent-500";
+    "w-full rounded border border-graphite-700 bg-graphite-950/60 px-2.5 py-1.5 text-sm text-graphite-200 placeholder-graphite-600 outline-none focus:border-accent-500";
 
   return (
     <form onSubmit={handleSubmit} className="space-y-2.5 rounded border border-accent-500/20 bg-accent-500/5 p-3">
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-graphite-400">
         Add an operator-supplied or licensed image for future AI analysis. Provide the hosted
         image URL — the app does not upload image files directly.
       </p>
       <div>
-        <label htmlFor="ve-source-url" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+        <label htmlFor="ve-source-url" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-graphite-500">
           Image URL *
         </label>
         <input
@@ -244,7 +244,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
         />
       </div>
       <div>
-        <label htmlFor="ve-source" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+        <label htmlFor="ve-source" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-graphite-500">
           Provenance
         </label>
         <select
@@ -259,7 +259,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
       </div>
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <div>
-          <label htmlFor="ve-captured-at" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+          <label htmlFor="ve-captured-at" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-graphite-500">
             Capture date
           </label>
           <input
@@ -271,7 +271,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
           />
         </div>
         <div>
-          <label htmlFor="ve-precision" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+          <label htmlFor="ve-precision" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-graphite-500">
             Precision
           </label>
           <select
@@ -289,7 +289,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
       </div>
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <div>
-          <label htmlFor="ve-lat" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+          <label htmlFor="ve-lat" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-graphite-500">
             Latitude (optional)
           </label>
           <input
@@ -303,7 +303,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
           />
         </div>
         <div>
-          <label htmlFor="ve-lng" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-500">
+          <label htmlFor="ve-lng" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-graphite-500">
             Longitude (optional)
           </label>
           <input
@@ -326,14 +326,14 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
         <button
           type="submit"
           disabled={submitting}
-          className="rounded bg-accent-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? "Adding…" : "Add evidence"}
         </button>
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-slate-600 hover:text-slate-100"
+          className="rounded border border-graphite-700 px-3 py-1.5 text-xs text-graphite-300 transition-colors hover:border-graphite-600 hover:text-graphite-100"
         >
           Cancel
         </button>
@@ -367,10 +367,10 @@ export default function VisualEvidencePanel({ leadId, evidence, onAdded }: Visua
   const analysableCount = evidence.filter((e) => !isReferenceOnly(e)).length;
 
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+    <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-slate-400" aria-hidden="true">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-graphite-200">
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-graphite-400" aria-hidden="true">
             <path d="M2 12S5 4 12 4s10 8 10 8-3 8-10 8-10-8-10-8z" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
             <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth={1.5} />
           </svg>
@@ -391,7 +391,7 @@ export default function VisualEvidencePanel({ leadId, evidence, onAdded }: Visua
       </div>
 
       {evidence.length === 0 ? (
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-graphite-500">
           No visual evidence recorded for this opportunity yet.
         </p>
       ) : (
@@ -402,9 +402,9 @@ export default function VisualEvidencePanel({ leadId, evidence, onAdded }: Visua
         </div>
       )}
 
-      <div className="border-t border-slate-800 pt-3 space-y-3">
+      <div className="border-t border-graphite-800 pt-3 space-y-3">
         <AddAnalysableForm leadId={leadId} onAdded={onAdded} />
-        <p className="text-[11px] leading-relaxed text-slate-500">
+        <p className="text-[11px] leading-relaxed text-graphite-500">
           Future visual analysis will report conditions (
           {VISUAL_FINDING_CATEGORIES.map((c) => VISUAL_FINDING_CATEGORY_LABELS[c]).join(", ")}
           ) with provenance back to the exact evidence item. No findings are generated yet.
