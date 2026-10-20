@@ -13,15 +13,15 @@ const SYSTEM_EVENTS: Record<string, { label: string; icon: string }> = {
 };
 
 const WORKFLOW_MILESTONES: { id: string; label: string; color: string; icon: string }[] = [
-  { id: "detected", label: "Opportunity discovered", color: "text-slate-400", icon: "◉" },
-  { id: "assessment", label: "Assessment completed", color: "text-slate-400", icon: "◉" },
-  { id: "audit", label: "Audit generated", color: "text-slate-400", icon: "◉" },
-  { id: "draft", label: "Draft created", color: "text-slate-400", icon: "◉" },
-  { id: "approved", label: "Outreach approved", color: "text-slate-400", icon: "◉" },
-  { id: "sent", label: "Email sent", color: "text-slate-400", icon: "◉" },
-  { id: "replied", label: "Customer replied", color: "text-slate-400", icon: "◉" },
-  { id: "meeting", label: "Meeting booked", color: "text-slate-400", icon: "◉" },
-  { id: "converted", label: "Opportunity converted", color: "text-slate-400", icon: "◉" },
+  { id: "detected", label: "Opportunity discovered", color: "text-graphite-400", icon: "◉" },
+  { id: "assessment", label: "Assessment completed", color: "text-graphite-400", icon: "◉" },
+  { id: "audit", label: "Audit generated", color: "text-graphite-400", icon: "◉" },
+  { id: "draft", label: "Draft created", color: "text-graphite-400", icon: "◉" },
+  { id: "approved", label: "Outreach approved", color: "text-graphite-400", icon: "◉" },
+  { id: "sent", label: "Email sent", color: "text-graphite-400", icon: "◉" },
+  { id: "replied", label: "Customer replied", color: "text-graphite-400", icon: "◉" },
+  { id: "meeting", label: "Meeting booked", color: "text-graphite-400", icon: "◉" },
+  { id: "converted", label: "Opportunity converted", color: "text-graphite-400", icon: "◉" },
 ];
 
 function humaniseAction(action: string): string {
@@ -181,29 +181,29 @@ export default function EventTimeline({
         {milestones.map((m, idx) => {
           const isLast = idx === milestones.length - 1;
           const bgColor = m.closedTerminal
-            ? "bg-slate-700/60 ring-slate-600/50"
+            ? "bg-graphite-700/60 ring-graphite-600/50"
             : m.complete
               ? "bg-emerald-500/20 ring-emerald-500/40"
               : m.current
                 ? "bg-accent-500/20 ring-accent-500/40"
-                : "bg-slate-800/60 ring-slate-700/50";
+                : "bg-graphite-800/60 ring-graphite-700/50";
           const lineColor = m.closedTerminal
-            ? "bg-slate-700/60"
+            ? "bg-graphite-700/60"
             : m.complete
               ? "bg-emerald-500/30"
               : m.current
                 ? "bg-accent-500/20"
-                : "bg-slate-800";
+                : "bg-graphite-800";
 
           // Label class derives the closed-terminal slate/neutral palette —
           // distinct from emerald success (complete) and accent current.
           const labelClass = m.closedTerminal
-            ? "text-slate-300"
+            ? "text-graphite-300"
             : m.complete
               ? "text-emerald-300"
               : m.current
                 ? "text-accent-200"
-                : "text-slate-500";
+                : "text-graphite-500";
 
           return (
             <div key={m.id} className="relative flex gap-3 pb-2 last:pb-0">
@@ -224,7 +224,7 @@ export default function EventTimeline({
                 >
                   {m.closedTerminal ? (
                     // Hyphen/dash glyph: indicates terminal "ended" without implying conversion.
-                    <span className="block h-px w-2.5 bg-slate-300" />
+                    <span className="block h-px w-2.5 bg-graphite-300" />
                   ) : m.complete ? (
                     <svg viewBox="0 0 12 12" fill="none" className="h-2.5 w-2.5 text-emerald-400">
                       <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
@@ -232,7 +232,7 @@ export default function EventTimeline({
                   ) : m.current ? (
                     <span className="h-2 w-2 rounded-full bg-accent-400 animate-pulse" />
                   ) : (
-                    <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-graphite-600" />
                   )}
                 </div>
               </div>
@@ -253,10 +253,10 @@ export default function EventTimeline({
         <>
           <div className="relative my-3">
             <div className="absolute inset-0 flex items-center" aria-hidden="true">
-              <div className="w-full border-t border-slate-800" />
+              <div className="w-full border-t border-graphite-800" />
             </div>
             <div className="relative flex justify-center">
-              <span className="bg-slate-900/60 px-2 text-[10px] text-slate-600 uppercase tracking-wider">
+              <span className="bg-graphite-900/60 px-2 text-[10px] text-graphite-500 uppercase tracking-wider">
                 Event Log
               </span>
             </div>
@@ -269,31 +269,31 @@ export default function EventTimeline({
                 <div
                   key={event.id}
                   className={`flex items-start gap-2.5 rounded-md px-3 py-2 transition-colors ${
-                    isLatest ? "bg-slate-800/40" : "hover:bg-slate-800/20"
+                    isLatest ? "bg-graphite-800/40" : "hover:bg-graphite-800/20"
                   }`}
                 >
                   <span
                     className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] ${
                       event.action === "outreach_send_failed"
                         ? "bg-rose-500/20 text-rose-400"
-                        : "bg-slate-800 text-slate-400"
+                        : "bg-graphite-800 text-graphite-400"
                     }`}
                   >
                     {iconForAction(event.action)}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-300">
+                      <span className="text-xs font-medium text-graphite-300">
                         {humaniseAction(event.action)}
                       </span>
                       <span
-                        className="shrink-0 text-[10px] text-slate-600"
+                        className="shrink-0 text-[10px] text-graphite-500"
                         title={formatTimestamp(event.created_at)}
                       >
                         {formatRelative(event.created_at)}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[10px] text-slate-600">
+                    <p className="mt-0.5 text-[10px] text-graphite-500">
                       by {event.actor}
                       {event.draft_id ? ` · draft ${event.draft_id.slice(0, 8)}` : ""}
                     </p>
@@ -305,7 +305,7 @@ export default function EventTimeline({
               <button
                 type="button"
                 onClick={() => setShowAllEvents(true)}
-                className="w-full rounded-md px-3 py-1.5 text-xs text-accent-400 transition-colors hover:bg-slate-800/30 hover:text-accent-300"
+                className="w-full rounded-md px-3 py-1.5 text-xs text-accent-400 transition-colors hover:bg-graphite-800/30 hover:text-accent-300"
               >
                 Show all {events.length} events
               </button>
@@ -314,7 +314,7 @@ export default function EventTimeline({
               <button
                 type="button"
                 onClick={() => setShowAllEvents(false)}
-                className="w-full rounded-md px-3 py-1.5 text-xs text-slate-500 transition-colors hover:bg-slate-800/30"
+                className="w-full rounded-md px-3 py-1.5 text-xs text-graphite-500 transition-colors hover:bg-graphite-800/30"
               >
                 Show fewer
               </button>

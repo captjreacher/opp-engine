@@ -31,7 +31,7 @@ function statusColor(status: EvidenceStatus): string {
     case "partial":
       return "bg-amber-500/15 text-amber-400 ring-amber-500/30";
     case "unknown":
-      return "bg-slate-700/50 text-slate-500 ring-slate-600/50";
+      return "bg-graphite-700/50 text-graphite-500 ring-graphite-600/50";
   }
 }
 
@@ -115,17 +115,17 @@ export default function EvidencePanel({ items }: EvidencePanelProps) {
   const totalCount = items.length;
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/60 transition-all duration-200">
+    <div className="rounded-lg border border-graphite-800 bg-graphite-900/60 transition-all duration-200">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-800/40"
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-graphite-800/40"
       >
         <div className="flex items-center gap-2">
           <svg
             viewBox="0 0 24 24"
             fill="none"
-            className="h-4 w-4 text-slate-400"
+            className="h-4 w-4 text-graphite-400"
             aria-hidden="true"
           >
             <path
@@ -137,15 +137,15 @@ export default function EvidencePanel({ items }: EvidencePanelProps) {
             />
             <path d="M5 9H15C17.2091 9 19 10.7909 19 13V19" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
           </svg>
-          <span className="text-sm font-medium text-slate-200">Evidence Used</span>
-          <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
+          <span className="text-sm font-medium text-graphite-200">Evidence Used</span>
+          <span className="rounded-full bg-graphite-800 px-2 py-0.5 text-xs text-graphite-400">
             {foundCount}/{totalCount} found
           </span>
         </div>
         <svg
           viewBox="0 0 24 24"
           fill="none"
-          className={`h-4 w-4 text-slate-500 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`h-4 w-4 text-graphite-500 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
           aria-hidden="true"
         >
           <path d="M6 9L12 15L18 9" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
@@ -158,14 +158,14 @@ export default function EvidencePanel({ items }: EvidencePanelProps) {
         }`}
       >
         {items.length === 0 ? (
-          <p className="px-4 pb-4 text-sm text-slate-500">No evidence available.</p>
+          <p className="px-4 pb-4 text-sm text-graphite-500">No evidence available.</p>
         ) : (
           <div className="px-4 pb-4">
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
               {items.map((item) => (
                 <div
                   key={item.label}
-                  className="flex items-center justify-between gap-2 rounded border border-slate-800 bg-slate-950/40 px-3 py-2"
+                  className="flex items-center justify-between gap-2 rounded border border-graphite-800 bg-graphite-950/40 px-3 py-2"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <span
@@ -173,7 +173,7 @@ export default function EvidencePanel({ items }: EvidencePanelProps) {
                     >
                       {statusIcon(item.status)}
                     </span>
-                    <span className="text-sm text-slate-300 truncate">{item.label}</span>
+                    <span className="text-sm text-graphite-300 truncate">{item.label}</span>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span
@@ -182,7 +182,7 @@ export default function EvidencePanel({ items }: EvidencePanelProps) {
                       {statusLabel(item.status)}
                     </span>
                     {item.detail && (
-                      <span className="hidden text-[10px] text-slate-500 sm:inline max-w-24 truncate" title={item.detail}>
+                      <span className="hidden text-[10px] text-graphite-500 sm:inline max-w-24 truncate" title={item.detail}>
                         {item.detail}
                       </span>
                     )}

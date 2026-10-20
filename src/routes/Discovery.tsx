@@ -75,8 +75,8 @@ const initialForm: DiscoveryFormState = {
   category_labels: [],
 };
 
-const fieldClass = "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-accent-500";
-const buttonClass = "rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40";
+const fieldClass = "mt-1 w-full rounded-md border border-graphite-700 bg-graphite-950 px-3 py-2 text-sm text-graphite-100 outline-none focus:border-accent-500";
+const buttonClass = "rounded-md border border-graphite-700 bg-graphite-800 px-3 py-2 text-sm font-medium text-graphite-100 hover:bg-graphite-700 disabled:cursor-not-allowed disabled:opacity-40";
 
 function displayError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -138,7 +138,7 @@ function LocationField({
   const searching = loading;
 
   return (
-    <div className="text-sm text-slate-300">
+    <div className="text-sm text-graphite-300">
       <label>Location *
         <input
           className={fieldClass}
@@ -149,20 +149,20 @@ function LocationField({
           onFocus={() => { if (suggestions.length) setOpen(true); }}
         />
       </label>
-      {searching && <span className="mt-1 block text-xs text-slate-500">Searching Google locations…</span>}
+      {searching && <span className="mt-1 block text-xs text-graphite-500">Searching Google locations…</span>}
       {open && suggestions.length > 0 && (
-        <ul role="listbox" aria-label="Location suggestions" className="mt-1 max-h-56 overflow-y-auto rounded-md border border-slate-700 bg-slate-950 shadow-lg">
+        <ul role="listbox" aria-label="Location suggestions" className="mt-1 max-h-56 overflow-y-auto rounded-md border border-graphite-700 bg-graphite-950 shadow-lg">
           {suggestions.map((suggestion) => (
             <li key={suggestion.place_id}>
               <button
                 type="button"
                 role="option"
                 aria-selected={false}
-                className="w-full px-3 py-2 text-left hover:bg-slate-800"
+                className="w-full px-3 py-2 text-left hover:bg-graphite-800"
                 onClick={() => { setOpen(false); onSelect(suggestion); }}
               >
-                <span className="block text-sm text-slate-200">{suggestion.primary_text ?? suggestion.label}</span>
-                {suggestion.secondary_text && <span className="block text-xs text-slate-500">{suggestion.secondary_text}</span>}
+                <span className="block text-sm text-graphite-200">{suggestion.primary_text ?? suggestion.label}</span>
+                {suggestion.secondary_text && <span className="block text-xs text-graphite-500">{suggestion.secondary_text}</span>}
               </button>
             </li>
           ))}
@@ -170,7 +170,7 @@ function LocationField({
       )}
       {value.place_id
         ? <span className="mt-1 block text-xs text-emerald-400">Google location retained · place id {value.place_id.slice(0, 14)}…</span>
-        : <span className="mt-1 block text-xs text-slate-500">Pick a Google suggestion to retain a stable place id.</span>}
+        : <span className="mt-1 block text-xs text-graphite-500">Pick a Google suggestion to retain a stable place id.</span>}
       {error && <span className="mt-1 block text-xs text-rose-400">{error}</span>}
     </div>
   );
@@ -204,8 +204,8 @@ function CandidateDrawer({
   const [reviewed, setReviewed] = useState(false);
   const matched = candidate.eligibility_result ?? {};
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/70" role="dialog" aria-modal="true" aria-label="Candidate detail">
-      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-700 bg-slate-900 p-6 shadow-2xl">
+    <div className="fixed inset-0 z-40 flex justify-end bg-graphite-950/70" role="dialog" aria-modal="true" aria-label="Candidate detail">
+      <div className="h-full w-full max-w-xl overflow-y-auto border-l border-graphite-700 bg-graphite-900 p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div><p className="text-xs uppercase tracking-wider text-accent-400">Candidate</p><h2 className="mt-1 text-xl font-semibold text-white">{candidate.business_name}</h2></div>
           <button className={buttonClass} onClick={onClose}>Close</button>
@@ -258,25 +258,25 @@ function CandidateDrawer({
           <button className={buttonClass} disabled={!eligibility.mayProceed || continuing} onClick={() => onContinue(candidate.id)}>
             {continuing ? "Importing…" : "Continue / Import"}
           </button>
-          {!eligibility.mayProceed && <span className="text-xs text-slate-500">Unavailable until this candidate may proceed.</span>}
+          {!eligibility.mayProceed && <span className="text-xs text-graphite-500">Unavailable until this candidate may proceed.</span>}
         </div>
 
         <dl className="mt-6 grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-sm">
-          <dt className="text-slate-500">Address</dt><dd className="text-slate-200">{candidate.address ?? candidate.location ?? "—"}</dd>
-          <dt className="text-slate-500">Category</dt><dd className="text-slate-200">{candidate.industry ?? "—"}</dd>
-          <dt className="text-slate-500">Website</dt><dd>{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">{candidate.website_url}</a> : "—"}</dd>
-          <dt className="text-slate-500">Phone</dt><dd className="text-slate-200">{candidate.phone ?? "—"}</dd>
-          <dt className="text-slate-500">Email</dt><dd className="text-slate-200">{candidate.email ?? "—"}</dd>
-          <dt className="text-slate-500">Source</dt><dd className="text-slate-200">{candidate.source} · {candidate.source_identifier}</dd>
-          <dt className="text-slate-500">Duplicate</dt><dd>{candidate.duplicate_lead_id ? <Link className="text-amber-300 hover:underline" to={`/opportunities/${candidate.duplicate_lead_id}`}>Existing opportunity</Link> : "No match"}</dd>
-          <dt className="text-slate-500">Assessment</dt><dd><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge>{candidate.preliminary_score ? ` · ${candidate.preliminary_score}` : ""}</dd>
-          <dt className="text-slate-500">Audit</dt><dd><Badge tone={statusTone(candidate.audit_status)}>{candidate.audit_status}</Badge></dd>
+          <dt className="text-graphite-500">Address</dt><dd className="text-graphite-200">{candidate.address ?? candidate.location ?? "—"}</dd>
+          <dt className="text-graphite-500">Category</dt><dd className="text-graphite-200">{candidate.industry ?? "—"}</dd>
+          <dt className="text-graphite-500">Website</dt><dd>{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">{candidate.website_url}</a> : "—"}</dd>
+          <dt className="text-graphite-500">Phone</dt><dd className="text-graphite-200">{candidate.phone ?? "—"}</dd>
+          <dt className="text-graphite-500">Email</dt><dd className="text-graphite-200">{candidate.email ?? "—"}</dd>
+          <dt className="text-graphite-500">Source</dt><dd className="text-graphite-200">{candidate.source} · {candidate.source_identifier}</dd>
+          <dt className="text-graphite-500">Duplicate</dt><dd>{candidate.duplicate_lead_id ? <Link className="text-amber-300 hover:underline" to={`/opportunities/${candidate.duplicate_lead_id}`}>Existing opportunity</Link> : "No match"}</dd>
+          <dt className="text-graphite-500">Assessment</dt><dd><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge>{candidate.preliminary_score ? ` · ${candidate.preliminary_score}` : ""}</dd>
+          <dt className="text-graphite-500">Audit</dt><dd><Badge tone={statusTone(candidate.audit_status)}>{candidate.audit_status}</Badge></dd>
         </dl>
-        <section className="mt-7"><h3 className="text-sm font-semibold text-slate-200">Provider evidence</h3><pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">{JSON.stringify(evidence, null, 2)}</pre></section>
-        <section className="mt-7"><h3 className="text-sm font-semibold text-slate-200">Enrichment evidence</h3><pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">{JSON.stringify(candidate.enrichment_evidence, null, 2)}</pre></section>
-        <section className="mt-7"><h3 className="text-sm font-semibold text-slate-200">Preliminary signals</h3><pre className="mt-2 max-h-48 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">{JSON.stringify(candidate.preliminary_signals, null, 2)}</pre></section>
-        <section className="mt-7"><h3 className="text-sm font-semibold text-slate-200">Errors</h3><pre className="mt-2 rounded-md bg-slate-950 p-3 text-xs text-slate-400">{JSON.stringify(candidate.error_info, null, 2)}</pre></section>
-        <section className="mt-7"><h3 className="text-sm font-semibold text-slate-200">Event history</h3>{candidate.events.length ? <ol className="mt-3 space-y-3">{candidate.events.map((event) => <li key={event.id} className="border-l border-slate-700 pl-3 text-sm"><p className="text-slate-200">{event.event_type}</p><p className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()} · {event.status}</p></li>)}</ol> : <p className="mt-2 text-sm text-slate-500">No candidate events yet.</p>}</section>
+        <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Provider evidence</h3><pre className="mt-2 max-h-64 overflow-auto rounded-md bg-graphite-950 p-3 text-xs text-graphite-400">{JSON.stringify(evidence, null, 2)}</pre></section>
+        <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Enrichment evidence</h3><pre className="mt-2 max-h-64 overflow-auto rounded-md bg-graphite-950 p-3 text-xs text-graphite-400">{JSON.stringify(candidate.enrichment_evidence, null, 2)}</pre></section>
+        <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Preliminary signals</h3><pre className="mt-2 max-h-48 overflow-auto rounded-md bg-graphite-950 p-3 text-xs text-graphite-400">{JSON.stringify(candidate.preliminary_signals, null, 2)}</pre></section>
+        <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Errors</h3><pre className="mt-2 rounded-md bg-graphite-950 p-3 text-xs text-graphite-400">{JSON.stringify(candidate.error_info, null, 2)}</pre></section>
+        <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Event history</h3>{candidate.events.length ? <ol className="mt-3 space-y-3">{candidate.events.map((event) => <li key={event.id} className="border-l border-graphite-700 pl-3 text-sm"><p className="text-graphite-200">{event.event_type}</p><p className="text-xs text-graphite-500">{new Date(event.created_at).toLocaleString()} · {event.status}</p></li>)}</ol> : <p className="mt-2 text-sm text-graphite-500">No candidate events yet.</p>}</section>
       </div>
     </div>
   );
@@ -325,8 +325,8 @@ function CategoryField(props: {
   const summaryText = formatCategorySummary(labels, isAllCategories);
 
   return (
-    <div className="text-sm text-slate-300 lg:col-span-2 relative block">
-      <span className="block text-sm text-slate-300 mb-1">Category *</span>
+    <div className="text-sm text-graphite-300 lg:col-span-2 relative block">
+      <span className="block text-sm text-graphite-300 mb-1">Category *</span>
       <div className="relative" ref={popoverRef}>
         <button
           type="button"
@@ -336,28 +336,28 @@ function CategoryField(props: {
           aria-expanded={open}
         >
           <span className="truncate">{summaryText}</span>
-          <span className="ml-2 text-xs text-slate-400">▼</span>
+          <span className="ml-2 text-xs text-graphite-400">▼</span>
         </button>
 
         {open && (
-          <div className="absolute left-0 top-full z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-slate-700 bg-slate-900 p-2 shadow-xl">
-            <label className="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-800 cursor-pointer">
+          <div className="absolute left-0 top-full z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-graphite-700 bg-graphite-900 p-2 shadow-xl">
+            <label className="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-graphite-200 hover:bg-graphite-800 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isAllCategories}
                 onChange={() => {
                   onChange([], !isAllCategories);
                 }}
-                className="rounded border-slate-700 bg-slate-950 text-accent-500 focus:ring-accent-500"
+                className="rounded border-graphite-700 bg-graphite-950 text-accent-500 focus:ring-accent-500"
               />
               <span className="font-medium">All categories</span>
             </label>
-            <div className="my-1 border-t border-slate-800" />
+            <div className="my-1 border-t border-graphite-800" />
             {categoryLoading && (
-              <p className="px-2 py-1.5 text-xs text-slate-400">Loading categories…</p>
+              <p className="px-2 py-1.5 text-xs text-graphite-400">Loading categories…</p>
             )}
             {!categoryLoading && categories.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-slate-400">No active categories</p>
+              <p className="px-2 py-1.5 text-xs text-graphite-400">No active categories</p>
             )}
             {categories.map((cat) => {
               const checked = !isAllCategories && selectedCategorySlugs.includes(cat.slug);
@@ -366,7 +366,7 @@ function CategoryField(props: {
               return (
                 <label
                   key={cat.slug}
-                  className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-800 cursor-pointer"
+                  className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm text-graphite-200 hover:bg-graphite-800 cursor-pointer"
                 >
                   <div className="flex items-center gap-2 truncate">
                     <input
@@ -384,7 +384,7 @@ function CategoryField(props: {
                           }
                         }
                       }}
-                      className="rounded border-slate-700 bg-slate-950 text-accent-500 focus:ring-accent-500"
+                      className="rounded border-graphite-700 bg-graphite-950 text-accent-500 focus:ring-accent-500"
                     />
                     <span className="truncate">{cat.label}</span>
                   </div>
@@ -691,18 +691,18 @@ export default function Discovery() {
 
   return (
     <div className="space-y-6">
-      <header><p className="text-xs font-medium uppercase tracking-[0.18em] text-accent-400">Intelligence intake</p><h1 className="mt-1 text-2xl font-semibold text-white">Discovery</h1><p className="mt-1 text-sm text-slate-400">Choose what opportunity to look for, then define where and who to search.</p></header>
+      <header><p className="text-xs font-medium uppercase tracking-[0.18em] text-accent-400">Intelligence intake</p><h1 className="mt-1 text-2xl font-semibold text-white">Discovery</h1><p className="mt-1 text-sm text-graphite-400">Choose what opportunity to look for, then define where and who to search.</p></header>
 
-      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
-        <div className="mb-5 grid gap-3 border-b border-slate-800 pb-5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <label className="text-sm text-slate-300">Discovery search profile *
+      <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-5">
+        <div className="mb-5 grid gap-3 border-b border-graphite-800 pb-5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <label className="text-sm text-graphite-300">Discovery search profile *
             <select className={fieldClass} value={selectedScenarioId} disabled={scenarioLoading || scenarios.length === 0} onChange={(event) => chooseScenario(event.target.value)}>
               {scenarios.length === 0 && <option value="">{scenarioLoading ? "Loading scenarios…" : "No active scenarios"}</option>}
               {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name} · v{scenario.version}</option>)}
             </select>
           </label>
-          <div className="rounded-md border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-400">
-            <p className="font-medium text-slate-200">{selectedScenario?.name ?? "Scenario required"}</p>
+          <div className="rounded-md border border-graphite-800 bg-graphite-950/50 px-4 py-3 text-sm text-graphite-400">
+            <p className="font-medium text-graphite-200">{selectedScenario?.name ?? "Scenario required"}</p>
             <p className="mt-1">{selectedScenario?.description}</p><p className="mt-1">Each company is evaluated against all enabled scenarios relevant to this search; this profile controls provider search defaults.</p>
           </div>
         </div>
@@ -723,17 +723,17 @@ export default function Discovery() {
             error={errors.industry ?? errors.category_slug}
             incompatibleNames={incompatibleCategories.map((c) => c.label)}
           />
-          <label className="text-sm text-slate-300">Maximum results<input className={fieldClass} type="number" min={1} max={settings.max_result_limit} value={form.result_limit} onChange={(event) => setForm({ ...form, result_limit: Number(event.target.value) })} />{errors.result_limit && <span className="mt-1 block text-xs text-rose-400">{errors.result_limit}</span>}</label>
-          <label className="text-sm text-slate-300 lg:col-span-3">Search keywords<input className={fieldClass} value={form.keywords} onChange={(event) => setForm({ ...form, keywords: event.target.value })} placeholder="Optional services or qualifiers" /></label>
-          <label className="text-sm text-slate-300">Radius (km)
+          <label className="text-sm text-graphite-300">Maximum results<input className={fieldClass} type="number" min={1} max={settings.max_result_limit} value={form.result_limit} onChange={(event) => setForm({ ...form, result_limit: Number(event.target.value) })} />{errors.result_limit && <span className="mt-1 block text-xs text-rose-400">{errors.result_limit}</span>}</label>
+          <label className="text-sm text-graphite-300 lg:col-span-3">Search keywords<input className={fieldClass} value={form.keywords} onChange={(event) => setForm({ ...form, keywords: event.target.value })} placeholder="Optional services or qualifiers" /></label>
+          <label className="text-sm text-graphite-300">Radius (km)
             <select className={fieldClass} value={form.radius_m ?? ""} onChange={(event) => { setRadiusTouched(true); setForm({ ...form, radius_m: event.target.value ? Number(event.target.value) : null }); }}>
               <option value="">No radius</option>
               {radiusOptions.map((metres) => <option key={metres} value={metres}>{metresToKilometres(metres)} km</option>)}
             </select>
             {errors.radius_m && <span className="mt-1 block text-xs text-rose-400">{errors.radius_m}</span>}
-            <span className="mt-1 block text-xs text-slate-500">Options come from Admin · Discovery settings.</span>
+            <span className="mt-1 block text-xs text-graphite-500">Options come from Admin · Discovery settings.</span>
           </label>
-          <div className="flex items-end gap-2"><button className={`${buttonClass} border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
+          <div className="flex items-end gap-2"><button className={`${buttonClass} oe-primary border-accent-600 bg-accent-600 hover:bg-accent-500`} disabled={busy === "discover" || scenarioLoading || categoryLoading || !selectedScenario || categoryIncompatible} onClick={() => void start()}>{busy === "discover" ? "Discovering…" : "Start discovery"}</button><button className={buttonClass} onClick={() => { setForm(initialForm); setStructuredLocation(EMPTY_LOCATION); setRadiusTouched(false); setErrors({}); }}>Clear</button></div>
         </div>
       </section>
 
@@ -744,29 +744,29 @@ export default function Discovery() {
         {selectedCandidates.filter((candidate) => candidateNeedsEligibilityAcknowledgement(candidate)).length} selected candidate(s) are possible Cockpit matches awaiting acknowledgement. Open <span className="font-medium">Inspect</span>, review the match and acknowledge before importing or scoring.
       </div>}
 
-      {run && <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-slate-200">Discovery run</h2><p className="mt-1 font-mono text-xs text-slate-500">{run.id}</p></div><Badge tone={statusTone(run.status)}>{run.status.replace(/_/g, " ")}</Badge></div>
-        <div className="mt-4 h-1.5 overflow-hidden rounded bg-slate-800"><div className="h-full bg-accent-500 transition-all" style={{ width: `${Math.min(100, run.businesses_discovered ? 25 + (run.candidates_scored / run.businesses_discovered) * 45 + (run.audits_generated / run.businesses_discovered) * 30 : isActiveDiscoveryStatus(run.status) ? 12 : 100)}%` }} /></div>
+      {run && <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-graphite-200">Discovery run</h2><p className="mt-1 font-mono text-xs text-graphite-500">{run.id}</p></div><Badge tone={statusTone(run.status)}>{run.status.replace(/_/g, " ")}</Badge></div>
+        <div className="mt-4 h-1.5 overflow-hidden rounded bg-graphite-800"><div className="h-full bg-accent-500 transition-all" style={{ width: `${Math.min(100, run.businesses_discovered ? 25 + (run.candidates_scored / run.businesses_discovered) * 45 + (run.audits_generated / run.businesses_discovered) * 30 : isActiveDiscoveryStatus(run.status) ? 12 : 100)}%` }} /></div>
         <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4 lg:grid-cols-8">{[
           ["Stage", run.current_stage], ["Discovered", run.businesses_discovered], ["Enriched", run.candidates_enriched], ["Scored", run.candidates_scored], ["Audited", run.audits_generated], ["Failures", run.failures], ["Started", run.started_at ? new Date(run.started_at).toLocaleTimeString() : "—"], ["Completed", run.completed_at ? new Date(run.completed_at).toLocaleTimeString() : "—"],
-        ].map(([label, value]) => <div key={String(label)}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 text-slate-200">{value}</dd></div>)}</dl>
-        <p className="mt-4 text-xs text-slate-500">
-          Location: <span className="text-slate-300">{run.location}</span>
+        ].map(([label, value]) => <div key={String(label)}><dt className="text-xs text-graphite-500">{label}</dt><dd className="mt-1 text-graphite-200">{value}</dd></div>)}</dl>
+        <p className="mt-4 text-xs text-graphite-500">
+          Location: <span className="text-graphite-300">{run.location}</span>
           {run.location_place_id ? ` · place id ${String(run.location_place_id).slice(0, 14)}…` : ""}
           {run.category_label ? ` · ${run.category_label}` : ""}
           {Array.isArray(run.discovery_terms) && run.discovery_terms.length ? ` · searched ${run.discovery_terms.join(", ")}` : ""}
         </p>
       </section>}
 
-      <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60">
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 p-4"><h2 className="mr-auto text-sm font-semibold text-slate-200">Candidates <span className="text-slate-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before importing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before scoring." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("assess")}>Score selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before auditing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("audit")}>Generate audits</button></div>
-        {!run ? <p className="p-8 text-center text-sm text-slate-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-950/50 text-xs text-slate-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Eligibility", "Score", "Assessment", "Audit", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-slate-800">{candidates.map((candidate) => { const eligibility = candidateEligibilityDisplay(candidate); return <tr key={candidate.id} className="hover:bg-slate-800/30">
+      <section className="overflow-hidden rounded-lg border border-graphite-800 bg-graphite-900/60">
+        <div className="flex flex-wrap items-center gap-2 border-b border-graphite-800 p-4"><h2 className="mr-auto text-sm font-semibold text-graphite-200">Candidates <span className="text-graphite-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before importing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before scoring." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("assess")}>Score selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before auditing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("audit")}>Generate audits</button></div>
+        {!run ? <p className="p-8 text-center text-sm text-graphite-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-graphite-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-graphite-950/50 text-xs text-graphite-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Eligibility", "Score", "Assessment", "Audit", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-graphite-800">{candidates.map((candidate) => { const eligibility = candidateEligibilityDisplay(candidate); return <tr key={candidate.id} className="hover:bg-graphite-800/30">
           <td className="px-3 py-3"><input aria-label={`Select ${candidate.business_name}`} type="checkbox" checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(candidate.id) ? next.delete(candidate.id) : next.add(candidate.id); return next; })} /></td>
-          <td className="whitespace-nowrap px-3 py-3 font-medium text-slate-200">{candidate.business_name}<div className="mt-1 text-xs text-slate-400">{candidate.scenario_matches?.map(match => `${match.scenario_key}: ${match.state}`).join(" · ")}</div></td><td className="px-3 py-3 text-slate-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.industry ?? "—"}</td>
-          <td className="max-w-44 truncate px-3 py-3">{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">Visit</a> : "—"}</td><td className="px-3 py-3 text-slate-400">{candidate.email ? "Email" : candidate.phone ? "Phone" : "None"}</td>
+          <td className="whitespace-nowrap px-3 py-3 font-medium text-graphite-200">{candidate.business_name}<div className="mt-1 text-xs text-graphite-400">{candidate.scenario_matches?.map(match => `${match.scenario_key}: ${match.state}`).join(" · ")}</div></td><td className="px-3 py-3 text-graphite-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-graphite-400">{candidate.industry ?? "—"}</td>
+          <td className="max-w-44 truncate px-3 py-3">{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">Visit</a> : "—"}</td><td className="px-3 py-3 text-graphite-400">{candidate.email ? "Email" : candidate.phone ? "Phone" : "None"}</td>
           <td className="px-3 py-3"><Badge tone={candidate.duplicate_lead_id ? "warning" : "success"}>{candidate.duplicate_lead_id ? "existing" : "new"}</Badge></td>
           <td className="whitespace-nowrap px-3 py-3"><Badge tone={eligibility.tone} title={candidate.eligibility_result?.reason ?? undefined}>{eligibility.label}</Badge></td>
-          <td className="px-3 py-3 font-mono text-slate-300">{candidate.preliminary_score ?? "—"}</td>
+          <td className="px-3 py-3 font-mono text-graphite-300">{candidate.preliminary_score ?? "—"}</td>
           <td className="px-3 py-3"><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.audit_status)}>{candidate.audit_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.import_status)}>{candidate.import_status.replace(/_/g, " ")}</Badge></td>
           <td className="whitespace-nowrap px-3 py-3"><button className="text-accent-400 hover:underline" onClick={() => setInspecting(candidate)}>Inspect</button>{(candidate.imported_lead_id ?? candidate.duplicate_lead_id) && <Link className="ml-3 text-sky-400 hover:underline" to={`/opportunities/${candidate.imported_lead_id ?? candidate.duplicate_lead_id}`}>Open</Link>}</td>
         </tr>; })}</tbody></table></div>}

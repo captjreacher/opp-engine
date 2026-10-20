@@ -66,7 +66,7 @@ export default function ColorMeter({
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-0.5">
           {label && (
-            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500">
+            <p className="text-xs font-medium uppercase tracking-[0.15em] text-graphite-500">
               {label}
             </p>
           )}
@@ -74,19 +74,19 @@ export default function ColorMeter({
             {colors.label}
           </p>
           {subLabel && (
-            <p className="text-xs text-slate-500">{subLabel}</p>
+            <p className="text-xs text-graphite-500">{subLabel}</p>
           )}
         </div>
         <div className="text-right">
           <span className={`text-3xl font-bold ${colors.text}`}>
             {Number.isFinite(score) ? Math.round(score) : "—"}
           </span>
-          <span className="ml-1 text-sm text-slate-500">/ {safeMax}</span>
+          <span className="ml-1 text-sm text-graphite-500">/ {safeMax}</span>
         </div>
       </div>
 
       {/* Progress bar */}
-      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-800/60">
+      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-graphite-800/60">
         <div
           className={`h-full rounded-full ${colors.bar} transition-all duration-700 ease-out`}
           style={{ width: `${pct}%` }}
@@ -95,21 +95,21 @@ export default function ColorMeter({
 
       {/* Percentage + legend */}
       <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
-        <span className="text-slate-500">
+        <span className="text-graphite-500">
           {Math.round(pct)}% of maximum
         </span>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
-            <span className="text-slate-500">High</span>
+            <span className="text-graphite-500">High</span>
           </span>
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
-            <span className="text-slate-500">Medium</span>
+            <span className="text-graphite-500">Medium</span>
           </span>
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-rose-500" aria-hidden="true" />
-            <span className="text-slate-500">Low</span>
+            <span className="text-graphite-500">Low</span>
           </span>
         </div>
       </div>

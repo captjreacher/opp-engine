@@ -115,9 +115,9 @@ interface ExecutiveSummaryProps {
 export default function ExecutiveSummary({ assessment }: ExecutiveSummaryProps) {
   if (!assessment) {
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
-        <h2 className="text-sm font-semibold text-slate-200">Business Summary</h2>
-        <p className="mt-2 text-sm text-slate-500">No assessment data available yet.</p>
+      <div className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-5">
+        <h2 className="text-sm font-semibold text-graphite-200">Business Summary</h2>
+        <p className="mt-2 text-sm text-graphite-500">No assessment data available yet.</p>
       </div>
     );
   }
@@ -127,8 +127,8 @@ export default function ExecutiveSummary({ assessment }: ExecutiveSummaryProps) 
   const summary = assessment.assessment_summary;
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-gradient-to-br from-slate-900/80 to-slate-900/40 p-5">
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+    <div className="rounded-lg border border-graphite-800 bg-gradient-to-br from-graphite-900/80 to-graphite-900/40 p-5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-graphite-200">
         <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-accent-400" aria-hidden="true">
           <path d="M9 5H5V9" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
           <path d="M5 15V19H9" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
@@ -140,7 +140,7 @@ export default function ExecutiveSummary({ assessment }: ExecutiveSummaryProps) 
 
       {/* AI-generated summary */}
       {summary && (
-        <p className="mt-3 text-sm leading-relaxed text-slate-300">
+        <p className="mt-3 text-sm leading-relaxed text-graphite-300">
           {summary}
         </p>
       )}
@@ -148,7 +148,7 @@ export default function ExecutiveSummary({ assessment }: ExecutiveSummaryProps) 
       {/* Primary Issues */}
       {issues.length > 0 && (
         <div className="mt-4">
-          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+          <p className="text-xs font-medium uppercase tracking-wider text-graphite-500">
             Primary Issues
           </p>
           <ul className="mt-2 space-y-1.5">
@@ -160,7 +160,7 @@ export default function ExecutiveSummary({ assessment }: ExecutiveSummaryProps) 
                     className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${sev.dot}`}
                     aria-hidden="true"
                   />
-                  <span className="text-sm text-slate-300">{issue.label}</span>
+                  <span className="text-sm text-graphite-300">{issue.label}</span>
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset ${sev.badge}`}
                   >
@@ -185,7 +185,7 @@ export default function ExecutiveSummary({ assessment }: ExecutiveSummaryProps) 
               Recommended Next Action
             </p>
             <p className="text-sm font-semibold text-accent-200">{nextAction.label}</p>
-            <p className="mt-0.5 text-xs text-slate-400">{nextAction.description}</p>
+            <p className="mt-0.5 text-xs text-graphite-400">{nextAction.description}</p>
           </div>
         </div>
       </div>

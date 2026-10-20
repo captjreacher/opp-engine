@@ -6,8 +6,8 @@ import Filters from "../components/Filters";
 import { canSelectOpportunity, enrichSelectedOpportunities } from "../lib/bulk-enrichment";
 import { DEFAULT_BATCH_FILTER, matchesBatchFilter, type BatchRecordFilter } from "../../supabase/functions/_shared/opportunityBatches";
 
-const button = "rounded border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50";
-const input = "w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100";
+const button = "rounded border border-graphite-600 px-3 py-1.5 text-sm text-graphite-200 hover:bg-graphite-800 disabled:opacity-50";
+const input = "w-full rounded border border-graphite-700 bg-graphite-950 px-3 py-2 text-sm text-graphite-100";
 
 export default function OpportunityBatches() {
   const { id } = useParams();
@@ -102,29 +102,29 @@ export default function OpportunityBatches() {
     finally { setBusy(false); setProgress(""); }
   }
 
-  if (loading) return <p className="text-sm text-slate-400">Loading batches…</p>;
+  if (loading) return <p className="text-sm text-graphite-400">Loading batches…</p>;
   if (!id) return <div className="space-y-4">
-    <h1 className="text-xl font-semibold text-slate-100">Opportunity batches</h1>
-    <p className="text-sm text-slate-400">Select two or more opportunities and click Enrich selected to create a batch.</p>
+    <h1 className="text-xl font-semibold text-graphite-100">Opportunity batches</h1>
+    <p className="text-sm text-graphite-400">Select two or more opportunities and click Enrich selected to create a batch.</p>
     {error && <p role="alert" className="text-rose-300">{error}</p>}
-    {!batches.length && !error && <p className="text-slate-500">No batches yet.</p>}
-    {batches.map((item) => <Link key={item.id} to={`/batches/${item.id}`} className="block rounded-lg border border-slate-800 bg-slate-900/60 p-4 hover:border-slate-600">
+    {!batches.length && !error && <p className="text-graphite-500">No batches yet.</p>}
+    {batches.map((item) => <Link key={item.id} to={`/batches/${item.id}`} className="block rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 hover:border-graphite-600">
       <p className="font-medium text-accent-400">{item.name}</p>
-      <p className="mt-1 text-sm text-slate-400">{item.member_count ?? 0} records · {new Date(item.created_at).toLocaleString()}</p>
-      {item.purpose && <p className="mt-2 text-sm text-slate-300">{item.purpose}</p>}
+      <p className="mt-1 text-sm text-graphite-400">{item.member_count ?? 0} records · {new Date(item.created_at).toLocaleString()}</p>
+      {item.purpose && <p className="mt-2 text-sm text-graphite-300">{item.purpose}</p>}
     </Link>)}
   </div>;
   if (!batch) return <p role="alert" className="text-rose-300">{error ?? "Batch not found."}</p>;
   return <div className="space-y-4">
     <Link className="text-sm text-accent-400" to="/batches">← All batches</Link>
-    <h1 className="text-xl font-semibold text-slate-100">{batch.name}</h1>
-    {batch.archived_at ? <p className="text-sm text-slate-400">Archived — historical membership retained.</p> : <button className={button} disabled={busy} onClick={async()=>{if(!window.confirm("Archive this batch and release its active members? Historical membership is retained."))return;try{await archiveBatch(batch.id);setBatch({...batch,archived_at:new Date().toISOString()});}catch(err){setError(err instanceof Error?err.message:"Archive failed");}}}>Archive batch</button>}
-    <section className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-      <label className="block text-sm text-slate-300">Name<input className={`${input} mt-1`} value={name} maxLength={120} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
-      <label className="block text-sm text-slate-300">Purpose<textarea className={`${input} mt-1`} value={purpose} maxLength={2000} rows={2} disabled={busy} onChange={(event) => setPurpose(event.target.value)} /></label>
-      <h2 className="text-sm font-semibold text-slate-200">Record filter</h2>
-      <p className="text-xs text-slate-400">Filters control which tagged records are shown and processed. Batch membership stays fixed.</p>
-      <label className="block text-sm text-slate-300">Business, location or industry<input className={`${input} mt-1`} value={filter.search} maxLength={300} disabled={busy} onChange={(event) => setFilter({ ...filter, search: event.target.value })} /></label>
+    <h1 className="text-xl font-semibold text-graphite-100">{batch.name}</h1>
+    {batch.archived_at ? <p className="text-sm text-graphite-400">Archived — historical membership retained.</p> : <button className={button} disabled={busy} onClick={async()=>{if(!window.confirm("Archive this batch and release its active members? Historical membership is retained."))return;try{await archiveBatch(batch.id);setBatch({...batch,archived_at:new Date().toISOString()});}catch(err){setError(err instanceof Error?err.message:"Archive failed");}}}>Archive batch</button>}
+    <section className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-4">
+      <label className="block text-sm text-graphite-300">Name<input className={`${input} mt-1`} value={name} maxLength={120} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+      <label className="block text-sm text-graphite-300">Purpose<textarea className={`${input} mt-1`} value={purpose} maxLength={2000} rows={2} disabled={busy} onChange={(event) => setPurpose(event.target.value)} /></label>
+      <h2 className="text-sm font-semibold text-graphite-200">Record filter</h2>
+      <p className="text-xs text-graphite-400">Filters control which tagged records are shown and processed. Batch membership stays fixed.</p>
+      <label className="block text-sm text-graphite-300">Business, location or industry<input className={`${input} mt-1`} value={filter.search} maxLength={300} disabled={busy} onChange={(event) => setFilter({ ...filter, search: event.target.value })} /></label>
       <fieldset disabled={busy}><Filters state={filter} onChange={(next) => setFilter({ ...filter, ...next })} pipelineStatusOptions={[...new Set(rows.map((row) => row.pipeline_status))]} outreachStatusOptions={[...new Set(rows.map((row) => row.outreach_status ?? "None"))]} maxScore={Math.max(1, ...rows.map((row) => Number(row.opportunity_score) || 0))} /></fieldset>
       <button className={button} type="button" disabled={busy || !dirty || !name.trim()} onClick={() => void save()}>Save batch details</button>
       {dirty && <span className="ml-3 text-xs text-amber-300">Save changes before processing records.</span>}
@@ -133,15 +133,15 @@ export default function OpportunityBatches() {
     {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
     {!!failures.length && <ul role="alert" className="text-sm text-rose-300">{failures.map((failure, index) => <li key={index}>{failure}</li>)}</ul>}
     <div className="flex flex-wrap items-center gap-3">
-      <p className="mr-auto text-sm text-slate-400">{matching.length} of {rows.length} batch records · {rows.filter((row) => row.enrichment_running).length} enriching · {rows.filter((row) => row.enrichment_ready).length} enriched · {rows.filter((row) => row.assessed_at).length} assessed</p>
+      <p className="mr-auto text-sm text-graphite-400">{matching.length} of {rows.length} batch records · {rows.filter((row) => row.enrichment_running).length} enriching · {rows.filter((row) => row.enrichment_ready).length} enriched · {rows.filter((row) => row.assessed_at).length} assessed</p>
       <button className={button} disabled={busy || dirty || !enrichTargets.length} onClick={() => void process("enrich")}>Enrich matching records ({enrichTargets.length})</button>
       <button className={button} disabled={busy || dirty || !assessTargets.length} onClick={() => void process("assess")}>Assess enriched records ({assessTargets.length})</button>
       <button className={button} disabled={busy} onClick={() => void refreshRecords().catch((err) => setError(err.message))}>Refresh</button>
     </div>
     {busy && progress && <p role="status" className="text-sm text-sky-300">{progress}</p>}
-    <div className="overflow-x-auto rounded-lg border border-slate-800"><table className="w-full text-left text-sm text-slate-300">
-      <thead className="bg-slate-900"><tr><th className="p-3">Business</th><th className="p-3">Enrichment</th><th className="p-3">Assessment</th><th className="p-3">Pipeline status</th></tr></thead>
-      <tbody>{matching.map((row) => <tr key={row.id} className="border-t border-slate-800"><td className="p-3"><Link to={`/opportunities/${row.id}`} className="text-accent-400 hover:underline">{row.business_name}</Link></td><td className="p-3">{row.enrichment_running ? "Running…" : row.enrichment_ready ? "Enriched" : row.enrichment_status ?? "Not started"}</td><td className="p-3">{row.assessed_at ? "Assessed" : "Not assessed"}</td><td className="p-3">{row.pipeline_status === "disqualified" ? "Not suitable" : row.pipeline_status}</td></tr>)}</tbody>
-    </table>{!matching.length && <p className="p-4 text-sm text-slate-500">No batch records match this filter.</p>}</div>
+    <div className="overflow-x-auto rounded-lg border border-graphite-800"><table className="w-full text-left text-sm text-graphite-300">
+      <thead className="bg-graphite-900"><tr><th className="p-3">Business</th><th className="p-3">Enrichment</th><th className="p-3">Assessment</th><th className="p-3">Pipeline status</th></tr></thead>
+      <tbody>{matching.map((row) => <tr key={row.id} className="border-t border-graphite-800"><td className="p-3"><Link to={`/opportunities/${row.id}`} className="text-accent-400 hover:underline">{row.business_name}</Link></td><td className="p-3">{row.enrichment_running ? "Running…" : row.enrichment_ready ? "Enriched" : row.enrichment_status ?? "Not started"}</td><td className="p-3">{row.assessed_at ? "Assessed" : "Not assessed"}</td><td className="p-3">{row.pipeline_status === "disqualified" ? "Not suitable" : row.pipeline_status}</td></tr>)}</tbody>
+    </table>{!matching.length && <p className="p-4 text-sm text-graphite-500">No batch records match this filter.</p>}</div>
   </div>;
 }

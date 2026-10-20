@@ -59,11 +59,11 @@ export default function DraftEditor({
   const busy = saving || approving || sending;
 
   return (
-    <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+    <div className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Badge tone={toneForStatus(draft.status)}>{draft.status}</Badge>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-graphite-500">
             created {formatTimestamp(draft.created_at)}
             {draft.approved_at ? ` · approved ${formatTimestamp(draft.approved_at)}` : ""}
             {draft.sent_at ? ` · sent ${formatTimestamp(draft.sent_at)}` : ""}
@@ -79,25 +79,25 @@ export default function DraftEditor({
 
       {draft.selection && <p className="text-sm">Template {draft.selection.template_id} v{draft.selection.template_version} · Scenarios {draft.selection.scenario_keys.join(", ")} · Offer {draft.selection.offer_id} · Destination {draft.selection.destination}. Recorded findings: {draft.selection.findings.map(f=>f.description).join("; ")}</p>}
       <div>
-        <label className="mb-1 block text-xs font-medium text-slate-400">Subject</label>
+        <label className="mb-1 block text-xs font-medium text-graphite-400">Subject</label>
         <input
           type="text"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
           disabled={busy || isSent || mapped}
-          className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
+          className="w-full rounded border border-graphite-700 bg-graphite-950 px-3 py-2 text-sm text-graphite-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft subject"
         />
       </div>
 
       <div>
-        <label className="mb-1 block text-xs font-medium text-slate-400">Body</label>
+        <label className="mb-1 block text-xs font-medium text-graphite-400">Body</label>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           disabled={busy || isSent || mapped}
           rows={10}
-          className="w-full resize-y rounded border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
+          className="w-full resize-y rounded border border-graphite-700 bg-graphite-950 px-3 py-2 font-mono text-sm text-graphite-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft body"
         />
       </div>
@@ -114,7 +114,7 @@ export default function DraftEditor({
             type="button"
             onClick={() => onSave({ subject, body })}
             disabled={busy || !dirty}
-            className="rounded bg-slate-700 px-3 py-1.5 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded bg-graphite-700 px-3 py-1.5 text-sm font-medium text-graphite-100 transition-colors hover:bg-graphite-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save changes"}
           </button>
@@ -124,7 +124,7 @@ export default function DraftEditor({
             onClick={onApprove}
             disabled={busy || !isDraftStatus || dirty}
             title={!isDraftStatus ? "Only drafts in 'draft' status can be approved" : undefined}
-            className="rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {approving ? "Approving…" : "Approve"}
           </button>
@@ -155,7 +155,7 @@ export default function DraftEditor({
                 type="button"
                 onClick={() => setConfirmingSend(false)}
                 disabled={busy}
-                className="rounded bg-slate-700 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded bg-graphite-700 px-3 py-1.5 text-sm text-graphite-200 transition-colors hover:bg-graphite-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -172,7 +172,7 @@ export default function DraftEditor({
         </p>
       )}
       {isApproved && !sendFailed && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-graphite-500">
           Approved and ready to send. Sending is manual — nothing goes out until you confirm.
         </p>
       )}

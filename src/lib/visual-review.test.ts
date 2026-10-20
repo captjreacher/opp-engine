@@ -34,7 +34,7 @@ describe("Opportunity detail responsive/UI contract", () => {
 
   it("allows long contact summary values to wrap", () => {
     expect(opportunityDetail).toMatch(
-      /text-xs text-slate-200 break-words"\s+title=\{info\.value\}/,
+      /text-xs text-graphite-200 break-words"\s+title=\{info\.value\}/,
     );
   });
 
@@ -121,11 +121,11 @@ describe("GuidedWorkflow accessibility and terminal-state contract", () => {
     );
   });
 
-  it("renders closed-terminal steps in neutral slate styling", () => {
+  it("renders closed-terminal steps in neutral graphite styling", () => {
     expect(guidedWorkflow).toContain(
-      '"bg-slate-800/60 text-slate-300 ring-slate-600/60"',
+      '"bg-graphite-800/60 text-graphite-300 ring-graphite-600/60"',
     );
-    expect(guidedWorkflow).toContain('"bg-slate-600 text-slate-300"');
+    expect(guidedWorkflow).toContain('"bg-graphite-600 text-graphite-300"');
     expect(guidedWorkflow).toContain("if (next.closedTerminal)");
   });
 });
@@ -146,8 +146,8 @@ describe("EventTimeline closed-terminal distinction", () => {
     );
   });
 
-  it("renders closed-terminal milestones with slate styling instead of emerald", () => {
-    expect(eventTimeline).toContain('"bg-slate-700/60 ring-slate-600/50"');
-    expect(eventTimeline).toContain('"text-slate-300"');
+  it("renders closed-terminal milestones with graphite styling instead of emerald", () => {
+    expect(eventTimeline).toContain('"bg-graphite-700/60 ring-graphite-600/50"');
+    expect(eventTimeline).toContain('"text-graphite-300"');
   });
 });

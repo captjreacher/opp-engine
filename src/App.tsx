@@ -11,7 +11,7 @@ import Admin from "./routes/Admin";
 
 export default function App() {
   return (
-    <div className="min-h-full bg-slate-950">
+    <div className="min-h-full bg-graphite-950">
       <TopBar />
       {!isApiConfigured && <ConfigBanner />}
       <main className="mx-auto max-w-7xl px-4 py-6">
@@ -27,7 +27,7 @@ export default function App() {
           <Route
             path="*"
             element={
-              <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-8 text-center text-slate-400">
+              <div className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-8 text-center text-graphite-400">
                 Page not found.{" "}
                 <a href="/opportunities" className="text-accent-400 hover:underline">
                   Back to opportunities
