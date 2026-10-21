@@ -12,6 +12,8 @@
 
 The Opportunity Engine PR targets the existing `codex/scenario-reports` branch because that branch contains the approved Scenario Report and commercial selection architecture. Its merge to `main` is a prerequisite for any GBP merge. The Billing and site PRs target `main`.
 
+Draft PRs: [Billing #52](https://github.com/captjreacher/BILLING/pull/52), [site #19](https://github.com/captjreacher/maximisedai-site/pull/19), and [Opportunity Engine #18](https://github.com/captjreacher/opp-engine/pull/18).
+
 ## Approved commercial matrix
 
 | Scenario | Product | Services | NZD before GST | GST at 15% | NZD including GST | Template | Destination |
@@ -31,13 +33,15 @@ The same Billing plan and price version, tax treatment, service band, scope vers
 |---|---|
 | Billing focused catalogue, admin API and invoice tests | 150 passed after rebasing on current `main`; the invoice contract calculates all four GST totals above |
 | Billing build and typecheck | Passed on current `main` plus draft commit |
+| Billing GitHub CI | Passed on the final draft branch: dependency audit, build, lint, unit and isolated PostgreSQL integration tests, typecheck, whitespace check, Docker image checks and local release smoke test. A patched Vite 7.3.7 override resolved the pre-existing audit failure. |
 | Site suite | 496 passed |
 | Site fixture build | Passed; both routes rendered the four Billing fixture amounts, with inactive offer states suppressing purchase CTA |
+| Site GitHub CI | Passed for active, withdrawn, archived and omitted offer states, including the updated 30-route typography audit and editorial, HTTPS and retired-route checks. |
 | Opportunity Engine suite on scenario-report branch | 353 passed, 12 skipped |
 | Opportunity Engine frontend build | Passed |
 | Opportunity Engine Deno check | Passed for `supabase/functions/opportunities/index.ts` and imported GBP modules |
 | Site typecheck | Two existing errors remain in untouched `Footer.astro` and `[slug].astro`; no new GBP diagnostics |
-| Billing full suite on local shared PostgreSQL | Earlier run had 1,165 passes and local schema/fixture failures; the focused changed areas passed after rebase. CI uses its own PostgreSQL service and must pass before merge. |
+| Billing full suite on local shared PostgreSQL | Earlier run had 1,165 passes and local schema/fixture failures; the focused changed areas passed after rebase. GitHub CI then passed against its isolated PostgreSQL service. |
 
 ### Page screenshots
 
@@ -56,7 +60,7 @@ Cloudflare dashboard Builds settings were read before pushing. `maxai` has **no 
 
 1. Owner reviews the three draft PRs, page screenshots, exact scope and cancellation text. Legal review finalizes the payment/cancellation wording before any publication or purchase flow.
 2. Merge the Scenario Report prerequisite branch, then reconcile the GBP Opportunity Engine PR with `main`; rerun its tests and Deno check.
-3. Run Billing CI on its isolated PostgreSQL service. Rehearse the draft seed and migration in a nonproduction database; verify four versions, GST and that existing Digital Trust Foundation and website packages remain unchanged.
+3. Rehearse the draft seed and migration in a nonproduction database; verify four versions, GST and that existing Digital Trust Foundation and website packages remain unchanged.
 4. Confirm the two final public routes and links. Configure Billing access for site and Opportunity Engine; publish the four Billing price versions and enable the plans only under separate release approval.
 5. Deploy the site separately, verify both pages and all terms at desktop and mobile widths, then record destination verification. Enable the two scenario/template mappings only after the pages and Billing catalogue are live.
 6. Exercise current assessment, Cockpit eligibility, profile ownership, missing/ambiguous evidence, count boundaries, withdrawn prices, report/email drift and duplicate draft cases in a staging environment. A separate reviewed change must remove the GBP send block before any live outreach.
