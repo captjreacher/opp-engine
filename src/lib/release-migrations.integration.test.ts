@@ -5,7 +5,11 @@ import { readFileSync } from "node:fs";
 const db = process.env.OPP_RELEASE_DATABASE;
 const suite = db ? describe : describe.skip;
 const psql = process.env.OPP_TEST_PSQL ?? "psql";
+const psqlPrefix = process.env.OPP_TEST_PSQL_PREFIX_JSON
+  ? (JSON.parse(process.env.OPP_TEST_PSQL_PREFIX_JSON) as string[])
+  : [];
 const args = [
+  ...psqlPrefix,
   "-h",
   "127.0.0.1",
   "-p",
@@ -57,6 +61,18 @@ suite(
       sql(
         "drop schema public cascade; drop schema if exists auth cascade; create schema public;",
       );
+      sql(`do $$ begin
+        create role anon;
+      exception when duplicate_object then null;
+      end $$;
+      do $$ begin
+        create role authenticated;
+      exception when duplicate_object then null;
+      end $$;
+      do $$ begin
+        create role service_role;
+      exception when duplicate_object then null;
+      end $$;`);
       sql(
         readFileSync("tests/fixtures/opportunity-release-schema.sql", "utf8"),
       );
@@ -66,6 +82,7 @@ suite(
         "20261020234438_scenario_reports.sql",
         "20261021003415_scenario_archive_release_compatibility.sql",
         "20261021012142_scenario_owner_retention_reconciliation.sql",
+        "20261021121314_gbp_commercial_draft.sql",
       ])
         sql(readFileSync(`supabase/migrations/${migration}`, "utf8"));
       lead(1);
@@ -74,7 +91,7 @@ suite(
       lead(4);
       lead(5);
       lead(6);
-    });
+    }, 60000);
     it("retains canonical UUID constraints, generated scores and source foreign keys", () => {
       expect(() =>
         sql(
@@ -93,6 +110,12 @@ suite(
           "select count(*) from information_schema.columns where table_name='opportunity_scenario_reports' and column_name='report'",
         ),
       ).toBe("1");
+    });
+    it("installs one draft GBP mapping per scenario without enabling outreach", () => {
+      expect(sql("select count(*) from opportunity_scenarios where slug in ('gbp-setup','gbp-improvement') and status='draft' and version=1")).toBe("2");
+      expect(sql("select count(*) from opportunity_outreach_templates where name in ('gbp_setup_v1','gbp_improvement_v1') and enabled=false")).toBe("2");
+      expect(sql("select count(*) from information_schema.columns where table_name='local_business_outreach_drafts' and column_name='gbp_commercial_snapshot'")).toBe("1");
+      expect(sql("select count(*) from pg_indexes where indexname='local_business_outreach_one_gbp_draft_per_lead'")).toBe("1");
     });
     it("archives/restores idempotently with retained evidence and scenario reports", () => {
       sql(`insert into opportunity_scenarios(id,slug,name,status,version) values('${id(50)}','fixture','Fixture','active',1);

@@ -5,15 +5,22 @@ type BillingPrice = { planId: string; productId: string; priceVersionId: string;
 /** Resolve only a published, effective, sellable fixed one-off price. */
 export async function resolveGbpBillingPrice(code: GbpScenarioCode, band: GbpBand, env?: { get(name: string): string | undefined }, fetcher = fetch, now = new Date()): Promise<BillingPrice> {
   const runtimeEnv = env ?? (globalThis as typeof globalThis & { Deno?: { env: { get(name: string): string | undefined } } }).Deno?.env;
-  const base = runtimeEnv?.get('BILLING_CATALOGUE_API_BASE_URL')?.trim();
-  const key = runtimeEnv?.get('BILLING_CATALOGUE_BEARER_TOKEN')?.trim();
+  const existingBase = runtimeEnv?.get('BILLING_API_BASE_URL')?.trim().replace(/\/+$/, '');
+  const apiKey = runtimeEnv?.get('BILLING_CATALOGUE_API_KEY')?.trim();
+  const previewBase = runtimeEnv?.get('BILLING_CATALOGUE_API_BASE_URL')?.trim().replace(/\/+$/, '');
+  const bearer = runtimeEnv?.get('BILLING_CATALOGUE_BEARER_TOKEN')?.trim();
+  const base = existingBase
+    ? existingBase.endsWith('/api/v1') ? existingBase : `${existingBase}/api/v1`
+    : previewBase;
+  const key = apiKey || bearer;
+  const scheme = apiKey ? 'ApiKey' : 'Bearer';
   if (!base || !key) throw new Error('billing_catalogue_unconfigured');
   const billingUrl = new URL(base);
   if (billingUrl.protocol !== 'https:' || billingUrl.username || billingUrl.password || billingUrl.search || billingUrl.hash) throw new Error('billing_catalogue_unconfigured');
   const offer = GBP_OFFER_MAP[code];
   const planId = offer.plans[band];
   const get = async (path: string) => {
-    const response = await fetcher(`${base.replace(/\/$/, '')}${path}`, { headers: { Accept: 'application/json', Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000), redirect: 'error' });
+    const response = await fetcher(`${base}${path}`, { headers: { Accept: 'application/json', Authorization: `${scheme} ${key}` }, signal: AbortSignal.timeout(5000), redirect: 'error' });
     if (!response.ok) throw new Error('billing_offer_unavailable');
     const body = await response.json();
     if (!body || typeof body !== 'object' || !body.data) throw new Error('billing_response_invalid');

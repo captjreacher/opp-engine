@@ -46,8 +46,9 @@ describe('GBP commercial qualification', () => {
 });
 
 describe('GBP Billing fail-closed lookup', () => {
-  const env = { get: (key: string) => key.endsWith('BASE_URL') ? 'https://billing.example.test/api/v1' : 'local-key' };
-  const fetcher = async (url: string) => {
+  const env = { get: (key: string) => key === 'BILLING_API_BASE_URL' ? 'https://billing.example.test' : key === 'BILLING_CATALOGUE_API_KEY' ? 'local-key' : undefined };
+  const fetcher = async (url: string, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get('authorization')).toBe('ApiKey local-key');
     const planId = GBP_OFFER_MAP.G01.plans['1-3'];
     const data = url.endsWith(`/plans/${planId}`) ? { planId, productId: GBP_OFFER_MAP.G01.productId, billingType: 'one-off', isSellable: true }
       : url.endsWith(`/products/${GBP_OFFER_MAP.G01.productId}`) ? { productId: GBP_OFFER_MAP.G01.productId, lifecycleStatus: 'published' }
@@ -58,15 +59,15 @@ describe('GBP Billing fail-closed lookup', () => {
     await expect(resolveGbpBillingPrice('G01', '1-3', env, fetcher as typeof fetch, new Date('2026-10-22'))).resolves.toMatchObject({ amountMinor: 24900, priceVersionId: 'pv-1' });
   });
   it('rejects unpublished or withdrawn catalogue states', async () => {
-    const draftPrice = async (url: string) => {
-      const response = await fetcher(url);
+    const draftPrice = async (url: string, init?: RequestInit) => {
+      const response = await fetcher(url, init);
       const body = await response.json();
       if (url.endsWith('/prices/current')) body.data.current.status = 'draft';
       return { ok: true, json: async () => body } as Response;
     };
     await expect(resolveGbpBillingPrice('G01', '1-3', env, draftPrice as typeof fetch, new Date('2026-10-22'))).rejects.toThrow('billing_price_not_published');
-    const withdrawn = async (url: string) => {
-      const response = await fetcher(url);
+    const withdrawn = async (url: string, init?: RequestInit) => {
+      const response = await fetcher(url, init);
       const body = await response.json();
       if (url.endsWith(`/plans/${GBP_OFFER_MAP.G01.plans['1-3']}`)) body.data.isSellable = false;
       return { ok: true, json: async () => body } as Response;
