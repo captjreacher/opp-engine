@@ -1,4 +1,5 @@
-import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTemplate, renderTemplate, type ScenarioMatch, type OutreachTemplate, type CompanyScenario } from "../_shared/companyScenarios.ts";
+import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, type ScenarioReport, type ApprovedDetails } from "../_shared/scenarioReports.ts";
+import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTemplate, type ScenarioMatch, type OutreachTemplate, type CompanyScenario } from "../_shared/companyScenarios.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
 import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Supabase Edge Function: `opportunities`
@@ -32,8 +33,8 @@ import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 //   GET   /opportunities/discovery-runs/:runId        -> durable run status
 //   GET   /opportunities/discovery-runs/:runId/candidates
 //   POST  /opportunities/discovery-candidates/:candidateId/acknowledge
-//   POST  /opportunities/discovery-runs/:runId/candidates/{import|assess|audit}
-//   POST  /opportunities/:id/{assess|audit}           -> canonical single-record intelligence action
+//   POST  /opportunities/discovery-runs/:runId/candidates/{import|assess}
+//   POST  /opportunities/:id/assess                   -> assessment with automatic scenario reports
 //   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
 //   PATCH /opportunities/:id/outreach/:draftId        -> edit/save or approve a draft (never sends)
 //   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via SMTP (operator-gated)
@@ -72,7 +73,7 @@ const DEFAULT_DISCOVERY_SCENARIO_SLUG = "local-digital-presence";
 const SUPPORTED_DISCOVERY_SCENARIO_SLUGS = new Set([
   DEFAULT_DISCOVERY_SCENARIO_SLUG,
 ]);
-const AUDIT_REPORT_VERSION = "opportunity-engine-v1";
+
 
 const cors = {
   "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
@@ -675,7 +676,7 @@ interface PlacesResult {
 async function refreshRunCounts(runId: string): Promise<void> {
   const { data, error } = await supabase
     .from("opportunity_discovery_candidates")
-    .select("enrichment_status, assessment_status, audit_status, error_info")
+    .select("enrichment_status, assessment_status, error_info")
     .eq("run_id", runId);
   if (error)
     throw new Error(`candidate_count_refresh_failed: ${error.message}`);
@@ -685,20 +686,17 @@ async function refreshRunCounts(runId: string): Promise<void> {
     (row) =>
       row.enrichment_status === "failed" ||
       row.assessment_status === "failed" ||
-      row.audit_status === "failed" ||
-      Object.keys((row.error_info as JsonObject | null) ?? {}).length > 0,
+      ((row.error_info as JsonObject | null)?.stage !== "audit" && Object.keys((row.error_info as JsonObject | null) ?? {}).length > 0),
   ).length;
   const activeStatuses = new Set([
     "queued",
     "enriching",
     "scoring",
-    "auditing",
   ]);
   const terminal = rows.every(
     (row) =>
       !activeStatuses.has(String(row.enrichment_status ?? "")) &&
-      !activeStatuses.has(String(row.assessment_status ?? "")) &&
-      !activeStatuses.has(String(row.audit_status ?? "")),
+      !activeStatuses.has(String(row.assessment_status ?? "")),
   );
 
   const { error: updateError } = await supabase
@@ -710,7 +708,6 @@ async function refreshRunCounts(runId: string): Promise<void> {
       ).length,
       candidates_scored: rows.filter((r) => r.assessment_status === "scored")
         .length,
-      audits_generated: rows.filter((r) => r.audit_status === "audited").length,
       failures,
       ...(terminal && failures > 0 ? { status: "partially_completed" } : {}),
     })
@@ -2827,6 +2824,7 @@ async function runOpportunityAnalysis(
     await persistCompanyMatches(leadId,scenarioMatches,true);
     assessment = inserted.data as AssessmentRecord;
   }
+  await prepareScenarioReports(leadId, assessment as unknown as JsonObject, lead as JsonObject);
   await supabase.from("opportunity_console_audit_log").insert({
     action: "analysis_completed",
     lead_id: leadId,
@@ -2855,167 +2853,10 @@ async function runOpportunityAnalysis(
   };
 }
 
-function reportBand(score: number): string {
-  if (score >= 100) return "high";
-  if (score >= 60) return "medium";
-  return "low";
-}
-
-async function auditOpportunity(
-  leadId: string,
-  retry = false,
-): Promise<{ ok: boolean; audit?: JsonObject; error?: string }> {
-  const [{ data: lead }, { data: assessment }] = await Promise.all([
-    supabase
-      .from("local_business_leads")
-      .select("*")
-      .eq("id", leadId)
-      .maybeSingle(),
-    supabase
-      .from("local_business_lead_assessments")
-      .select("*")
-      .eq("lead_id", leadId)
-      .order("assessed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  if (!lead) return { ok: false, error: "opportunity_not_found" };
-  if (!assessment) return { ok: false, error: "assessment_required" };
-  const { data: existing } = await supabase
-    .from("local_business_audit_reports")
-    .select("*")
-    .eq("lead_id", leadId)
-    .eq("assessment_id", assessment.id)
-    .eq("report_version", AUDIT_REPORT_VERSION)
-    .limit(1)
-    .maybeSingle();
-  if (existing && !retry) return { ok: true, audit: existing as JsonObject };
-  await supabase.rpc("emit_local_business_event", {
-    p_lead_id: leadId,
-    p_event_type: "local_business.audit_generation_started",
-    p_status: "started",
-    p_payload: { assessment_id: assessment.id },
-  });
-  try {
-    const score = Number(assessment.opportunity_score ?? 0);
-    const enrichment = ((lead.enrichment_diagnostics as JsonObject | null)
-      ?.enrichment_result ?? {}) as JsonObject;
-    const reportModel = {
-      business: {
-        name: lead.business_name,
-        category: lead.category,
-        location: lead.suburb ?? lead.region,
-        websiteUrl: lead.website_url,
-        source: lead.source,
-      },
-      scoreBand: reportBand(score),
-      metrics: [
-        {
-          id: "opportunity",
-          label: "Opportunity",
-          value: score,
-          band: reportBand(score),
-          sourceField: "opportunity_score",
-        },
-        {
-          id: "demand",
-          label: "Demand signal",
-          value: assessment.demand_signal_score,
-          band: reportBand(Number(assessment.demand_signal_score)),
-          sourceField: "demand_signal_score",
-        },
-        {
-          id: "trust",
-          label: "Trust leakage",
-          value: assessment.trust_leakage_score,
-          band: reportBand(Number(assessment.trust_leakage_score)),
-          sourceField: "trust_leakage_score",
-        },
-        {
-          id: "conversion",
-          label: "Conversion maturity",
-          value: assessment.conversion_maturity_score,
-          band: reportBand(Number(assessment.conversion_maturity_score)),
-          sourceField: "conversion_maturity_score",
-        },
-        {
-          id: "ai",
-          label: "AI readiness",
-          value: assessment.ai_readiness_score,
-          band: reportBand(Number(assessment.ai_readiness_score)),
-          sourceField: "ai_readiness_score",
-        },
-      ],
-      summary: assessment.assessment_summary,
-      sections: [
-        {
-          id: "evidence",
-          title: "Observed evidence",
-          summary: lead.trust_summary,
-          items: Array.isArray(enrichment.evidence) ? enrichment.evidence : [],
-        },
-      ],
-      riskFlags: enrichment.risk_flags ?? lead.risk_flags ?? [],
-      metadata: {
-        generatedAt: new Date().toISOString(),
-        assessmentId: assessment.id,
-        generatedBy: "opportunity-engine",
-        scoringSource: assessment.assessed_by,
-      },
-    };
-    // generated_by is an auth.users UUID; shared operator auth has no user ID.
-    // Omit it to preserve existing user attribution on updates. Application
-    // attribution remains in reportModel.metadata.generatedBy above.
-    const insert = {
-      lead_id: leadId,
-      assessment_id: assessment.id,
-      report_version: AUDIT_REPORT_VERSION,
-      generated_at: new Date().toISOString(),
-      metadata_json: {
-        report_model: reportModel,
-        validation: { customer_ready: true },
-      },
-    };
-    const { data: audit, error } = existing
-      ? await supabase
-          .from("local_business_audit_reports")
-          .update(insert)
-          .eq("id", existing.id)
-          .select("*")
-          .single()
-      : await supabase
-          .from("local_business_audit_reports")
-          .insert(insert)
-          .select("*")
-          .single();
-    if (error) throw error;
-    await supabase.rpc("emit_local_business_event", {
-      p_lead_id: leadId,
-      p_event_type: "local_business.audit_generated",
-      p_status: "completed",
-      p_payload: {
-        audit_report_id: audit.id,
-        assessment_id: assessment.id,
-        report_version: AUDIT_REPORT_VERSION,
-      },
-    });
-    return { ok: true, audit: audit as JsonObject };
-  } catch (error) {
-    const detail = String((error as Error).message).slice(0, 300);
-    await supabase.rpc("emit_local_business_event", {
-      p_lead_id: leadId,
-      p_event_type: "local_business.audit_generation_failed",
-      p_status: "failed",
-      p_payload: { assessment_id: assessment.id, detail },
-    });
-    return { ok: false, error: detail };
-  }
-}
-
 async function processCandidateBatch(
   runId: string,
   payload: JsonObject,
-  operation: "assess" | "audit",
+  operation: "assess",
 ): Promise<Response> {
   const ids = uuidList(payload.candidate_ids);
   if (!ids)
@@ -3037,8 +2878,8 @@ async function processCandidateBatch(
     return json({ error: "candidate_scope_mismatch" }, 422);
 
   const runPatch = {
-    status: operation === "assess" ? "scoring" : "auditing",
-    current_stage: operation === "assess" ? "scoring" : "auditing",
+    status: "scoring",
+    current_stage: "scoring",
     completed_at: null,
   };
   const { error: runStartError } = await supabase
@@ -3054,9 +2895,7 @@ async function processCandidateBatch(
     if (!leadId) {
       const detail = "Import the candidate before processing.";
       const statusPatch =
-        operation === "assess"
-          ? { assessment_status: "failed" }
-          : { audit_status: "failed" };
+        { assessment_status: "failed" };
       const errorInfo = {
         stage: operation,
         detail,
@@ -3090,9 +2929,7 @@ async function processCandidateBatch(
     ) {
       const requiresAcknowledgement = candidateNeedsAcknowledgement(candidateRecord);
       const statusPatch =
-        operation === "assess"
-          ? { assessment_status: "failed" }
-          : { audit_status: "failed" };
+        { assessment_status: "failed" };
       const errorInfo = {
         ...candidateGateErrorInfo(candidateRecord, operation),
         candidate_id: candidate.id,
@@ -3130,13 +2967,11 @@ async function processCandidateBatch(
     }
 
     const runningPatch =
-      operation === "assess"
-        ? {
+      {
             enrichment_status: "enriching",
             assessment_status: "scoring",
             error_info: {},
-          }
-        : { audit_status: "auditing", error_info: {} };
+          };
     const { error: runningError } = await supabase
       .from("opportunity_discovery_candidates")
       .update(runningPatch)
@@ -3154,14 +2989,11 @@ async function processCandidateBatch(
     const result: {
       ok: boolean;
       assessment?: JsonObject;
-      audit?: JsonObject;
       evidence?: unknown;
       error?: string;
       diagnostics?: JsonObject;
     } =
-      operation === "assess"
-        ? await assessOpportunity(leadId, payload.retry === true)
-        : await auditOpportunity(leadId, payload.retry === true);
+      await assessOpportunity(leadId, payload.retry === true);
 
     const errorInfo = result.ok
       ? {}
@@ -3175,22 +3007,18 @@ async function processCandidateBatch(
           failed_at: new Date().toISOString(),
         };
     const finalPatch = result.ok
-      ? operation === "assess"
-        ? {
+      ? {
             enrichment_status: "enriched",
             assessment_status: "scored",
             preliminary_score: result.assessment?.opportunity_score ?? null,
             enrichment_evidence: result.evidence ?? {},
             error_info: {},
           }
-        : { audit_status: "audited", error_info: {} }
-      : operation === "assess"
-        ? {
+      : {
             enrichment_status: "failed",
             assessment_status: "failed",
             error_info: errorInfo,
-          }
-        : { audit_status: "failed", error_info: errorInfo };
+          };
 
     const { error: finalUpdateError } = await supabase
       .from("opportunity_discovery_candidates")
@@ -3231,7 +3059,7 @@ async function processCandidateBatch(
     .update({
       status: failed ? "partially_completed" : "completed",
       current_stage:
-        operation === "assess" ? "scoring_complete" : "auditing_complete",
+        "scoring_complete",
       completed_at: new Date().toISOString(),
     })
     .eq("id", runId);
@@ -3251,23 +3079,6 @@ async function processCandidateBatch(
   );
 }
 
-async function singleIntelligenceAction(
-  leadId: string,
-  payload: JsonObject,
-  operation: "assess" | "audit",
-): Promise<Response> {
-  const result =
-    operation === "assess"
-      ? await assessOpportunity(leadId, payload.retry === true)
-      : await auditOpportunity(leadId, payload.retry === true);
-  if (!result.ok)
-    return json(
-      { error: `${operation}_failed`, detail: result.error },
-      result.error === "opportunity_not_found" ? 404 : 422,
-    );
-  return json(result);
-}
-
 // ---- Existing opportunity / outreach handlers ------------------------------
 
 function projectBatchTag(tag: {released_at?:unknown;opportunity_batches:unknown}) {
@@ -3276,7 +3087,7 @@ function projectBatchTag(tag: {released_at?:unknown;opportunity_batches:unknown}
   return batch ? {...batch,active:!tag.released_at && !batch.archived_at} : null;
 }
 async function enabledCompanyScenarios(): Promise<CompanyScenario[]> {
-  const {data,error} = await supabase.from("opportunity_scenarios").select("id,slug,version,status,assessment_config,discovery_config").eq("status","active");
+  const {data,error} = await supabase.from("opportunity_scenarios").select("*").eq("status","active");
   if(error) throw error;
   const latest=new Map<string,CompanyScenario>();
   for(const scenario of (data??[]) as CompanyScenario[]) if(!latest.has(scenario.slug) || latest.get(scenario.slug)!.version<scenario.version) latest.set(scenario.slug,scenario);
@@ -3324,23 +3135,59 @@ async function archiveBatch(id:string): Promise<Response> {
   const {error}=await supabase.rpc("archive_opportunity_batch",{p_batch_id:id});
   return error ? json({error:error.message},409) : json({ok:true});
 }
+async function prepareScenarioReports(id:string, assessment:JsonObject, lead:JsonObject) {
+  const matches=(assessment.scenario_matches??[]) as ScenarioMatch[];
+  const {data:templates,error:templateError}=await supabase.from("opportunity_outreach_templates").select("*").eq("enabled",true);
+  if(templateError) throw templateError;
+  const results: Array<{id:string;report:ScenarioReport}>=[];
+  for(const match of matches) {
+    const {data:scenario,error}=await supabase.from("opportunity_scenarios").select("*").eq("id",match.scenario_id).eq("version",match.scenario_version).single();
+    if(error) throw error;
+    const options=(templates??[]).filter(t=>(t.scenario_keys as string[]).includes(match.scenario_key));
+    for(const template of options.length?options:[null]) {
+      let offer=null,blocked=null;
+      try {
+        if(!template) throw new Error("No approved scenario-to-offer mapping.");
+        selectTemplate(matches, [template as OutreachTemplate],template.id);
+        offer=await resolveOffer(template as OutreachTemplate & {approved_details:ApprovedDetails},{base:Deno.env.get("BILLING_CATALOGUE_API_BASE_URL")??"",token:Deno.env.get("BILLING_CATALOGUE_BEARER_TOKEN")??""});
+      } catch(error) {blocked=(error as Error).message;}
+      const report=buildScenarioReport({lead,assessment,scenario,match,template:template as OutreachTemplate|null,offer,blocked});
+      const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(canonicalJson(report)));
+      const fingerprint=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,"0")).join("");
+      const {error:insertError}=await supabase.from("opportunity_scenario_reports").upsert({lead_id:id,assessment_id:assessment.id,scenario_id:match.scenario_id,fingerprint,report},{onConflict:"fingerprint",ignoreDuplicates:true});
+      if(insertError) throw insertError;
+      const {data:stored,error:readError}=await supabase.from("opportunity_scenario_reports").select("id,report").eq("fingerprint",fingerprint).single();
+      if(readError) throw readError;
+      results.push(stored as {id:string;report:ScenarioReport});
+    }
+  }
+  return results;
+}
+async function prepareSelectedOutreach(id:string,requested?:string) {
+  const {data:lead,error}=await supabase.from("local_business_leads").select("*").eq("id",id).single();
+  if(error) throw error;
+  const {data:assessment,error:assessmentError}=await supabase.from("local_business_lead_assessments").select("*").eq("lead_id",id).order("assessed_at",{ascending:false}).limit(1).maybeSingle();
+  if(assessmentError) throw assessmentError;
+  if(!assessment || !assessmentIsCurrent(assessment.assessed_at,lead.enrichment_diagnostics)) throw new Error("Current assessment required.");
+  const {matches,templates}=await outreachOptions(id);
+  const template=selectTemplate(matches,templates,requested);
+  const reports=(await prepareScenarioReports(id,assessment,lead)).filter(r=>r.report.source_template?.id===template.id && template.scenario_keys.includes(r.report.scenario.key));
+  if(reports.length!==template.scenario_keys.length) throw new Error("Every selected scenario requires a report.");
+  const rendered=reportEmail(template,reports.map(r=>r.report),lead.business_name);
+  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,offer_id:template.offer_id,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
+}
 async function validateDraftSelection(id:string,draft:JsonObject): Promise<string | null> {
   try {
     const selection=draft.selection as JsonObject | null;
-    if(!selection) return "Select a verified template and regenerate this legacy draft.";
-    const {data:lead,error}=await supabase.from("local_business_leads").select("business_name,enrichment_diagnostics").eq("id",id).single();
-    if(error) throw error;
-    const {matches,templates}=await outreachOptions(id);
-    const current=matches.filter(m=>assessmentIsCurrent(m.assessed_at,lead.enrichment_diagnostics));
-    const template=selectTemplate(current,templates,String(selection.template_id));
-    const rendered=renderTemplate(template,current,String(lead.business_name));
-    if(template.version!==selection.template_version || template.offer_id!==selection.offer_id || template.destination!==selection.destination || JSON.stringify(template.scenario_keys)!==JSON.stringify(selection.scenario_keys) || rendered.subject!==draft.subject || rendered.body!==draft.body) return "Template, destination or findings changed; regenerate and review.";
-    return null;
+    if(!selection?.report_ids) return "Regenerate this legacy draft with scenario reports and current approved offers.";
+    const {selection:current,rendered,template}=await prepareSelectedOutreach(id,String(selection.template_id));
+    if(canonicalJson(selection)!==canonicalJson(current)) return "Assessment, template or approved offer changed; regenerate and review.";
+    return validateEmailEdit(String(draft.subject??""),String(draft.body??""),rendered,(template as OutreachTemplate & {edit_phrases?:string[]}).edit_phrases);
   } catch(error) {return String((error as Error).message);}
 }
 
 async function listOpportunities(): Promise<Response> {
-  const [leadRes, draftRes, auditRes, analysisEventRes] = await Promise.all([
+  const [leadRes, draftRes, scenarioReportRes, analysisEventRes] = await Promise.all([
     supabase
       .from("local_business_leads")
       .select("id, business_name, suburb, region, category, status, updated_at, enrichment_status, enrichment_diagnostics")
@@ -3349,14 +3196,14 @@ async function listOpportunities(): Promise<Response> {
       .from("local_business_outreach_drafts")
       .select("lead_id, status, created_at")
       .order("created_at", { ascending: false }),
-    supabase.from("local_business_audit_reports").select("lead_id,assessment_id"),
+    supabase.from("opportunity_scenario_reports").select("lead_id,assessment_id"),
     supabase
       .from("opportunity_console_audit_log")
       .select("lead_id, metadata, created_at")
       .eq("action", "analysis_completed")
       .order("created_at", { ascending: false }),
   ]);
-  for (const result of [leadRes, draftRes, auditRes, analysisEventRes]) {
+  for (const result of [leadRes, draftRes, scenarioReportRes, analysisEventRes]) {
     if ((result as { error?: unknown }).error) {
       throw (result as { error: unknown }).error;
     }
@@ -3418,7 +3265,7 @@ async function listOpportunities(): Promise<Response> {
       recommended_outreach_angle:
         assessment?.recommended_outreach_angle ?? null,
       assessed_at: assessment?.assessed_at ?? null,
-      has_audit: !!assessment && (auditRes.data ?? []).some((report) => report.lead_id === lead.id && report.assessment_id === assessment.id),
+      has_scenario_report: !!assessment && (scenarioReportRes.data ?? []).some((report) => report.lead_id === lead.id && report.assessment_id === assessment.id),
       outreach_status: latestDrafts.get(String(lead.id))?.status ?? null,
       updated_at: lead.updated_at,
     };
@@ -3518,7 +3365,9 @@ async function getOpportunity(id: string): Promise<Response> {
     .select("released_at,opportunity_batches(id,name,archived_at)").eq("lead_id", id);
   if (batchTagsError) throw batchTagsError;
 
+  const scenarioReports=visibleAssessment ? await prepareScenarioReports(id,visibleAssessment as unknown as JsonObject,lead as JsonObject) : [];
   return json({
+    scenario_reports:scenarioReports,
     lead,
     latest_assessment: visibleAssessment,
     assessments: assessments.data ?? [],
@@ -3684,22 +3533,12 @@ async function createOutreach(
     );
   }
 
-  const { data: assessment } = await supabase
-    .from("local_business_lead_assessments")
-    .select("opportunity_score, recommended_outreach_angle")
-    .eq("lead_id", id)
-    .order("assessed_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
   let selection:JsonObject;
-  let rendered:ReturnType<typeof renderTemplate>;
+  let rendered:ReturnType<typeof reportEmail>;
   try {
-    const {matches,templates}=await outreachOptions(id);
-    const current=matches.filter(m=>assessmentIsCurrent(m.assessed_at,(lead as JsonObject).enrichment_diagnostics));
-    const template=selectTemplate(current,templates,typeof payload.template_id==="string" ? payload.template_id : undefined);
-    rendered=renderTemplate(template,current,String(lead.business_name));
-    selection={template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,offer_id:template.offer_id,destination:template.destination,findings:rendered.findings};
+    const prepared=await prepareSelectedOutreach(id,typeof payload.template_id==="string"?payload.template_id:undefined);
+    selection=prepared.selection;
+    rendered=prepared.rendered;
   } catch(error) {return json({error:"outreach_mapping_not_ready",detail:String((error as Error).message)},422);}
   const {subject,body}=rendered;
 
@@ -3740,7 +3579,11 @@ async function updateOutreach(
   if(existingError) throw existingError;
   if(!existing) return json({error:"not_found"},404);
   if(existing.status==="sent" || existing.sent_at) return json({error:"already_sent"},409);
-  if((typeof payload.subject==="string" && payload.subject!==existing.subject) || (typeof payload.body==="string" && payload.body!==existing.body)) return json({error:"template_content_locked",detail:"Regenerate from a configured template; claims must use recorded findings."},422);
+  const edited=(typeof payload.subject==="string" && payload.subject!==existing.subject) || (typeof payload.body==="string" && payload.body!==existing.body);
+  if(edited) {
+    const editError=await validateDraftSelection(id,{...existing,...(typeof payload.subject==="string"?{subject:payload.subject}:{}),...(typeof payload.body==="string"?{body:payload.body}:{})});
+    if(editError) return json({error:"unsupported_email_edit",detail:editError},422);
+  }
   const fields: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
@@ -3760,6 +3603,7 @@ async function updateOutreach(
     );
   }
   if (status === "approved") {
+    if(edited) return json({error:"save_before_approval"},422);
     if(payload.reviewed!==true) return json({error:"manual_review_required"},422);
     const selectionError=await validateDraftSelection(id,existing);
     if(selectionError) return json({error:"outreach_mapping_not_ready",detail:selectionError},422);
@@ -3767,13 +3611,17 @@ async function updateOutreach(
     fields.approved_by = "operator-console";
     fields.approved_at = new Date().toISOString();
     action = "outreach_draft_approved";
-  } else if (status === "draft") {
+  } else if (status === "draft" || edited) {
+    fields.approved_at = null;
+    fields.approved_by = null;
     fields.status = "draft";
   }
 
   const { data: draft, error } = await supabase
     .from("local_business_outreach_drafts")
     .update(fields)
+    .eq("updated_at", existing.updated_at)
+    .eq("status", existing.status)
     .eq("id", draftId)
     .eq("lead_id", id)
     .select("*")
@@ -3870,7 +3718,7 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
       ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
       : "") + htmlFromBody(String(draft.body ?? ""));
 
-  const {error:claimError}=await supabase.from("opportunity_outreach_send_claims").insert({draft_id:draftId,lead_id:id});
+  const {error:claimError}=await supabase.rpc("claim_scenario_outreach_send",{p_draft_id:draftId,p_lead_id:id,p_subject:draft.subject,p_body:draft.body,p_selection:draft.selection,p_updated_at:draft.updated_at});
   if(claimError) return json({error:"send_claim_exists",detail:"A prior send attempt requires explicit reconciliation."},409);
   try {
     await sendSmtpEmail(smtp, { subject, text, html }, draftId, recipient);
@@ -4322,11 +4170,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       parts[2] === "candidates" &&
       parts[3] === "audit"
     ) {
-      return await processCandidateBatch(
-        parts[1],
-        await req.json().catch(() => ({})),
-        "audit",
-      );
+      return json({error:"audit_retired"},410);
     }
     if (
       req.method === "GET" &&
@@ -4427,12 +4271,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       );
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "audit") {
-      return await singleIntelligenceAction(
-        parts[0],
-        await req.json().catch(() => ({})),
-        "audit",
-      );
+      return json({error:"audit_retired",detail:"Scenario reports are prepared automatically from assessments."},410);
     }
+
     if (
       req.method === "POST" &&
       parts.length === 2 &&

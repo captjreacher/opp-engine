@@ -1,3 +1,4 @@
+import ScenarioReportView from "./ScenarioReportView";
 import { useState } from "react";
 import type { OppDetail } from "../lib/types";
 import { fetchOpportunityBatches, moveBatchMember } from "../lib/api";
@@ -33,16 +34,22 @@ export default function CompanyScenarioPanel({
     } | null
   )?.score_explanation;
   return (
-    <section className="space-y-3 rounded border border-slate-700 p-4">
+    <section className="space-y-3 rounded border border-graphite-700 p-4">
       <h2 className="font-semibold">
         Company scenarios and outreach selection
       </h2>
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-graphite-400">
         Confirm service counts with the business before choosing an offer. Website
         scope counts dedicated service pages, not total website pages. GBP requests
         covering more than five services require manual scope review.
       </p>
       {!matches.length && <p>No scenarios assessed yet.</p>}
+      {(detail.scenario_reports ?? []).filter(r => !selected || r.report.source_template?.id === selected).map(r => (
+        <div key={r.id} className="space-y-2">
+          <p className="text-sm">{r.report.offer ? `${r.report.offer.name} · ${r.report.offer.price_text}` : `Offer unavailable: ${r.report.commercial_block}`}</p>
+          <ScenarioReportView report={r.report} />
+        </div>
+      ))}
       {matches.map((match) => (
         <div key={match.scenario_key} className="text-sm">
           <strong>{match.scenario_key}</strong> — {match.state} · score{" "}
@@ -56,7 +63,7 @@ export default function CompanyScenarioPanel({
           </ul>
         </div>
       ))}
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-graphite-400">
         Missing evidence is not proof of absence. Scenario count does not imply
         buying readiness.
       </p>
@@ -70,7 +77,7 @@ export default function CompanyScenarioPanel({
       <label className="block text-sm">
         Outreach template
         <select
-          className="ml-2 rounded bg-slate-900 p-2"
+          className="ml-2 rounded bg-graphite-900 p-2"
           value={selected}
           onChange={(event) => onSelect(event.target.value)}
         >
@@ -122,7 +129,7 @@ export default function CompanyScenarioPanel({
               <select
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
-                className="bg-slate-900 p-2"
+                className="bg-graphite-900 p-2"
               >
                 <option value="">Destination batch</option>
                 {destinations.map((b) => (

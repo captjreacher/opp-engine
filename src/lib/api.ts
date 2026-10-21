@@ -8,7 +8,6 @@ import type {
   ApiErrorBody,
   AddAnalysableEvidenceInput,
   AnalysisResponse,
-  AuditRunResponse,
   Draft,
   DraftResponse,
   DraftStatus,
@@ -326,7 +325,7 @@ export function fetchDiscoveryCandidates(
 
 function discoveryBatch(
   runId: string,
-  action: "import" | "assess" | "audit",
+  action: "import" | "assess",
   candidateIds: string[],
   retry = false,
 ): Promise<BatchActionResponse> {
@@ -346,11 +345,6 @@ export const assessDiscoveryCandidates = (
   ids: string[],
   retry = false,
 ) => discoveryBatch(runId, "assess", ids, retry);
-export const auditDiscoveryCandidates = (
-  runId: string,
-  ids: string[],
-  retry = false,
-) => discoveryBatch(runId, "audit", ids, retry);
 
 /**
  * POST {VITE_API_BASE}/discovery-candidates/{id}/acknowledge
@@ -475,15 +469,6 @@ export function assessOpportunity(
   return analyzeOpportunity(id, retry);
 }
 
-export function auditOpportunity(
-  id: string,
-  retry = false,
-): Promise<AuditRunResponse> {
-  return request(`/${encodeURIComponent(id)}/audit`, {
-    method: "POST",
-    body: JSON.stringify({ retry }),
-  });
-}
 
 /** Re-exported for convenience so components can type draft state without importing types directly. */
 export type { Draft };

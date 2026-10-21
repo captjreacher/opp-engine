@@ -135,6 +135,7 @@ describe("manual outreach gates execute before mail", () => {
       subject: "Observed",
       body: "Recorded",
     });
+    h.validate.mockResolvedValue("Unsupported email claim");
     expect(
       (await h.updateOutreach("lead", "draft", { body: "Guaranteed revenue" }))
         .status,

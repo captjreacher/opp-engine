@@ -1,3 +1,4 @@
+import ScenarioReportView from "./ScenarioReportView";
 import { useEffect, useState } from "react";
 import type { Draft } from "../lib/types";
 import Badge, { toneForStatus } from "./Badge";
@@ -51,7 +52,6 @@ export default function DraftEditor({
     setConfirmingSend(false);
   }, [draft.id, draft.subject, draft.body, draft.status]);
 
-  const mapped=Boolean(draft.selection);
   const isDraftStatus = draft.status === "draft";
   const isApproved = draft.status === "approved";
   const isSent = draft.status === "sent";
@@ -77,25 +77,30 @@ export default function DraftEditor({
         </div>
       )}
 
-      {draft.selection && <p className="text-sm">Template {draft.selection.template_id} v{draft.selection.template_version} · Scenarios {draft.selection.scenario_keys.join(", ")} · Offer {draft.selection.offer_id} · Destination {draft.selection.destination}. Recorded findings: {draft.selection.findings.map(f=>f.description).join("; ")}</p>}
+      {draft.selection && <p className="text-sm">Template {draft.selection.template_id} v{draft.selection.template_version} · Scenarios {draft.selection.scenario_keys.join(", ")} · Offer {draft.selection.offer_id} · Destination {draft.selection.destination}. Recorded findings: {draft.selection.findings?.map(f=>f.description).join("; ") ?? "See scenario reports"}</p>}
+      {draft.selection?.reports?.map((report) => <div key={report.scenario.key} className="space-y-2"><p className="text-sm">{report.offer?.name} · {report.offer?.price_text}</p><ScenarioReportView report={report} /></div>)}
+      {!!draft.selection?.reports?.[0]?.source_template?.edit_phrases?.length && <p className="text-xs text-graphite-400">Additional reviewed phrases: {draft.selection.reports[0].source_template.edit_phrases.join(" / ")}</p>}
+      <p className="text-xs text-graphite-400">Review every claim before approval. You may reorder evidence and offer paragraphs and edit introductions or calls to action using reviewed template phrases. Keep commercial details intact.</p>
       <div>
-        <label className="mb-1 block text-xs font-medium text-graphite-400">Subject</label>
+        <label htmlFor={`outreach-subject-${draft.id}`} className="mb-1 block text-xs font-medium text-graphite-400">Subject</label>
         <input
+          id={`outreach-subject-${draft.id}`}
           type="text"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
-          disabled={busy || isSent || mapped}
+          disabled={busy || isSent}
           className="w-full rounded border border-graphite-700 bg-graphite-950 px-3 py-2 text-sm text-graphite-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft subject"
         />
       </div>
 
       <div>
-        <label className="mb-1 block text-xs font-medium text-graphite-400">Body</label>
+        <label htmlFor={`outreach-body-${draft.id}`} className="mb-1 block text-xs font-medium text-graphite-400">Body</label>
         <textarea
+          id={`outreach-body-${draft.id}`}
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          disabled={busy || isSent || mapped}
+          disabled={busy || isSent}
           rows={10}
           className="w-full resize-y rounded border border-graphite-700 bg-graphite-950 px-3 py-2 font-mono text-sm text-graphite-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft body"

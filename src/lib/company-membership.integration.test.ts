@@ -28,7 +28,7 @@ const lead = "00000000-0000-4000-8000-000000000001",
   other = "00000000-0000-4000-8000-000000000002";
 const batch = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-suite("local PostgreSQL company membership and send uniqueness", () => {
+suite("local PostgreSQL company membership and send uniqueness", { timeout: 15000 }, () => {
   beforeAll(() => {
     if (!database?.startsWith("opp_company_test"))
       throw new Error(
@@ -196,4 +196,42 @@ suite("local PostgreSQL company membership and send uniqueness", () => {
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
   });
+  it("applies additive report migration without removing historical data",()=>{
+    sql(`alter table local_business_outreach_drafts add column lead_id uuid, add column subject text, add column body text, add column status text default 'draft', add column sent_at timestamptz, add column updated_at timestamptz default now();`);
+    sql(readFileSync(resolve("supabase/migrations/20261020234438_scenario_reports.sql"),"utf8"));
+    expect(sql("select count(*) from opportunity_company_scenarios")).toBe("1");
+    expect(sql("select count(*) from opportunity_scenario_reports")).toBe("0");
+    expect(sql("select relrowsecurity from pg_class where oid='opportunity_scenario_reports'::regclass")).toBe("t");
+    expect(sql("select has_table_privilege('authenticated','opportunity_scenario_reports','SELECT')")).toBe("f");
+    expect(sql("select has_table_privilege('service_role','opportunity_scenario_reports','UPDATE')")).toBe("f");
+  });
+  it("stores reproducible reports idempotently and denies public access",()=>{
+    sql(`insert into local_business_lead_assessments(id) values('${batch(50)}');
+      insert into opportunity_scenario_reports(lead_id,assessment_id,scenario_id,fingerprint,report)
+      values('${lead}','${batch(50)}','${batch(20)}',repeat('a',64),'{}');`);
+    sql(`insert into opportunity_scenario_reports(lead_id,assessment_id,scenario_id,fingerprint,report)
+      values('${lead}','${batch(50)}','${batch(20)}',repeat('a',64),'{}') on conflict(fingerprint) do nothing;`);
+    expect(sql("select count(*) from opportunity_scenario_reports")).toBe("1");
+    expect(sql("select count(*) from opportunity_console_audit_log where action='scenario_report_prepared'")).toBe("1");
+    expect(()=>sql("set role authenticated; select * from opportunity_scenario_reports")).toThrow();
+  });
+  it("blocks unapproved or changed content at the atomic claim boundary",()=>{
+    sql(`insert into local_business_outreach_drafts(id,lead_id,subject,body,status,selection,updated_at)
+      values('${batch(40)}','${other}','Subject','Body','draft','{}','2026-10-20');`);
+    const claim=(body:string)=>`select claim_scenario_outreach_send('${batch(40)}','${other}','Subject','${body}','{}','2026-10-20')`;
+    expect(()=>sql(claim('Body'))).toThrow();
+    sql(`update local_business_outreach_drafts set status='approved' where id='${batch(40)}'`);
+    expect(()=>sql(claim('Edited'))).toThrow();
+    expect(sql(`select count(*) from opportunity_outreach_send_claims where lead_id='${other}'`)).toBe("0");
+  });
+  it("serializes concurrent send claims and freezes reviewed content after claim",async()=>{
+    const claim=`select claim_scenario_outreach_send('${batch(40)}','${other}','Subject','Body','{}','2026-10-20')`;
+    const results=await Promise.allSettled([asyncSql(claim),asyncSql(claim)]);
+    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);
+    expect(()=>sql(`update local_business_outreach_drafts set body='Changed' where id='${batch(40)}'`)).toThrow();
+    expect(()=>sql(`update local_business_outreach_drafts set status='draft' where id='${batch(40)}'`)).toThrow();
+    sql(`update local_business_outreach_drafts set status='sent',sent_at=now() where id='${batch(40)}'`);
+    expect(sql(`select body from local_business_outreach_drafts where id='${batch(40)}'`)).toBe('Body');
+  });
+
 });

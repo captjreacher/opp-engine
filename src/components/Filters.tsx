@@ -1,14 +1,14 @@
 export interface FilterState {
   scoreThreshold: number;
   pipelineStatus: string; // "" = all
-  auditAvailability: "all" | "available" | "none";
+  reportAvailability: "all" | "available" | "none";
   outreachStatus: string; // "" = all
 }
 
 export const DEFAULT_FILTER_STATE: FilterState = {
   scoreThreshold: 0,
   pipelineStatus: "",
-  auditAvailability: "all",
+  reportAvailability: "all",
   outreachStatus: "",
 };
 
@@ -82,19 +82,19 @@ export default function Filters({
       </div>
 
       <div>
-        <label htmlFor="audit-filter" className="mb-1.5 block text-xs font-medium text-graphite-400">
-          Audit available
+        <label htmlFor="report-filter" className="mb-1.5 block text-xs font-medium text-graphite-400">
+          Scenario report available
         </label>
         <select
-          id="audit-filter"
-          value={state.auditAvailability}
+          id="report-filter"
+          value={state.reportAvailability}
           onChange={(e) =>
             onChange({
               ...state,
-              auditAvailability: e.target.value as FilterState["auditAvailability"],
+              reportAvailability: e.target.value as FilterState["reportAvailability"],
             })
           }
-          className={`w-full rounded border border-graphite-700 bg-graphite-950 px-2 py-1.5 text-sm text-graphite-200 focus:border-accent-500 focus:outline-none ${state.auditAvailability !== "all" ? "oe-filter-active" : ""}`}
+          className={`w-full rounded border border-graphite-700 bg-graphite-950 px-2 py-1.5 text-sm text-graphite-200 focus:border-accent-500 focus:outline-none ${state.reportAvailability !== "all" ? "oe-filter-active" : ""}`}
         >
           <option value="all">All</option>
           <option value="available">Available</option>

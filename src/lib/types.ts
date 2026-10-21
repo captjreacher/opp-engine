@@ -25,7 +25,8 @@ export interface OppRow {
   ai_readiness_score: number;
   recommended_outreach_angle: string | null;
   assessed_at: string | null;
-  has_audit: boolean;
+  has_audit?: boolean; // Historical compatibility only.
+  has_scenario_report?: boolean;
   outreach_status: string | null;
   updated_at: string;
 }
@@ -97,7 +98,7 @@ export interface AuditReport {
 export type DraftStatus = "draft" | "approved" | "sent";
 
 export interface Draft {
-  selection?: { template_id: string; template_version: number; scenario_keys: string[]; offer_id: string; destination: string; findings: {description:string}[] };
+  selection?: { template_id: string; template_version: number; scenario_keys: string[]; offer_id: string; destination: string; findings?: {description:string}[]; reports?: import("../../supabase/functions/_shared/scenarioReports").ScenarioReport[] };
   id: string;
   subject: string | null;
   body: string;
@@ -244,6 +245,7 @@ export interface AddAnalysableEvidenceInput {
 
 /** Full detail response (GET {VITE_API_BASE}/{id}). */
 export interface OppDetail {
+  scenario_reports?: {id:string;report:import("../../supabase/functions/_shared/scenarioReports").ScenarioReport}[];
   batches?: { id: string; name: string; active?: boolean }[];
   company_scenarios?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
   outreach_options?: import("../../supabase/functions/_shared/companyScenarios").OutreachTemplate[];

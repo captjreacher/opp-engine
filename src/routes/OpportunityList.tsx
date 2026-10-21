@@ -159,8 +159,8 @@ export default function OpportunityList() {
           : true,
       )
       .filter((row) => {
-        if (filters.auditAvailability === "available") return row.has_audit;
-        if (filters.auditAvailability === "none") return !row.has_audit;
+        if (filters.reportAvailability === "available") return row.has_scenario_report;
+        if (filters.reportAvailability === "none") return !row.has_scenario_report;
         return true;
       })
       .filter((row) => {
@@ -279,7 +279,7 @@ export default function OpportunityList() {
                 Assessment
               </th>
               <th className="px-3 py-2 text-left font-medium text-graphite-400">
-                Audit
+                Reports
               </th>
               <th className="px-3 py-2 text-left font-medium text-graphite-400">
                 Outreach
@@ -349,8 +349,8 @@ export default function OpportunityList() {
                     </Badge>
                   </td>
                   <td className="px-3 py-2.5">
-                    <Badge tone={row.has_audit ? "info" : "neutral"}>
-                      {row.has_audit ? "Available" : "—"}
+                    <Badge tone={row.has_scenario_report ? "info" : "neutral"}>
+                      {row.has_scenario_report ? "Available" : "—"}
                     </Badge>
                   </td>
                   <td className="px-3 py-2.5">
