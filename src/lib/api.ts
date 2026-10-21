@@ -171,6 +171,29 @@ export function createOutreachDraft(
   });
 }
 
+export interface GbpPreparationInput {
+  scenarioCode: 'G01' | 'G02';
+  serviceCount: number;
+  customerConfirmed: boolean;
+  profileStatus: 'none_or_unclaimed' | 'verified_controlled';
+  humanReviewed: boolean;
+  observedAt: string;
+  evidenceUrl?: string;
+  searchQuery?: string;
+  searchLocation?: string;
+  candidateReview?: string;
+  searchAttempted?: boolean;
+  searchResult?: 'no_match' | 'unclaimed_match' | 'matching_profile';
+  observation?: string;
+}
+
+/** Local draft preparation; the server blocks this when GBP draft mode is off. */
+export function prepareGbpCommercial(id: string, payload: GbpPreparationInput): Promise<DraftResponse> {
+  return request<DraftResponse>(`/${encodeURIComponent(id)}/gbp-commercial/prepare`, {
+    method: 'POST', body: JSON.stringify(payload),
+  });
+}
+
 /**
  * PATCH {VITE_API_BASE}/{id}/outreach/{draftId} -> { draft }
  * NOTE: the API rejects status "sent" with a 400 — sending is not implemented.

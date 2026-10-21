@@ -60,6 +60,7 @@ export default function DraftEditor({
   const dirty = subject !== (draft.subject ?? "") || body !== draft.body;
   const sendProtected = draft.send_state === "sending" || draft.send_state === "uncertain";
   const busy = readOnly || sendProtected || saving || approving || sending;
+  const gbpLocked = Boolean(draft.gbp_commercial_snapshot);
 
   return (
     <div className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-4">
@@ -79,6 +80,7 @@ export default function DraftEditor({
           This draft has been sent{draft.sent_at ? ` (${formatTimestamp(draft.sent_at)})` : ""}. It is now read-only.
         </div>
       )}
+      {gbpLocked && <p className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">GBP commercial copy is locked to the Scenario Report. This local draft cannot be sent before a separate release.</p>}
 
       {draft.selection && <p className="text-sm">Template {draft.selection.template_id} v{draft.selection.template_version} · Scenarios {draft.selection.scenario_keys.join(", ")} · Offer {draft.selection.offer_id} · Destination {draft.selection.destination}. Recorded findings: {draft.selection.findings?.map(f=>f.description).join("; ") ?? "See scenario reports"}</p>}
       {draft.selection?.reports?.map((report) => <div key={report.scenario.key} className="space-y-2"><p className="text-sm">{report.offer?.name} · {report.offer?.price_text}</p><ScenarioReportView report={report} /></div>)}
@@ -91,7 +93,7 @@ export default function DraftEditor({
           type="text"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
-          disabled={busy || isSent}
+          disabled={busy || isSent || gbpLocked}
           className="w-full rounded border border-graphite-700 bg-graphite-950 px-3 py-2 text-sm text-graphite-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft subject"
         />
@@ -103,7 +105,7 @@ export default function DraftEditor({
           id={`outreach-body-${draft.id}`}
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          disabled={busy || isSent}
+          disabled={busy || isSent || gbpLocked}
           rows={10}
           className="w-full resize-y rounded border border-graphite-700 bg-graphite-950 px-3 py-2 font-mono text-sm text-graphite-100 focus:border-accent-500 focus:outline-none disabled:opacity-60"
           placeholder="Draft body"
@@ -121,7 +123,7 @@ export default function DraftEditor({
           <button
             type="button"
             onClick={() => onSave({ subject, body })}
-            disabled={busy || !dirty}
+            disabled={busy || !dirty || gbpLocked}
             className="rounded bg-graphite-700 px-3 py-1.5 text-sm font-medium text-graphite-100 transition-colors hover:bg-graphite-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save changes"}
@@ -137,7 +139,7 @@ export default function DraftEditor({
             {approving ? "Approving…" : "Approve"}
           </button>
 
-          {isApproved && !confirmingSend && (
+          {isApproved && !gbpLocked && !confirmingSend && (
             <button
               type="button"
               onClick={() => setConfirmingSend(true)}
@@ -148,7 +150,7 @@ export default function DraftEditor({
             </button>
           )}
 
-          {isApproved && confirmingSend && (
+          {isApproved && !gbpLocked && confirmingSend && (
             <span className="inline-flex items-center gap-2">
               <span className="text-xs text-amber-300">Send this outreach email?</span>
               <button
@@ -180,7 +182,7 @@ export default function DraftEditor({
           The last send attempt failed or its delivery is uncertain. Reconcile the delivery outcome before another attempt.
         </p>
       )}
-      {isApproved && !sendFailed && !sendProtected && (
+      {isApproved && !sendFailed && !sendProtected && !gbpLocked && (
         <p className="text-xs text-graphite-500">
           Approved and ready to send. Sending is manual — nothing goes out until you confirm.
         </p>

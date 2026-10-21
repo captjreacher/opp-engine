@@ -8,6 +8,7 @@ import {
   ApiError,
   ApiNotConfiguredError,
   createOutreachDraft,
+  prepareGbpCommercial,
   enrichOpportunity,
   fetchOpportunityDetail,
   isApiConfigured,
@@ -27,6 +28,8 @@ import { OUTCOME_ACTIONS, REVIEW_STATE_ORDER } from "../lib/types";
 import Badge, { toneForStatus } from "../components/Badge";
 
 import DraftEditor from "../components/DraftEditor";
+import GbpPreparation from "../components/GbpPreparation";
+import type { GbpPreparationInput } from "../lib/api";
 import GuidedWorkflow, {
   type WorkflowState,
 } from "../components/GuidedWorkflow";
@@ -123,6 +126,8 @@ export default function OpportunityDetail() {
   const [generatingDraft, setGeneratingDraft] = useState(false);
   const [selectedTemplate,setSelectedTemplate]=useState("");
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [gbpPreparing, setGbpPreparing] = useState(false);
+  const [gbpError, setGbpError] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [approvingDraft, setApprovingDraft] = useState(false);
   const [sendingDraft, setSendingDraft] = useState(false);
@@ -296,6 +301,20 @@ export default function OpportunityDetail() {
       setDraftMutationError(errorMessage(err));
     } finally {
       setSavingDraft(false);
+    }
+  }
+
+  async function handlePrepareGbp(input: GbpPreparationInput) {
+    if (!id) return;
+    setGbpPreparing(true);
+    setGbpError(null);
+    try {
+      await prepareGbpCommercial(id, input);
+      await load();
+    } catch (err) {
+      setGbpError(errorMessage(err));
+    } finally {
+      setGbpPreparing(false);
     }
   }
 
@@ -1329,6 +1348,7 @@ Enrich
                   {generateError}
                 </p>
               )}
+              {!outreachBlockedReason && <GbpPreparation onPrepare={handlePrepareGbp} busy={gbpPreparing} error={gbpError} />}
             </div>
           ) : (
             <div className="space-y-3">
