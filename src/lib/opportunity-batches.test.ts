@@ -3,7 +3,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_BATCH_FILTER, matchesBatchFilter, validateBatchFilter } from "../../supabase/functions/_shared/opportunityBatches";
 
-const row = { business_name: "Example Builder", location: "Auckland", industry: "Construction", opportunity_score: null, pipeline_status: "discovered", has_audit: false, outreach_status: null };
+const row = { business_name: "Example Builder", location: "Auckland", industry: "Construction", opportunity_score: null, pipeline_status: "discovered", has_scenario_report: false, outreach_status: null };
 describe("saved dashboard filters", () => {
   it.each(["EXAMPLE", "auck", "struct"])("matches business/location/industry partial text case-insensitively: %s", (search) => {
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, search })).toBe(true);
@@ -15,21 +15,25 @@ describe("saved dashboard filters", () => {
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, search: "builder", scoreThreshold: 1 })).toBe(false);
   });
   it("round-trips the actual filters captured from the dashboard", () => {
-    const filter = { search: "", scoreThreshold: 60, pipelineStatus: "discovered", auditAvailability: "none" as const, outreachStatus: "None" };
+    const filter = { search: "", scoreThreshold: 60, pipelineStatus: "discovered", reportAvailability: "none" as const, outreachStatus: "None" };
     expect(validateBatchFilter(filter)).toEqual(filter);
     expect(matchesBatchFilter({ ...row, opportunity_score: "80.0" }, filter)).toBe(true);
     expect(matchesBatchFilter({ ...row, opportunity_score: "80.0", pipeline_status: "enriched" }, filter)).toBe(false);
+  });
+  it("ignores retained legacy audit filters without excluding work",()=>{
+    const filter=validateBatchFilter({auditAvailability:"available"});
+    expect(filter.reportAvailability).toBe("all");expect(matchesBatchFilter(row,filter)).toBe(true);
   });
   it("keeps unassessed records visible when there is no minimum score", () => {
     expect(matchesBatchFilter(row, DEFAULT_BATCH_FILTER)).toBe(true);
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, scoreThreshold: 1 })).toBe(false);
   });
-  it.each([{ scoreThreshold: -1 }, { scoreThreshold: "60" }, { auditAvailability: "bad" }, { search: 12 }, { sql: "any" }])("rejects unsupported filters: %j", (filter) => {
+  it.each([{ scoreThreshold: -1 }, { scoreThreshold: "60" }, { reportAvailability: "bad" }, { search: 12 }, { sql: "any" }])("rejects unsupported filters: %j", (filter) => {
     expect(() => validateBatchFilter(filter)).toThrow();
   });
-  it("filters audit and outreach status with the dashboard's None convention", () => {
+  it("filters scenario report and outreach status with the dashboard's None convention", () => {
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, outreachStatus: "None" })).toBe(true);
-    expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, auditAvailability: "available" })).toBe(false);
+    expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, reportAvailability: "available" })).toBe(false);
   });
 });
 

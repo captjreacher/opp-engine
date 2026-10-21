@@ -167,6 +167,7 @@ export function aggregateScenarios(
   };
 }
 export type OutreachTemplate = {
+  edit_phrases?: string[];
   id: string;
   version: number;
   name: string;

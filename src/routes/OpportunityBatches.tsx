@@ -1,3 +1,4 @@
+import { validateBatchFilter } from "../../supabase/functions/_shared/opportunityBatches";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { archiveBatch, analyzeOpportunity, enrichOpportunity, fetchOpportunityBatch, fetchOpportunityBatches, updateOpportunityBatch, type OpportunityBatch } from "../lib/api";
@@ -37,7 +38,7 @@ export default function OpportunityBatches() {
           if (cancelled) return;
           setBatch(result.batch); setRows(result.opportunities);
           setName(result.batch.name); setPurpose(result.batch.purpose);
-          setFilter({ ...DEFAULT_BATCH_FILTER, ...result.batch.record_filter });
+          setFilter(validateBatchFilter(result.batch.record_filter));
         } else {
           const result = await fetchOpportunityBatches();
           if (!cancelled) setBatches(result.batches);
@@ -61,7 +62,7 @@ export default function OpportunityBatches() {
   const actionable = matching.filter(row=>!batch?.archived_at && row.batch_member_active !== false && canSelectOpportunity({...row,batches:[]}));
   const enrichTargets = actionable.filter(row=>!row.enrichment_ready);
   const assessTargets = actionable.filter(row=>row.enrichment_ready && !row.assessed_at);
-  const dirty = !!batch && (name !== batch.name || purpose !== batch.purpose || JSON.stringify(filter) !== JSON.stringify({ ...DEFAULT_BATCH_FILTER, ...batch.record_filter }));
+  const dirty = !!batch && (name !== batch.name || purpose !== batch.purpose || JSON.stringify(filter) !== JSON.stringify(validateBatchFilter(batch.record_filter)));
 
   async function save() {
     if (!id || busy) return;
