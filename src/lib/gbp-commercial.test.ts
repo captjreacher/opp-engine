@@ -22,7 +22,12 @@ describe('GBP commercial qualification', () => {
   });
 
   it('locks each tier to its own Billing plan, template and page', () => {
-    for (const [code, q, band, amount] of [['G01', setup, '1-3', 24900], ['G02', improvement, '4-5', 29900]] as const) {
+    for (const [code, q, band, amount] of [
+      ['G01', setup, '1-3', 24900],
+      ['G01', { ...setup, serviceCount: 4 }, '4-5', 34900],
+      ['G02', { ...improvement, serviceCount: 3 }, '1-3', 19900],
+      ['G02', improvement, '4-5', 29900],
+    ] as const) {
       const offer = GBP_OFFER_MAP[code];
       const snapshot = buildGbpSnapshot(q, band, { planId: offer.plans[band], productId: offer.productId, priceVersionId: 'pv-1', amountMinor: amount, currency: 'NZD', taxTreatment: 'exclusive', taxRate: 1500, cadence: 'one-off' });
       const email = gbpOutreach('Example Ltd', q, snapshot);
@@ -34,6 +39,7 @@ describe('GBP commercial qualification', () => {
       for (const inclusion of snapshot.inclusions) expect(email.body).toContain(inclusion);
       expect(email.body).not.toMatch(/guaranteed rankings|recurring SEO reporting/i);
       expect(snapshot.commercialLine).toContain('no subscription');
+      expect(snapshot.commercialLine).toContain(`NZD $${(amount / 100).toFixed(2)} + GST`);
       expect(() => buildGbpSnapshot(q, band, { planId: GBP_OFFER_MAP[code === 'G01' ? 'G02' : 'G01'].plans[band], productId: offer.productId, priceVersionId: 'pv-1', amountMinor: amount, currency: 'NZD', taxTreatment: 'exclusive', taxRate: 1500, cadence: 'one-off' })).toThrow('billing_offer_mismatch');
     }
   });

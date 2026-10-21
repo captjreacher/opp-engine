@@ -1,8 +1,8 @@
 # Landing-page draft: GBP Improvement
 
-**Review-only copy. Proposed route:** `/gbp-improvement/`. Do not publish or link from outreach until owner approval and matching Billing plans are published. Price blocks below describe the proposal; the implemented page must fetch the current published price by exact Billing plan ID and suppress an unavailable variant.
+**Approved copy for local implementation. Route:** `/products/gbp-improvement/`. Publication and outreach require separate release approval and matching published Billing plans. The implemented page fetches the current published price by exact Billing plan ID and suppresses an unavailable variant.
 
-**Title:** Google Business Profile Improvement | MaximisedAI  
+**Title:** Google Business Profile Improvement | MaximisedAI
 **Meta description:** A one-off review and update of one verified Google Business Profile, with up to five confirmed services. NZD pricing excluding GST.
 
 ## Make your existing Business Profile more accurate and useful
@@ -33,7 +33,7 @@ You need control of the verified profile and must authorize access for the work.
 
 This option excludes website work, SEO campaigns, ads, ongoing monitoring, review generation or replies, photos, multiple locations, appeals or reinstatement, duplicate merges and ownership disputes. More than five services or unusual remediation needs a separate written scope. No ranking, traffic or lead outcome is promised.
 
-**CTA:** Discuss GBP Improvement → `/contact/` (activate only with the approved route and commercial offer).  
+**CTA:** Discuss GBP Improvement → `/contact/` (activate only with the approved route and commercial offer).
 **Supporting link:** Terms of Service → `/terms/`.
 
 **Required third-party disclosure before publication:** Link the Google "Working with a third party" notice in a discoverable site location and communicate it to new clients. The customer remains an owner or co-owner. See [Google's third-party policy](https://support.google.com/business/answer/7353941).
