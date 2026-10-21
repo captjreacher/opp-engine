@@ -1,8 +1,8 @@
 # Landing-page draft: GBP Setup
 
-**Review-only copy. Proposed route:** `/gbp-setup/`. Do not publish or link from outreach until owner approval and matching Billing plans are published. Price blocks below describe the proposal; the implemented page must fetch the current published price by exact Billing plan ID and suppress an unavailable variant.
+**Approved copy for local implementation. Route:** `/products/gbp-setup/`. Publication and outreach require separate release approval and matching published Billing plans. The implemented page fetches the current published price by exact Billing plan ID and suppresses an unavailable variant.
 
-**Title:** Google Business Profile Setup | MaximisedAI  
+**Title:** Google Business Profile Setup | MaximisedAI
 **Meta description:** One-off help setting up one eligible Google Business Profile, with up to five confirmed services. Clear scope and NZD pricing excluding GST.
 
 ## Set up a Business Profile your customers can recognise
@@ -34,7 +34,7 @@ You provide accurate business details and service descriptions, approve the cont
 
 This option excludes website creation, SEO campaigns, ads, ongoing management, review generation, photos, multiple locations, appeals or reinstatement, duplicate merges and ownership disputes. More than five services or unusual remediation needs a separate written scope. No ranking, traffic or lead outcome is promised.
 
-**CTA:** Discuss GBP Setup → `/contact/` (activate only with the approved route and commercial offer).  
+**CTA:** Discuss GBP Setup → `/contact/` (activate only with the approved route and commercial offer).
 **Supporting link:** Terms of Service → `/terms/`.
 
 **Required third-party disclosure before publication:** Link the Google "Working with a third party" notice in a discoverable site location and communicate it to new clients. The customer remains an owner or co-owner. See [Google's third-party policy](https://support.google.com/business/answer/7353941).
