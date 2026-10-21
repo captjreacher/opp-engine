@@ -1,4 +1,4 @@
-import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, type ScenarioReport, type ApprovedDetails } from "../_shared/scenarioReports.ts";
+import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, type ScenarioReport, type ApprovedDetails, type Offer } from "../_shared/scenarioReports.ts";
 import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTemplate, type ScenarioMatch, type OutreachTemplate, type CompanyScenario } from "../_shared/companyScenarios.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
 import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
@@ -45,6 +45,8 @@ import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Auth: `Authorization: Bearer <OPERATOR_TOKEN>` (or `x-operator-token`). Fails closed if unset.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { GBP_OFFER_MAP, buildGbpSnapshot, gbpFinding, gbpOutreach, qualifyGbp, type GbpCommercialSnapshot } from '../_shared/gbpCommercial.ts';
+import { resolveGbpBillingPrice } from '../_shared/gbpBilling.ts';
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -3366,8 +3368,11 @@ async function getOpportunity(id: string): Promise<Response> {
   if (batchTagsError) throw batchTagsError;
 
   const scenarioReports=visibleAssessment ? await prepareScenarioReports(id,visibleAssessment as unknown as JsonObject,lead as JsonObject) : [];
+  const { data: gbpReportRows, error: gbpReportError } = await supabase.from('opportunity_scenario_reports').select('id,report').eq('lead_id', id);
+  if (gbpReportError) throw gbpReportError;
+  const gbpReports = (gbpReportRows ?? []).filter((row) => row.report?.gbp_commercial_snapshot && row.report?.source_assessment_id === visibleAssessment?.id);
   return json({
-    scenario_reports:scenarioReports,
+    scenario_reports:[...scenarioReports, ...gbpReports],
     lead,
     latest_assessment: visibleAssessment,
     assessments: assessments.data ?? [],
@@ -3569,6 +3574,105 @@ async function createOutreach(
   return json({ draft, audit_logged: !auditErr }, 201);
 }
 
+// Local draft preparation only. The release switch is deliberately absent:
+// GBP drafts can be reviewed but the send endpoint rejects them unconditionally.
+async function prepareGbpCommercial(id: string, payload: Record<string, unknown>): Promise<Response> {
+  if (Deno.env.get('GBP_COMMERCIAL_DRAFT_ENABLED') !== 'true') return json({ error: 'gbp_commercial_not_enabled' }, 409);
+  const qualified = qualifyGbp(payload);
+  if (!qualified.ok) return json({ error: qualified.reason }, 422);
+  const q = qualified.value;
+  const offerMap = GBP_OFFER_MAP[q.scenarioCode];
+  const [leadResult, candidate, reviewState, assessmentResult, draftResult, scenarioResult, templateResult] = await Promise.all([
+    supabase.from('local_business_leads').select('*').eq('id', id).maybeSingle(),
+    candidateForLead(id),
+    deriveReviewState(id),
+    supabase.from('local_business_lead_assessments').select('*').eq('lead_id', id).order('assessed_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('local_business_outreach_drafts').select('id,status,gbp_commercial_snapshot').eq('lead_id', id),
+    supabase.from('opportunity_scenarios').select('*').eq('slug', offerMap.slug).eq('version', 1).maybeSingle(),
+    supabase.from('opportunity_outreach_templates').select('*').eq('id', offerMap.templateId).maybeSingle(),
+  ]);
+  for (const result of [leadResult, assessmentResult, draftResult, scenarioResult, templateResult]) if (result.error) throw result.error;
+  const lead = leadResult.data;
+  if (!lead) return json({ error: 'not_found' }, 404);
+  if (reviewState !== 'contact_ready') return json({ error: 'contact_review_required' }, 409);
+  if (candidate && !classificationAllowsProgress(eligibilityClassification(candidate as JsonObject), candidate.eligibility_acknowledged === true)) return json({ error: 'outreach_not_commercially_eligible' }, 422);
+  if (q.scenarioCode === 'G02' && lead.google_maps_url !== q.evidenceUrl) return json({ error: 'profile_evidence_mismatch' }, 422);
+  if (q.scenarioCode === 'G01' && lead.google_maps_url && q.searchResult === 'no_match') return json({ error: 'known_profile_conflicts_with_no_match' }, 422);
+  if (draftResult.data?.length) return json({ error: 'outreach_already_exists' }, 409);
+  const assessment = assessmentResult.data;
+  if (!assessment || !assessmentIsCurrent(assessment.assessed_at, lead.enrichment_diagnostics)) return json({ error: 'current_assessment_required' }, 409);
+  const scenario = scenarioResult.data;
+  const template = templateResult.data;
+  if (!scenario || scenario.status !== 'draft' || scenario.commercial_config?.offer_product_id !== offerMap.productId || scenario.commercial_config?.destination !== new URL(offerMap.destination).pathname || scenario.commercial_config?.plans?.[qualified.band] !== offerMap.plans[qualified.band] || scenario.outreach_config?.message_template !== offerMap.template) return json({ error: 'gbp_scenario_config_unavailable' }, 409);
+  if (!template || template.enabled !== false || template.version !== 1 || template.name !== offerMap.template || template.offer_id !== offerMap.productId || template.destination !== offerMap.destination || canonicalJson(template.scenario_keys) !== canonicalJson([q.scenarioCode])) return json({ error: 'gbp_template_config_unavailable' }, 409);
+
+  let snapshot: GbpCommercialSnapshot;
+  try {
+    const price = await resolveGbpBillingPrice(q.scenarioCode, qualified.band);
+    snapshot = buildGbpSnapshot(q, qualified.band, price);
+  } catch (error) {
+    return json({ error: 'gbp_billing_offer_unavailable', detail: String((error as Error).message) }, 409);
+  }
+  const message = gbpOutreach(String(lead.business_name ?? 'your business'), q, snapshot);
+  const offer: Offer = {
+    id: snapshot.planId, name: offerMap.title, description: snapshot.description,
+    components: [...snapshot.inclusions],
+    price: { kind: 'fixed', amountMinor: snapshot.amountMinor, currency: snapshot.currency, taxTreatment: snapshot.taxTreatment, taxRate: snapshot.taxRate },
+    price_version: snapshot.priceVersionId, price_text: snapshot.commercialLine,
+    gst: 'GST exclusive (15%)', terms: [...snapshot.terms, `Exclusions: ${snapshot.exclusions}`],
+    destination: snapshot.destination, source: 'Billing Kernel current price',
+  };
+  const match: ScenarioMatch = {
+    scenario_key: q.scenarioCode, scenario_id: scenario.id, scenario_version: scenario.version,
+    state: 'confirmed', assessed_at: q.observedAt!, score: null,
+    evidence: [{ key: q.scenarioCode === 'G01' ? 'gbp_search' : 'gbp_profile', description: gbpFinding(q), source: q.evidenceUrl ?? `Documented Google Maps search: ${q.searchQuery}, ${q.searchLocation}`, value: q, score: 100, supported: true }],
+  };
+  const report = { ...buildScenarioReport({ lead, assessment, scenario, match, template: template as OutreachTemplate, offer, blocked: null }), gbp_commercial_snapshot: snapshot, gbp_qualification: q };
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalJson(report)));
+  const fingerprint = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const { error: reportError } = await supabase.from('opportunity_scenario_reports').upsert({ lead_id: id, assessment_id: assessment.id, scenario_id: scenario.id, fingerprint, report }, { onConflict: 'fingerprint', ignoreDuplicates: true });
+  if (reportError) throw reportError;
+  const { data: stored, error: readError } = await supabase.from('opportunity_scenario_reports').select('id,report').eq('fingerprint', fingerprint).single();
+  if (readError || !stored) throw readError ?? new Error('gbp_report_unavailable');
+  const selection = { template_id: template.id, template_version: template.version, scenario_keys: [q.scenarioCode], offer_id: offerMap.productId, destination: snapshot.destination, report_ids: [stored.id], reports: [report], assessment_id: assessment.id, findings: match.evidence };
+  const { data: draft, error: insertError } = await supabase.from('local_business_outreach_drafts').insert({ lead_id: id, channel: 'email', subject: message.subject, body: message.body, status: 'draft', created_by: 'operator-console', scenario_id: scenario.id, scenario_version: scenario.version, selection, gbp_commercial_snapshot: snapshot }).select('*').single();
+  if (insertError) return json({ error: 'gbp_draft_create_failed', detail: insertError.message }, 409);
+  await supabase.from('opportunity_console_audit_log').insert({ action: 'outreach_draft_created', lead_id: id, draft_id: draft.id, actor: 'operator-console', metadata: { scenario_code: q.scenarioCode, plan_id: snapshot.planId, price_version_id: snapshot.priceVersionId } });
+  return json({ draft, commercial_snapshot: snapshot, report_id: stored.id }, 201);
+}
+
+async function validateGbpDraft(id: string, draft: JsonObject): Promise<string | null> {
+  try {
+    const snapshot = draft.gbp_commercial_snapshot as GbpCommercialSnapshot;
+    const selection = draft.selection as JsonObject | null;
+    const offer = GBP_OFFER_MAP[snapshot.scenarioCode];
+    if (!offer || !selection || selection.template_id !== offer.templateId || selection.offer_id !== offer.productId || selection.destination !== offer.destination || canonicalJson(selection.scenario_keys) !== canonicalJson([snapshot.scenarioCode])) return 'GBP template or destination changed.';
+    const { data: template } = await supabase.from('opportunity_outreach_templates').select('name,enabled,offer_id,destination').eq('id', offer.templateId).maybeSingle();
+    if (!template || template.enabled !== false || template.name !== offer.template || template.offer_id !== offer.productId || template.destination !== offer.destination) return 'GBP template was withdrawn or changed.';
+    const reportIds = Array.isArray(selection.report_ids) ? selection.report_ids : [];
+    const reportId = reportIds[0];
+    if (typeof reportId !== 'string' || reportIds.length !== 1) return 'GBP Scenario Report is missing.';
+    const { data: stored, error } = await supabase.from('opportunity_scenario_reports').select('report').eq('id', reportId).eq('lead_id', id).maybeSingle();
+    if (error || !stored?.report) return 'GBP Scenario Report is unavailable.';
+    const report = stored.report as JsonObject;
+    if (!Array.isArray(selection.reports) || selection.reports.length !== 1 || canonicalJson(selection.reports[0]) !== canonicalJson(report)) return 'Reviewed GBP Scenario Report changed.';
+    const q = report.gbp_qualification;
+    const qualified = qualifyGbp(q);
+    if (!qualified.ok || qualified.value.scenarioCode !== snapshot.scenarioCode || qualified.band !== snapshot.serviceBand) return 'GBP qualification changed.';
+    const reportOffer = report.offer as JsonObject | null;
+    if (canonicalJson(report.gbp_commercial_snapshot) !== canonicalJson(snapshot) || reportOffer?.id !== snapshot.planId || reportOffer?.description !== snapshot.description || canonicalJson(reportOffer?.components) !== canonicalJson(snapshot.inclusions) || canonicalJson(reportOffer?.terms) !== canonicalJson([...snapshot.terms, `Exclusions: ${snapshot.exclusions}`]) || reportOffer?.price_text !== snapshot.commercialLine || reportOffer?.price_version !== snapshot.priceVersionId || reportOffer?.destination !== snapshot.destination) return 'GBP report and commercial snapshot differ.';
+    const businessName = String((report.business as JsonObject | null)?.name ?? '');
+    const expected = gbpOutreach(businessName, qualified.value, snapshot);
+    if (draft.subject !== expected.subject || draft.body !== expected.body) return 'GBP report and email differ.';
+    const current = await resolveGbpBillingPrice(snapshot.scenarioCode, snapshot.serviceBand);
+    const rebuilt = buildGbpSnapshot(qualified.value, qualified.band, current);
+    if (canonicalJson(rebuilt) !== canonicalJson(snapshot)) return 'GBP price or approved scope changed.';
+    return null;
+  } catch (error) {
+    return String((error as Error).message);
+  }
+}
+
 // PATCH /:id/outreach/:draftId — edit/save or approve a draft. NEVER sends.
 async function updateOutreach(
   id: string,
@@ -3579,6 +3683,7 @@ async function updateOutreach(
   if(existingError) throw existingError;
   if(!existing) return json({error:"not_found"},404);
   if(existing.status==="sent" || existing.sent_at) return json({error:"already_sent"},409);
+  if(existing.gbp_commercial_snapshot && (payload.body !== undefined || payload.subject !== undefined)) return json({error:"gbp_commercial_copy_locked"},409);
   const edited=(typeof payload.subject==="string" && payload.subject!==existing.subject) || (typeof payload.body==="string" && payload.body!==existing.body);
   if(edited) {
     const editError=await validateDraftSelection(id,{...existing,...(typeof payload.subject==="string"?{subject:payload.subject}:{}),...(typeof payload.body==="string"?{body:payload.body}:{})});
@@ -3605,7 +3710,7 @@ async function updateOutreach(
   if (status === "approved") {
     if(edited) return json({error:"save_before_approval"},422);
     if(payload.reviewed!==true) return json({error:"manual_review_required"},422);
-    const selectionError=await validateDraftSelection(id,existing);
+    const selectionError=existing.gbp_commercial_snapshot ? await validateGbpDraft(id,existing) : await validateDraftSelection(id,existing);
     if(selectionError) return json({error:"outreach_mapping_not_ready",detail:selectionError},422);
     fields.status = "approved";
     fields.approved_by = "operator-console";
@@ -3642,6 +3747,16 @@ async function updateOutreach(
 // POST /:id/outreach/:draftId/send — send an APPROVED draft via internal SMTP. Operator-gated, no auto-send.
 async function sendOutreach(id: string, draftId: string, payload: JsonObject): Promise<Response> {
   if(payload.confirm_send!==true) return json({error:"manual_send_required"},422);
+  const { data: draft, error: dErr } = await supabase
+    .from("local_business_outreach_drafts")
+    .select("*")
+    .eq("id", draftId)
+    .eq("lead_id", id)
+    .maybeSingle();
+  if (dErr) throw dErr;
+  if (!draft) return json({ error: "not_found" }, 404);
+  if (draft.gbp_commercial_snapshot) return json({ error: 'gbp_commercial_send_not_released' }, 409);
+
   let smtp: SmtpConfig;
   try {
     smtp = getSmtpConfig();
@@ -3654,15 +3769,6 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
   const OVERRIDE_TO = (Deno.env.get("OUTREACH_TEST_EMAIL") ?? "").trim();
   const LIVE =
     (Deno.env.get("OUTREACH_SEND_MODE") ?? "test").toLowerCase() === "live";
-
-  const { data: draft, error: dErr } = await supabase
-    .from("local_business_outreach_drafts")
-    .select("*")
-    .eq("id", draftId)
-    .eq("lead_id", id)
-    .maybeSingle();
-  if (dErr) throw dErr;
-  if (!draft) return json({ error: "not_found" }, 404);
 
   if (draft.status === "sent" || draft.sent_at)
     return json({ error: "already_sent", sent_at: draft.sent_at }, 409);
@@ -4280,6 +4386,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       parts[1] === "outreach"
     ) {
       return await createOutreach(parts[0], await req.json().catch(() => ({})));
+    }
+    if (req.method === 'POST' && parts.length === 3 && parts[1] === 'gbp-commercial' && parts[2] === 'prepare') {
+      return await prepareGbpCommercial(parts[0], await req.json().catch(() => ({})));
     }
     if (
       req.method === "POST" &&
