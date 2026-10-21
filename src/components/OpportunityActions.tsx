@@ -1,9 +1,9 @@
 import { useId, useRef, useState } from "react";
 import { setOpportunityArchived } from "../lib/api";
-import { PERMANENT_DELETION_UNAVAILABLE } from "../../supabase/functions/_shared/opportunityLifecycle";
+import { isOpportunityArchived, PERMANENT_DELETION_UNAVAILABLE } from "../../supabase/functions/_shared/opportunityLifecycle";
 
 interface Props {
-  opportunity: { id: string; business_name: string; archived_at?: string | null; enrichment_status?: string | null };
+  opportunity: { id: string; business_name: string; archived_at?: string | null; enrichment_status?: string | null; status?: string | null; pipeline_status?: string | null };
   disabled?: boolean;
   onChanged: () => Promise<void>;
 }
@@ -18,8 +18,9 @@ export default function OpportunityActions({ opportunity, disabled = false, onCh
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const archived = Boolean(opportunity.archived_at);
-  const blocked = !archived && opportunity.enrichment_status === "enriching";
+  const archived = isOpportunityArchived(opportunity);
+  const legacy = opportunity.status === "archived" || opportunity.pipeline_status === "archived";
+  const blocked = legacy || !archived && opportunity.enrichment_status === "enriching";
   const action = archived ? "Restore" : "Archive";
   function close() { dialog.current?.close(); trigger.current?.focus(); }
   async function apply() {
@@ -44,7 +45,8 @@ export default function OpportunityActions({ opportunity, disabled = false, onCh
       <p id={descriptionId} className="mt-2 break-words text-sm text-graphite-300">{opportunity.business_name}</p>
       {!confirming ? <div className="mt-5 space-y-3">
         <button type="button" disabled={blocked} className={`${secondary} w-full text-left`} onClick={() => setConfirming(true)}>{action} opportunity</button>
-        {blocked && <p className="text-sm text-amber-300">Wait for enrichment to finish or resolve its state before archiving.</p>}
+        {legacy && <p className="text-sm text-amber-300">This legacy archive requires shared lifecycle review before restore. No disposition will be guessed.</p>}
+        {blocked && !legacy && <p className="text-sm text-amber-300">Wait for enrichment to finish or resolve its state before archiving.</p>}
         <button type="button" disabled className="w-full rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-left text-sm text-rose-300 opacity-60" aria-describedby={`${descriptionId}-delete`}>Permanently delete (unavailable)</button>
         <p id={`${descriptionId}-delete`} className="text-xs text-graphite-400">{PERMANENT_DELETION_UNAVAILABLE}</p>
         <div className="flex justify-end"><button type="button" className={secondary} onClick={close}>Close</button></div>

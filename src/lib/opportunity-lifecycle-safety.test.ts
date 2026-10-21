@@ -48,7 +48,7 @@ describe("archive database safety contracts (integration suite is review-gated)"
     expect(migration).not.toContain("'lead_contacts'");
   });
   it("blocks direct enrichment before the claim/provider path and checks the race fence", () => {
-    const guard = worker.indexOf("if (resolved.lead.archived_at)");
+    const guard = worker.indexOf("if (isOpportunityArchived(resolved.lead))");
     expect(guard).toBeGreaterThan(0); expect(guard).toBeLessThan(worker.indexOf("const claim = resolveEnrichmentClaim", guard));
     expect(worker).toContain("if (claimWriteError)");
     expect(worker).toContain('claimWriteError.message.includes("opportunity_archived")');

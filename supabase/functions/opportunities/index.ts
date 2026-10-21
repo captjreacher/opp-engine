@@ -1,6 +1,6 @@
 import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, billingReadConfiguration, type ScenarioReport, type ApprovedDetails } from "../_shared/scenarioReports.ts";
 import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTemplate, type ScenarioMatch, type OutreachTemplate, type CompanyScenario } from "../_shared/companyScenarios.ts";
-import { lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, type OpportunityLifecycleView } from "../_shared/opportunityLifecycle.ts";
+import { isOpportunityArchived, lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, type OpportunityLifecycleView } from "../_shared/opportunityLifecycle.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
 import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Supabase Edge Function: `opportunities`
@@ -646,7 +646,8 @@ async function sendSmtpEmail(
     const response = await readSmtpResponse(conn);
     if (smtpStatus(response) !== 250)
       throw new Error(`SMTP DATA failed: ${response.trim()}`);
-    await smtpCommand(conn, "QUIT", [221]);
+    // DATA acceptance is final; QUIT failure must not invite duplicate delivery.
+    try { await smtpCommand(conn, "QUIT", [221]); } catch { /* already accepted */ }
   } catch (error) {
     throw new Error(
       `SMTP email failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -2756,7 +2757,7 @@ async function runOpportunityAnalysis(
     };
   }
   if (!lead) return { ok: false, error: "opportunity_not_found" };
-  if (lead.archived_at) return { ok: false, error: "opportunity_archived" };
+  if (isOpportunityArchived(lead)) return { ok: false, error: "opportunity_archived" };
   const enrichmentResult =
     ((lead.enrichment_diagnostics as JsonObject | null)
       ?.enrichment_result as JsonObject | null) ?? null;
@@ -3248,7 +3249,7 @@ async function listOpportunities(view: OpportunityLifecycleView = "active"): Pro
   if(companyTagsError) throw companyTagsError;
   const opportunities = (
     (leadRes.data ?? []) as Array<Record<string, unknown>>
-  ).filter((lead) => lifecycleMatches(lead.archived_at, view)).map((lead) => {
+  ).filter((lead) => lifecycleMatches(lead.archived_at, view, lead.status)).map((lead) => {
     const analysisEvent = latestAnalysis.get(String(lead.id));
     const assessmentId = cleanText(analysisEvent?.metadata?.assessment_id, 80);
     const candidateAssessment = assessmentId
@@ -3296,6 +3297,9 @@ async function listOpportunities(view: OpportunityLifecycleView = "active"): Pro
 }
 
 async function getOpportunity(id: string): Promise<Response> {
+  const {data:claimRows,error:claimReadError}=await supabase.from("opportunity_outreach_send_claims").select("draft_id,state").eq("lead_id",id);
+  if(claimReadError) throw claimReadError;
+  const sendClaims=claimRows ?? [];
   const { data: lead, error: leadErr } = await supabase
     .from("local_business_leads")
     .select("*")
@@ -3386,14 +3390,14 @@ async function getOpportunity(id: string): Promise<Response> {
     audit_report: visibleAudit,
     audit_reports: reports.data ?? [],
     events: events.data ?? [],
-    outreach_drafts: drafts.data ?? [],
+    outreach_drafts: (drafts.data ?? []).map(draft => ({...draft, send_state: sendClaims.find(claim => claim.draft_id === draft.id)?.state ?? null})),
     review_state,
     outcome_state,
     console_events: cEvents,
     visual_evidence: visualEvidence.data ?? [],
     batches: (batchTags ?? []).map(projectBatchTag).filter(Boolean),
     company_scenarios:await companyMatches(id),
-    outreach_options:lead.archived_at ? [] : (await outreachOptions(id)).templates,
+    outreach_options:isOpportunityArchived(lead) ? [] : (await outreachOptions(id)).templates,
   });
 }
 
@@ -3409,7 +3413,7 @@ async function pipelineView(): Promise<Response> {
       .select("lead_id, action, created_at")
       .in("action", Object.keys(OUTCOME_EVENT_TO_STATE))
       .order("created_at", { ascending: false }),
-    supabase.from("local_business_leads").select("id").not("archived_at", "is", null),
+    supabase.from("local_business_leads").select("id,archived_at,status"),
   ]);
   for (const r of [listRes, draftsRes, eventsRes, archivedRes]) {
     if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
@@ -3434,7 +3438,7 @@ async function pipelineView(): Promise<Response> {
     drafts.filter((d) => d.status === "sent").map((d) => d.lead_id),
   );
 
-  const archivedIds = new Set((archivedRes.data ?? []).map((row) => row.id));
+  const archivedIds = new Set((archivedRes.data ?? []).filter(isOpportunityArchived).map((row) => row.id));
   const opportunities: Array<Record<string, unknown>> = [];
   for (const l of leads) {
     const id = l.id as string;
@@ -4058,10 +4062,10 @@ async function requestVisualInspection(
 }
 
 async function requireActiveOpportunity(id: string): Promise<Response | null> {
-  const { data, error } = await supabase.from("local_business_leads").select("id,archived_at").eq("id", id).maybeSingle();
+  const { data, error } = await supabase.from("local_business_leads").select("id,archived_at,status").eq("id", id).maybeSingle();
   if (error) throw error;
   if (!data) return json({ error: "not_found" }, 404);
-  return data.archived_at ? json({ error: "opportunity_archived", detail: "Restore this opportunity before starting or changing operational work." }, 409) : null;
+  return isOpportunityArchived(data) ? json({ error: "opportunity_archived", detail: "Restore this opportunity before starting or changing operational work." }, 409) : null;
 }
 
 async function setOpportunityLifecycle(id: string, archived: boolean, payload: unknown): Promise<Response> {
@@ -4069,8 +4073,8 @@ async function setOpportunityLifecycle(id: string, archived: boolean, payload: u
   if (!input.valid) return json({ error: "confirmation_required", detail: "Confirm the lifecycle action explicitly; reason must be at most 500 characters." }, 400);
   const { data, error } = await supabase.rpc("set_opportunity_archived", { p_lead_id: id, p_archived: archived, p_reason: input.reason });
   if (error) {
-    const code = ["enrichment_running", "approved_outreach_conflict", "opportunity_archived"].find(value => error.message.includes(value));
-    if (code) return json({ error: code, detail: code === "approved_outreach_conflict" ? "Resolve approved outreach before archiving. An approved draft may be sending." : "Wait for enrichment or other operational work to finish before archiving." }, 409);
+    const code = ["enrichment_running", "approved_outreach_conflict", "opportunity_archived", "send_in_progress", "legacy_archive_review_required"].find(value => error.message.includes(value));
+    if (code) return json({ error: code, detail: code === "legacy_archive_review_required" ? "Legacy archive restoration requires an owner decision; no prior disposition will be guessed." : code === "send_in_progress" ? "Reconcile the protected send claim before archiving." : code === "approved_outreach_conflict" ? "Resolve approved outreach before archiving. An approved draft may be sending." : "Wait for enrichment or other operational work to finish before archiving." }, 409);
     throw error;
   }
   if (!data || !data.ok) return json({ error: data?.error ?? "lifecycle_update_failed" }, data?.error === "not_found" ? 404 : 500);

@@ -74,7 +74,7 @@ const environment={OPERATOR_TOKEN:'local-release-fixture',SUPABASE_URL:'http://1
 const deps={...reports,...company,...lifecycle,...workflow,...batches,fixtureStats:stats,resolveOffer:(t,c)=>reports.resolveOffer(t,c,fixtureFetch),createClient:()=>supabase,Deno:{env:{get:key=>environment[key]},serve:handler=>{route=handler;}},fetch:fixtureFetch};
 new Function('deps',`const {${Object.keys(deps).join(',')}}=deps;${compiled}`)(deps);
 
-const ids={single:'11111111-1111-4111-8111-111111111111',multi:'22222222-2222-4222-8222-222222222222',missing:'33333333-3333-4333-8333-333333333333',archived:'44444444-4444-4444-8444-444444444444',withdrawn:'55555555-5555-4555-8555-555555555555'};
+const ids={single:'11111111-1111-4111-8111-111111111111',multi:'22222222-2222-4222-8222-222222222222',missing:'33333333-3333-4333-8333-333333333333',archived:'44444444-4444-4444-8444-444444444444',withdrawn:'55555555-5555-4555-8555-555555555555',legacy:'66666666-6666-4666-8666-666666666666'};
 const sid=n=>`a0000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const scenarios=[['website',1],['profile',2],['unmapped',3],['withdrawn',4]];
 for(const [key,n] of scenarios)rawSql(`insert into opportunity_scenarios(id,slug,name,status,version) values(${quote(sid(n))},${quote('release-'+key)},${quote('Recorded '+key+' scenario')},'active',1) on conflict(id) do nothing;`);
@@ -91,6 +91,7 @@ for(const [kind,id]of Object.entries(ids)){
  rawSql(`select persist_opportunity_company_scenarios(${quote(id)},${quote(matches)},true);insert into opportunity_console_audit_log(action,lead_id,actor,metadata) values('analysis_completed',${quote(id)},'fixture',${quote({assessment_id:aid})}),('opportunity_contact_ready',${quote(id)},'fixture','{}');`);
  // Archive only after the first report snapshot has been materialised by the actual API.
  if(kind==='archived'){await route(new Request(`http://127.0.0.1/opportunities/${id}`,{headers:{Authorization:'Bearer local-release-fixture'}}));rawSql(`select set_opportunity_archived(${quote(id)},true,'Archived fixture');`);}
+ if(kind==='legacy'){await route(new Request(`http://127.0.0.1/opportunities/${id}`,{headers:{Authorization:'Bearer local-release-fixture'}}));rawSql(`update local_business_leads set status='archived' where id=${quote(id)};`);}
 }
 http.createServer(async(req,res)=>{
  try{

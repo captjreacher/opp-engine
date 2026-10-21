@@ -9,8 +9,12 @@ export const LIFECYCLE_CAPABILITIES = {
 export function lifecycleView(value: string | null): OpportunityLifecycleView | null {
   return value === null ? "active" : value === "active" || value === "archived" || value === "all" ? value : null;
 }
-export function lifecycleMatches(archivedAt: unknown, view: OpportunityLifecycleView): boolean {
-  return view === "all" || (view === "archived" ? Boolean(archivedAt) : !archivedAt);
+export function isOpportunityArchived(lead: { archived_at?: unknown; status?: unknown; pipeline_status?: unknown }): boolean {
+  return Boolean(lead.archived_at) || lead.status === "archived" || lead.pipeline_status === "archived";
+}
+export function lifecycleMatches(archivedAt: unknown, view: OpportunityLifecycleView, status?: unknown): boolean {
+  const archived = isOpportunityArchived({ archived_at: archivedAt, status });
+  return view === "all" || (view === "archived" ? archived : !archived);
 }
 export function validateLifecyclePayload(payload: unknown): { valid: true; reason: string | null } | { valid: false } {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { valid: false };

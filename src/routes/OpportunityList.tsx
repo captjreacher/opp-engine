@@ -1,3 +1,4 @@
+import { isOpportunityArchived } from "../../supabase/functions/_shared/opportunityLifecycle";
 import OpportunityActions from "../components/OpportunityActions";
 import { lifecycleView, lifecycleMatches } from "../../supabase/functions/_shared/opportunityLifecycle";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -155,7 +156,7 @@ export default function OpportunityList() {
 
   const filteredSortedRows = useMemo(() => {
     return rows
-      .filter((row) => lifecycleMatches(row.archived_at, view))
+      .filter((row) => lifecycleMatches(row.archived_at, view, row.pipeline_status))
       .filter((row) => !search.trim() || [row.business_name, row.location, row.industry].some(value => value?.toLowerCase().includes(search.trim().toLowerCase())))
 .filter((row) => {
   const score = parseOpportunityScore(row);
@@ -338,7 +339,7 @@ export default function OpportunityList() {
                       {row.business_name}
                     </Link>
                     {row.company_scenarios?.map(match=><span key={match.scenario_key} className="mr-2 text-xs text-slate-400">{match.scenario_key}: {match.state}</span>)}
-                    {row.archived_at && <span className="ml-2"><Badge>Archived</Badge></span>}
+                    {isOpportunityArchived(row) && <span className="ml-2"><Badge>Archived</Badge></span>}
                     {row.batches?.map((batch) => <Link key={batch.id} to={`/batches/${batch.id}`} className="mt-1 mr-2 inline-block rounded bg-violet-500/15 px-2 py-0.5 text-xs text-violet-300 hover:underline">{batch.name}</Link>)}
                     <div className="text-xs text-graphite-500">
                       updated {formatTimestamp(row.updated_at)}
@@ -389,7 +390,7 @@ export default function OpportunityList() {
                       {row.outreach_status ?? "None"}
                     </Badge>
                   </td>
-                  <td className="px-3 py-2.5"><OpportunityActions opportunity={row} disabled={selectionBusy} onChanged={async () => { await load(); setNotice(row.archived_at ? "Opportunity restored." : "Opportunity archived."); }} /></td>
+                  <td className="px-3 py-2.5"><OpportunityActions opportunity={row} disabled={selectionBusy} onChanged={async () => { await load(); setNotice(isOpportunityArchived(row) ? "Opportunity restored." : "Opportunity archived."); }} /></td>
                 </tr>
               );
             })}

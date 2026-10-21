@@ -58,7 +58,8 @@ export default function DraftEditor({
   const isApproved = draft.status === "approved";
   const isSent = draft.status === "sent";
   const dirty = subject !== (draft.subject ?? "") || body !== draft.body;
-  const busy = readOnly || saving || approving || sending;
+  const sendProtected = draft.send_state === "sending" || draft.send_state === "uncertain";
+  const busy = readOnly || sendProtected || saving || approving || sending;
 
   return (
     <div className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-4">
@@ -173,12 +174,13 @@ export default function DraftEditor({
         </div>
       )}
 
-      {isApproved && sendFailed && (
+      {sendProtected && <p role="status" className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">Do not resend. This draft has a protected {draft.send_state} claim. Reconcile delivery before changing it.</p>}
+      {isApproved && sendFailed && !sendProtected && (
         <p className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
           The last send attempt failed or its delivery is uncertain. Reconcile the delivery outcome before another attempt.
         </p>
       )}
-      {isApproved && !sendFailed && (
+      {isApproved && !sendFailed && !sendProtected && (
         <p className="text-xs text-graphite-500">
           Approved and ready to send. Sending is manual — nothing goes out until you confirm.
         </p>

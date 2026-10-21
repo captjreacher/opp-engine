@@ -65,6 +65,7 @@ suite(
         "20261018144011_opportunity_archive_restore_governance.sql",
         "20261020234438_scenario_reports.sql",
         "20261021003415_scenario_archive_release_compatibility.sql",
+        "20261021012142_scenario_owner_retention_reconciliation.sql",
       ])
         sql(readFileSync(`supabase/migrations/${migration}`, "utf8"));
       lead(1);

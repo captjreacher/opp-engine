@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { enrichmentReadiness, assessmentIsCurrent } from "../../supabase/functions/_shared/opportunityWorkflow";
-import { lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE } from "../../supabase/functions/_shared/opportunityLifecycle";
+import { isOpportunityArchived, lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE } from "../../supabase/functions/_shared/opportunityLifecycle";
 import { canSelectOpportunity } from "./bulk-enrichment";
 import type { OppRow } from "./types";
 
@@ -14,7 +14,7 @@ const transpile = (code: string) => ts.transpileModule(code, { compilerOptions: 
 const functions = transpile(file.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? "")).map(node => node.getText(file)).join("\n"));
 const serve = file.statements.find(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(file) === "Deno.serve") as ts.ExpressionStatement;
 const router = transpile(`const route = ${((serve.expression as ts.CallExpression).arguments[0]).getText(file)};`);
-const lifecycleArgs = { lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, enrichmentReadiness, assessmentIsCurrent };
+const lifecycleArgs = { isOpportunityArchived, lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, enrichmentReadiness, assessmentIsCurrent };
 
 function harness(options: { archived?: boolean; exists?: boolean; rpcData?: unknown; rpcError?: unknown; tables?: Record<string, unknown[]> } = {}) {
   const lead = { id, business_name: "Retained business", status: "disqualified", archived_at: options.archived ? "2026-10-19T00:00:00Z" : null };

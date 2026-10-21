@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-21",
+  "startingCandidate": "928252784b295666f8bb2f4f0bfc37f4b66fa434",
+  "tests": {
+    "skipped": 0,
+    "passed": 434,
+    "postgresTestsIncluded": 22,
+    "failed": 0
+  },
+  "inherited": {
+    "lockRaces": 11,
+    "passed": 27,
+    "failed": 0
+  },
+  "frontendBuild": "pass",
+  "changedFunctionsTypeCheck": "pass",
+  "runtimeSmoke": "1 pass",
+  "fullFunctionTypeErrors": {
+    "candidate": 12,
+    "main": 12
+  },
+  "denoLint": {
+    "candidate": 27,
+    "main": 27,
+    "newHelperFindings": 0
+  },
+  "browser": {
+    "multiScenario": "2 scenarios, 1 commercial block, Kia ora edit saved, unsaved approval disabled",
+    "legacyArchive": "retained read-only report and disabled Restore",
+    "outboundMessages": 0,
+    "singleScenario": "prepare, approve, separate send confirmation, refusing local transport, uncertain retained across reload"
+  },
+  "productionChanges": false,
+  "pushes": false,
+  "readyForProduction": false
+}

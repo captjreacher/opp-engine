@@ -1,3 +1,4 @@
+import { isOpportunityArchived } from "../../supabase/functions/_shared/opportunityLifecycle";
 import ScenarioReportView from "./ScenarioReportView";
 import { useState } from "react";
 import type { OppDetail } from "../lib/types";
@@ -23,7 +24,7 @@ export default function CompanyScenarioPanel({
   const matches = detail.company_scenarios ?? [];
   const templates = detail.outreach_options ?? [];
   const active = detail.batches?.find((batch) => batch.active);
-  const readOnly = Boolean(detail.lead.archived_at);
+  const readOnly = isOpportunityArchived(detail.lead);
   const choice = templates.find((template) => template.id === selected);
   const explanation = (
     detail.latest_assessment as unknown as {

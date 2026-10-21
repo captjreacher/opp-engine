@@ -1,3 +1,4 @@
+import { isOpportunityArchived } from "../../supabase/functions/_shared/opportunityLifecycle";
 import CompanyScenarioPanel from "../components/CompanyScenarioPanel";
 import OpportunityActions from "../components/OpportunityActions";
 import { useEffect, useRef, useState } from "react";
@@ -533,7 +534,7 @@ export default function OpportunityDetail() {
     latest_assessment?.opportunity_score !== undefined
       ? parseFloat(latest_assessment.opportunity_score)
       : null;
-  const outreachBlockedReason = lead.archived_at ? "Restore this opportunity before preparing outreach." : !latest_assessment
+  const outreachBlockedReason = isOpportunityArchived(lead) ? "Restore this opportunity before preparing outreach." : !latest_assessment
     ? "Complete assessment before preparing outreach."
     : review_state !== "contact_ready"
       ? "Complete review and mark this opportunity contact ready before outreach."
@@ -603,23 +604,23 @@ export default function OpportunityDetail() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {lead.archived_at && <Badge>Archived</Badge>}
+            {isOpportunityArchived(lead) && <Badge>Archived</Badge>}
             <Badge tone={lead.status ? "info" : "neutral"}>{lead.status ?? "unknown"}</Badge>
             <OpportunityActions opportunity={lead} disabled={intelligencePending !== null || sendingDraft || approvingDraft || savingDraft || generatingDraft || reviewPending !== null || outcomePending !== null} onChanged={load} />
           </div>
         </div>
 
         {/* Guided workflow — replaces the old 4-step ReviewStepper */}
-        <fieldset disabled={Boolean(lead.archived_at)} className="min-w-0 border-0 border-t border-graphite-800 p-0 pt-3">
+        <fieldset disabled={isOpportunityArchived(lead)} className="min-w-0 border-0 border-t border-graphite-800 p-0 pt-3">
           <GuidedWorkflow
             state={workflowState}
-            onStepAction={lead.archived_at ? undefined : handleWorkflowStep}
+            onStepAction={isOpportunityArchived(lead) ? undefined : handleWorkflowStep}
           />
         </fieldset>
       </div>
 
-      {lead.archived_at && <div role="status" className="rounded border border-graphite-700 bg-graphite-900 p-3 text-sm text-graphite-300">
-        Archived {formatTimestamp(lead.archived_at)}. Restore from Actions to resume work. Evidence and history are retained.
+      {isOpportunityArchived(lead) && <div role="status" className="rounded border border-graphite-700 bg-graphite-900 p-3 text-sm text-graphite-300">
+        Archived{lead.archived_at ? ` ${formatTimestamp(lead.archived_at)}` : " (legacy status; owner review required before restore)"}. Evidence and history are retained.
         {lead.archive_reason && <p className="mt-1 break-words">Reason: {lead.archive_reason}</p>}
       </div>}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
@@ -678,7 +679,7 @@ Enrich
         ? handleRefreshEnrichmentStatus()
         : handleEnrich(enrichmentStale))
     }
-    disabled={Boolean(lead.archived_at) || intelligencePending !== null}
+    disabled={isOpportunityArchived(lead) || intelligencePending !== null}
     className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
   >
     {intelligencePending === "enrich"
@@ -712,7 +713,7 @@ Enrich
               <button
                 type="button"
                 onClick={() => void handleAnalyze(Boolean(latest_assessment))}
-                disabled={Boolean(lead.archived_at) || intelligencePending !== null || !hasEnrichment}
+                disabled={isOpportunityArchived(lead) || intelligencePending !== null || !hasEnrichment}
                 className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {intelligencePending === "analyze"
@@ -1156,7 +1157,7 @@ Enrich
 
       {/* ── Visual Evidence (Phase 5.1 — street view reference evidence + analysable image entry point) ── */}
       <VisualEvidencePanel
-        readOnly={Boolean(lead.archived_at)}
+        readOnly={isOpportunityArchived(lead)}
         leadId={lead.id}
         evidence={detail.visual_evidence ?? []}
         onAdded={load}
@@ -1220,7 +1221,7 @@ Enrich
             {REVIEW_ACTIONS.map((action) => {
               const targetIndex = REVIEW_STATE_ORDER.indexOf(action.toState);
               const isAheadOfCurrent = targetIndex > currentReviewIndex;
-              const disabled = Boolean(lead.archived_at) || !isAheadOfCurrent || reviewPending !== null;
+              const disabled = isOpportunityArchived(lead) || !isAheadOfCurrent || reviewPending !== null;
               return (
                 <button
                   key={action.toState}
@@ -1290,7 +1291,7 @@ Enrich
 
           <div id="outreach-preparation" />
       <CompanyScenarioPanel detail={detail} selected={selectedTemplate} onSelect={setSelectedTemplate} onRefresh={()=>load({silent:true})} />
-          {!!latestDraft && <button type="button" disabled={Boolean(lead.archived_at) || generatingDraft || !selectedTemplate} onClick={handleGenerateDraft}>Regenerate from selected template</button>}
+          {!!latestDraft && <button type="button" disabled={isOpportunityArchived(lead) || generatingDraft || !selectedTemplate} onClick={handleGenerateDraft}>Regenerate from selected template</button>}
           {latestDraft && generateError && <p role="alert" className="text-rose-300">{generateError}</p>}
           {/* Draft workspace */}
           {!latestDraft ? (
@@ -1332,7 +1333,7 @@ Enrich
           ) : (
             <div className="space-y-3">
               <DraftEditor
-                readOnly={Boolean(lead.archived_at)}
+                readOnly={isOpportunityArchived(lead)}
                 draft={latestDraft}
                 onSave={(fields) => handleSaveDraft(latestDraft.id, fields)}
                 onApprove={() => handleApproveDraft(latestDraft.id)}
@@ -1478,7 +1479,7 @@ Enrich
             <div className="flex flex-wrap gap-2">
               {OUTCOME_ACTIONS.map((action) => {
                 const isCurrent = outcome_state === action.toState;
-                const disabled = Boolean(lead.archived_at) || isCurrent || outcomePending !== null;
+                const disabled = isOpportunityArchived(lead) || isCurrent || outcomePending !== null;
                 return (
                   <button
                     key={action.toState}

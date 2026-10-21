@@ -1,3 +1,4 @@
+import { isOpportunityArchived } from "../_shared/opportunityLifecycle.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -3021,7 +3022,7 @@ export async function handler(req: Request) {
     const resolved = await resolveLead(supabase, body);
     leadId = resolved.leadId;
     businessName = resolved.businessName;
-    if (resolved.lead.archived_at) return jsonResponse({ ok: false, error: "opportunity_archived", lead_id: leadId }, 409);
+    if (isOpportunityArchived(resolved.lead)) return jsonResponse({ ok: false, error: "opportunity_archived", lead_id: leadId }, 409);
     existingDiagnostics = resolved.lead.enrichment_diagnostics;
 
     // ── Claim: never enrich the same lead concurrently ─────────────────────
