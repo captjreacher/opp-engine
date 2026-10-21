@@ -72,6 +72,7 @@ export interface AuditReportModel {
   // Free-form narrative content that may or may not be present — rendered
   // as-is when found, never fabricated.
   summary?: string;
+  gbpFinding?: string;
   narrative?: string;
   sections?: unknown;
   [key: string]: unknown;
@@ -106,6 +107,7 @@ export interface Draft {
   created_at: string;
   approved_at: string | null;
   sent_at: string | null;
+  gbp_commercial_snapshot?: import("../../supabase/functions/_shared/gbpCommercial").GbpCommercialSnapshot | null;
 }
 
 export type ReviewState =
