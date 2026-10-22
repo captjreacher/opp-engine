@@ -136,3 +136,64 @@ Keep operator sending paused, reconcile in-flight sending/uncertain claims, and 
 ## Owner review outcome required
 
 **GO for local owner review; NO-GO for production.** Closed: branch impact discovery, local owner reconciliation, expanded inherited SQL rehearsal, critical live function comparison and combined source checks. Open: actual stored reader-key verification, commercial approvals/configuration, coordinated Cockpit retention/legacy/maintenance agreement, baseline type/lint disposition and deployment-window authorization. No owner decision has been inferred from elapsed time or from these passing tests.
+
+## 7. Production gate closure update — 22 October 2026
+
+This section supersedes the older blocker status above for the authorised GBP release preparation. No merge, migration, deployment, catalogue publication, payment action, operator pause or outreach occurred. Machine-readable evidence is in [gbp-gate-closure-20261022.json](evidence/release-blockers/gbp-gate-closure-20261022.json).
+
+### Evidence matrix
+
+| Blocker | Evidence | Pass/fail | Remaining action | Responsible party |
+| --- | --- | --- | --- | --- |
+| Final legal approval | The six paragraphs below match byte-for-byte between Opportunity Engine `GBP_TERMS` and MaximisedAI PR #19. The approval pack says the owner supplied the wording separately and that it remains subject to final legal review. No written legal approval was found in the supplied documents, PR reviews or PR comments. | **BLOCKED — technical comparison passed; legal approval absent** | Legal counsel or the owner must record explicit written approval of this exact text and document reference. | Owner / legal counsel |
+| Production Billing authentication | Read-only GitHub Actions run `39762857733` used the existing protected production URL/key secrets at site PR head `5cce90c`. At `2026-10-22T10:24:53.143Z`, authenticated product, plan and current-price reads for all 12 existing approved live offers succeeded. The tested base was `https://billing-api.maximisedai.com/api/v1`; sanitized paths were `/catalogue/plans/{planId}`, `/catalogue/products/{productId}` and `/catalogue/plans/{planId}/prices/current`. The run and artifact contain no credential. | **PASS** | Repeat after Billing deployment and before GBP publication, reading the four GBP plans while they are still unpublished, then again after publication. | Release engineer |
+| Database recovery readiness | Authenticated Supabase dashboard inspection for production project `mgrnz-web` (`jqfodlzcsgfocyuawzyx`) shows the organization/project on the **Free** plan. Scheduled Backups states that Free does not include project backups. Point in Time states PITR is a Pro add-on. Most recent backup: **none available**. PITR: **disabled**, so retention and a recoverable timestamp are absent. No restore was started. | **FAIL** | Before migration, provide and verify a recoverable backup or enable an owner-approved scheduled-backup/PITR facility, then record the backup ID/time and authorized recovery operator. | Owner / Supabase project administrator |
+| Integrated staging rehearsal | A coordinated isolated rehearsal used disposable PostgreSQL 17 database `opp_release_test_gbp_20261022`, fixture Billing/Cockpit, the existing refusing-SMTP harness and prior unchanged component evidence. Fresh targeted Opportunity Engine checks: **59 passed**; fresh PostgreSQL migration/locking checks: **11 passed**. Billing PR #52 focused evidence remains **150 passed**; website PR #19 fixture build remains **30 routes built** and current PR checks are green. | **PASS** | Preserve the evidence and rerun only if a release head or environment contract changes. | Release engineer |
+| Production migration preflight | Read-only production inspection at `2026-10-22T10:32:03.004053Z` found 3 batches with 25 members and zero approved-unsent, sending, pending-review or sent drafts. The latest applied migration is `20261016010631_content_cockpit_read_contract`; none of the six release tables/columns checked is present. A linked `supabase db push --include-all --dry-run` stopped before plan generation because the checkout lacks numerous already-applied production migration files. No repair command was run. | **FAIL** | Reconcile the complete production migration history into an immutable release checkout and obtain a clean dry run. During the separately authorised window, quiesce the three batches and operator sending before applying the six migrations. | Database release engineer / Opportunity Engine operator |
+
+### Exact cancellation and refund wording awaiting legal sign-off
+
+Document references: owner-supplied wording recorded by the implementation request; [owner-approval.md](gbp-commercial/owner-approval.md) states that it is subject to final legal review; executable copy at `supabase/functions/_shared/gbpCommercial.ts:25`; page copy at MaximisedAI PR #19 `src/data/gbp-offers.js`.
+
+1. Payment is required in full before work begins.
+2. You may cancel your order before work commences and receive a full refund, except for any third-party costs that were clearly disclosed and expressly agreed to as non-refundable before purchase.
+3. If you cancel after work has commenced, we may charge a reasonable amount for work already completed and any agreed, non-recoverable third-party costs. Any remaining prepaid balance will be refunded.
+4. Where we are unable to complete the agreed services, we will discuss an appropriate remedy, including a refund where applicable.
+5. Nothing in these terms limits your rights under the New Zealand Consumer Guarantees Act 1993 or other applicable consumer protection legislation.
+6. Google Business Profile verification, approval and processing times are controlled by Google and cannot be guaranteed.
+
+**Legal status: PENDING.** Matching implementation text proves consistency; it does not constitute legal approval.
+
+### Staging stage results
+
+| Stage | Result | Evidence |
+| --- | --- | --- |
+| Discovery | **PASS** | Recorded-source and discovery execution evidence tests passed. |
+| Assessment | **PASS** | Assessment and scenario evidence paths passed against the release candidate. |
+| G01 / G02 qualification | **PASS** | Separate evidence rules, customer-confirmed service count and invalid-count rejection passed. |
+| Scenario Report | **PASS** | Immutable commercial snapshot and report rendering checks passed. |
+| Email preparation | **PASS** | One template per scenario and report/email snapshot identity passed; GBP drafts remain send-locked. |
+| Billing offer | **PASS** | All four exact amounts (24900, 34900, 19900, 29900 NZD minor units), one-off cadence, 15% GST exclusive treatment, plan/product identity, API-key header, published/missing/withdrawn fail-closed behavior passed. |
+| Landing page | **PASS** | Both Billing-resolved routes and all four rendered tiers passed the existing fixture build and current site PR checks. |
+| Cockpit and duplicate controls | **PASS** | Fresh eligibility-before-send, company claim, unique GBP draft, stale recipient and duplicate-claim checks passed. |
+| Transport/payment isolation | **PASS** | Refusing SMTP records zero outbound messages. No payment adapter or checkout was invoked. |
+
+The first PostgreSQL 17 command omitted Docker's stdin flag, so `psql` received an empty schema and the database-only assertions failed. That runner error was discarded, the disposable database was recreated, and the unchanged suite passed 11/11 with stdin enabled. It is a rehearsal harness diagnostic, not a release-candidate failure.
+
+### Recovery and quiescence procedure
+
+There is currently no valid recovery point, so this procedure cannot be executed safely yet. Once a backup facility exists, an authorized Supabase project administrator must record the pre-migration backup identifier and UTC timestamp, verify it is visible and restorable, and retain access to the Supabase dashboard plus database credentials. A recovery event should restore to a separate project first, validate row counts and release invariants, then use an owner-approved cutover. Do not test recovery by overwriting production.
+
+At the authorised deployment window: stop new discovery/import/enrichment batch starts; let or deliberately suspend the three recorded batches; disable operator approve/send actions; recheck that approved-unsent, sending and uncertain claims are zero; record the recovery point; apply the reconciled migration plan; validate schema, counts and send invariants; then resume operations only after health checks. Production has not been paused during this review.
+
+The migrations are additive, so application rollback retains new tables, columns, audit history and send claims. There is no destructive down migration. If an older API cannot preserve the new claim/RPC contract, keep sending suspended and forward-fix. Never delete claims, reports or history to simulate rollback.
+
+### Current recommendation
+
+**NO-GO — two technical/operational prerequisites and one external approval remain.**
+
+- Technical: production has no scheduled backup or PITR recovery point.
+- Technical: the release checkout cannot produce a migration dry-run plan until its history is reconciled with production.
+- External approval: explicit written legal sign-off for the six paragraphs is absent.
+
+The production Billing reader and isolated integrated rehearsal are closed. The release is **not yet READY FOR OWNER RELEASE CONFIRMATION**.
