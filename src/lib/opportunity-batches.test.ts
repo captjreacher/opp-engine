@@ -3,7 +3,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_BATCH_FILTER, matchesBatchFilter, validateBatchFilter } from "../../supabase/functions/_shared/opportunityBatches";
 
-const row = { business_name: "Example Builder", location: "Auckland", industry: "Construction", opportunity_score: null, pipeline_status: "discovered", has_audit: false, outreach_status: null };
+const row = { business_name: "Example Builder", location: "Auckland", industry: "Construction", opportunity_score: null, pipeline_status: "discovered", has_scenario_report: false, outreach_status: null };
 describe("saved dashboard filters", () => {
   it.each(["EXAMPLE", "auck", "struct"])("matches business/location/industry partial text case-insensitively: %s", (search) => {
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, search })).toBe(true);
@@ -15,21 +15,25 @@ describe("saved dashboard filters", () => {
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, search: "builder", scoreThreshold: 1 })).toBe(false);
   });
   it("round-trips the actual filters captured from the dashboard", () => {
-    const filter = { search: "", scoreThreshold: 60, pipelineStatus: "discovered", auditAvailability: "none" as const, outreachStatus: "None" };
+    const filter = { search: "", scoreThreshold: 60, pipelineStatus: "discovered", reportAvailability: "none" as const, outreachStatus: "None" };
     expect(validateBatchFilter(filter)).toEqual(filter);
     expect(matchesBatchFilter({ ...row, opportunity_score: "80.0" }, filter)).toBe(true);
     expect(matchesBatchFilter({ ...row, opportunity_score: "80.0", pipeline_status: "enriched" }, filter)).toBe(false);
+  });
+  it("ignores retained legacy audit filters without excluding work",()=>{
+    const filter=validateBatchFilter({auditAvailability:"available"});
+    expect(filter.reportAvailability).toBe("all");expect(matchesBatchFilter(row,filter)).toBe(true);
   });
   it("keeps unassessed records visible when there is no minimum score", () => {
     expect(matchesBatchFilter(row, DEFAULT_BATCH_FILTER)).toBe(true);
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, scoreThreshold: 1 })).toBe(false);
   });
-  it.each([{ scoreThreshold: -1 }, { scoreThreshold: "60" }, { auditAvailability: "bad" }, { search: 12 }, { sql: "any" }])("rejects unsupported filters: %j", (filter) => {
+  it.each([{ scoreThreshold: -1 }, { scoreThreshold: "60" }, { reportAvailability: "bad" }, { search: 12 }, { sql: "any" }])("rejects unsupported filters: %j", (filter) => {
     expect(() => validateBatchFilter(filter)).toThrow();
   });
-  it("filters audit and outreach status with the dashboard's None convention", () => {
+  it("filters scenario report and outreach status with the dashboard's None convention", () => {
     expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, outreachStatus: "None" })).toBe(true);
-    expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, auditAvailability: "available" })).toBe(false);
+    expect(matchesBatchFilter(row, { ...DEFAULT_BATCH_FILTER, reportAvailability: "available" })).toBe(false);
   });
 });
 
@@ -63,7 +67,7 @@ describe("batch API validation and persistence", () => {
     });
     const compiled = ts.transpileModule(handlersSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
     const get = new Function("supabase", "json", "listOpportunities", `${compiled}; return getOpportunityBatch;`)({ from }, (body: unknown) => new Response(JSON.stringify(body)), async () => new Response(JSON.stringify({ opportunities: [{ id: "a" }, { id: "b" }, { id: "outside" }] })));
-    expect((await (await get("batch")).json()).opportunities).toEqual([{ id: "a" }, { id: "b" }]);
+    expect((await (await get("batch")).json()).opportunities).toEqual([{ id: "a",batch_member_active:true }, { id: "b",batch_member_active:true }]);
     expect(from.mock.calls.map(([table]) => table)).toEqual(["opportunity_batches", "opportunity_batch_members"]);
   });
   it("requires at least two distinct opportunity records", async () => {

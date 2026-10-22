@@ -1,0 +1,34 @@
+{
+  "observedAt": "2026-10-21",
+  "source": "read-only deployed function metadata; retrieve immutable source artifacts before rollback",
+  "functions": [
+    {
+      "slug": "local-business-enrich",
+      "id": "c07e8a5f-903d-4d0a-a87a-e196d7d115b2",
+      "version": 101,
+      "verify_jwt": false,
+      "ezbr_sha256": "fb5f3ff3a246d085871f39d71f4a023f9ff3d7abcb822f3edf627b8ecc0c42bc"
+    },
+    {
+      "slug": "opportunities",
+      "id": "412cf89a-a511-45a2-b1a7-0a4d9cb82872",
+      "version": 70,
+      "verify_jwt": false,
+      "ezbr_sha256": "87e57b4dd48bebfdfbd80f1cd0bb6b357ca50c8c6ef34f2d99df646db733afb1"
+    },
+    {
+      "slug": "local-business-visual-assess",
+      "id": "61e099ac-8c7d-4793-a84f-0f504b4299a7",
+      "version": 38,
+      "verify_jwt": false,
+      "ezbr_sha256": "7e56fb381a962bd3be64c2bbcaa5d2a6e8487a6da82f06a5475de9bbad7cac1e"
+    },
+    {
+      "slug": "opportunity-scenarios",
+      "id": "b7b218ea-9689-4037-9a06-644d3f115bd1",
+      "version": 26,
+      "verify_jwt": false,
+      "ezbr_sha256": "0f208fa7ef90e56fa868fcbf1a7b01022b31d6c2e33bf44c24409611c8360349"
+    }
+  ]
+}

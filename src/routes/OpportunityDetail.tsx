@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { isOpportunityArchived } from "../../supabase/functions/_shared/opportunityLifecycle";
+import CompanyScenarioPanel from "../components/CompanyScenarioPanel";
+import OpportunityActions from "../components/OpportunityActions";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   analyzeOpportunity,
   ApiError,
   ApiNotConfiguredError,
-  auditOpportunity,
   createOutreachDraft,
+  prepareGbpCommercial,
   enrichOpportunity,
   fetchOpportunityDetail,
   isApiConfigured,
@@ -24,8 +27,9 @@ import type { OppDetail, OutcomeState, ReviewState } from "../lib/types";
 import { OUTCOME_ACTIONS, REVIEW_STATE_ORDER } from "../lib/types";
 import Badge, { toneForStatus } from "../components/Badge";
 
-import AuditReportDisplay from "../components/AuditReport";
 import DraftEditor from "../components/DraftEditor";
+import GbpPreparation from "../components/GbpPreparation";
+import type { GbpPreparationInput } from "../lib/api";
 import GuidedWorkflow, {
   type WorkflowState,
 } from "../components/GuidedWorkflow";
@@ -36,7 +40,7 @@ import EvidencePanel, { deriveEvidence } from "../components/EvidencePanel";
 import EventTimeline from "../components/EventTimeline";
 import VisualEvidencePanel from "../components/VisualEvidencePanel";
 
-type IntelligenceAction = "enrich" | "analyze" | "audit";
+type IntelligenceAction = "enrich" | "analyze";
 
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -120,7 +124,10 @@ export default function OpportunityDetail() {
   const [outcomeError, setOutcomeError] = useState<string | null>(null);
 
   const [generatingDraft, setGeneratingDraft] = useState(false);
+  const [selectedTemplate,setSelectedTemplate]=useState("");
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [gbpPreparing, setGbpPreparing] = useState(false);
+  const [gbpError, setGbpError] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [approvingDraft, setApprovingDraft] = useState(false);
   const [sendingDraft, setSendingDraft] = useState(false);
@@ -137,6 +144,10 @@ export default function OpportunityDetail() {
     null,
   );
   const [enrichmentPollNonce, setEnrichmentPollNonce] = useState(0);
+  const approvalDialog = useRef<HTMLDialogElement>(null);
+  const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const [reviewDraftVersion, setReviewDraftVersion] = useState<string | undefined>();
 
   async function load({ silent = false }: { silent?: boolean } = {}) {
     if (!id || !isApiConfigured) return;
@@ -147,6 +158,8 @@ export default function OpportunityDetail() {
     try {
       const res = await fetchOpportunityDetail(id);
       setDetail(res);
+      const options=res.outreach_options??[];
+      setSelectedTemplate(current=>options.some(t=>t.id===current)?current:(res.company_scenarios??[]).filter(m=>m.state==="confirmed").length===1 && options.length===1?options[0].id:"");
     } catch (err) {
       if (!silent) {
         setLoadError(errorMessage(err));
@@ -161,6 +174,8 @@ export default function OpportunityDetail() {
   }
 
   useEffect(() => {
+    // A manual choice belongs to this company, never the previously viewed one.
+    setSelectedTemplate("");
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -254,10 +269,6 @@ export default function OpportunityDetail() {
   async function handleGenerateDraft() {
     if (!id) return;
     if (!detail) return;
-    if (!detail.audit_report) {
-      setGenerateError("Generate an audit report before creating outreach.");
-      return;
-    }
     if (detail.review_state !== "contact_ready") {
       setGenerateError(
         "Complete review and mark this opportunity contact ready before outreach.",
@@ -267,7 +278,7 @@ export default function OpportunityDetail() {
     setGeneratingDraft(true);
     setGenerateError(null);
     try {
-      await createOutreachDraft(id);
+      await createOutreachDraft(id,{template_id:selectedTemplate || undefined});
       await load();
     } catch (err) {
       setGenerateError(errorMessage(err));
@@ -293,12 +304,34 @@ export default function OpportunityDetail() {
     }
   }
 
-  async function handleApproveDraft(draftId: string) {
+  async function handlePrepareGbp(input: GbpPreparationInput) {
     if (!id) return;
+    setGbpPreparing(true);
+    setGbpError(null);
+    try {
+      await prepareGbpCommercial(id, input);
+      await load();
+    } catch (err) {
+      setGbpError(errorMessage(err));
+    } finally {
+      setGbpPreparing(false);
+    }
+  }
+
+  function handleApproveDraft(draftId: string) {
+    setReviewDraftId(draftId);
+    setReviewDraftVersion(detail?.outreach_drafts.find(draft => draft.id === draftId)?.updated_at);
+    setReviewConfirmed(false);
+    approvalDialog.current?.showModal();
+  }
+  async function confirmDraftApproval() {
+    if (!id || !reviewDraftId || !reviewConfirmed) return;
+    const draftId = reviewDraftId;
     setApprovingDraft(true);
     setDraftMutationError(null);
     try {
-      await updateOutreachDraft(id, draftId, { status: "approved" });
+      await updateOutreachDraft(id, draftId, { status: "approved",reviewed:true,expected_updated_at:reviewDraftVersion });
+      approvalDialog.current?.close();
       await load();
     } catch (err) {
       setDraftMutationError(errorMessage(err));
@@ -401,24 +434,6 @@ export default function OpportunityDetail() {
     }
   }
 
-  async function handleAudit(retry = false) {
-    if (!id) return;
-    setIntelligencePending("audit");
-    setIntelligenceError(null);
-    setIntelligenceNotice(null);
-    try {
-      await auditOpportunity(id, retry);
-      setIntelligenceNotice(
-        `Audit ${retry ? "re-generated" : "generated"} successfully.`,
-      );
-      await load();
-    } catch (err) {
-      setIntelligenceError(errorMessage(err));
-    } finally {
-      setIntelligencePending(null);
-    }
-  }
-
   /** Map a GuidedWorkflow step ID to the corresponding action. */
   function handleWorkflowStep(stepId: string) {
     if (!id) return;
@@ -444,12 +459,7 @@ export default function OpportunityDetail() {
         }
         break;
       case "sent":
-        if (detail) {
-          const latestDraft = detail.outreach_drafts[0] ?? null;
-          if (latestDraft) {
-            void handleSendDraft(latestDraft.id);
-          }
-        }
+        document.getElementById("outreach-preparation")?.scrollIntoView({ behavior: "smooth", block: "start" });
         break;
       case "responded":
         void handleOutcomeTransition("awaiting_response");
@@ -543,8 +553,8 @@ export default function OpportunityDetail() {
     latest_assessment?.opportunity_score !== undefined
       ? parseFloat(latest_assessment.opportunity_score)
       : null;
-  const outreachBlockedReason = !audit_report
-    ? "Generate an audit report before creating outreach."
+  const outreachBlockedReason = isOpportunityArchived(lead) ? "Restore this opportunity before preparing outreach." : !latest_assessment
+    ? "Complete assessment before preparing outreach."
     : review_state !== "contact_ready"
       ? "Complete review and mark this opportunity contact ready before outreach."
       : null;
@@ -612,20 +622,26 @@ export default function OpportunityDetail() {
                 .join(" · ") || "—"}
             </p>
           </div>
-          <Badge tone={lead.status ? "info" : "neutral"}>
-            {lead.status ?? "unknown"}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            {isOpportunityArchived(lead) && <Badge>Archived</Badge>}
+            <Badge tone={lead.status ? "info" : "neutral"}>{lead.status ?? "unknown"}</Badge>
+            <OpportunityActions opportunity={lead} disabled={intelligencePending !== null || sendingDraft || approvingDraft || savingDraft || generatingDraft || reviewPending !== null || outcomePending !== null} onChanged={load} />
+          </div>
         </div>
 
         {/* Guided workflow — replaces the old 4-step ReviewStepper */}
-        <div className="border-t border-graphite-800 pt-3">
+        <fieldset disabled={isOpportunityArchived(lead)} className="min-w-0 border-0 border-t border-graphite-800 p-0 pt-3">
           <GuidedWorkflow
             state={workflowState}
-            onStepAction={handleWorkflowStep}
+            onStepAction={isOpportunityArchived(lead) ? undefined : handleWorkflowStep}
           />
-        </div>
+        </fieldset>
       </div>
 
+      {isOpportunityArchived(lead) && <div role="status" className="rounded border border-graphite-700 bg-graphite-900 p-3 text-sm text-graphite-300">
+        Archived{lead.archived_at ? ` ${formatTimestamp(lead.archived_at)}` : " (legacy status; owner review required before restore)"}. Evidence and history are retained.
+        {lead.archive_reason && <p className="mt-1 break-words">Reason: {lead.archive_reason}</p>}
+      </div>}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <SectionHeading>
@@ -653,14 +669,14 @@ export default function OpportunityDetail() {
             Intelligence Workflow
           </SectionHeading>
           <p className="text-xs text-graphite-500">
-            Operator-triggered only: enrich, analyze, and audit stay explicit.
+            Enrich → Assess → Prepare Outreach → Review/Send. Reports are prepared automatically.
           </p>
         </div>
 
-<div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+<div className="grid grid-cols-1 gap-3 md:grid-cols-4">
 <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
 <p className="text-xs font-medium uppercase tracking-wide text-graphite-500">
-Enrichment
+Enrich
 </p>
 <p className="mt-1 text-sm text-graphite-200">
   {enrichmentRunning ? "Enrichment running…" : hasEnrichment ? "Ready" : "Not enriched"}
@@ -682,7 +698,7 @@ Enrichment
         ? handleRefreshEnrichmentStatus()
         : handleEnrich(enrichmentStale))
     }
-    disabled={intelligencePending !== null}
+    disabled={isOpportunityArchived(lead) || intelligencePending !== null}
     className="oe-primary rounded bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
   >
     {intelligencePending === "enrich"
@@ -700,7 +716,7 @@ Enrichment
 
           <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-graphite-500">
-              Analysis
+              Assess
             </p>
             <p className="mt-1 text-sm text-graphite-200">
               {latest_assessment ? "Assessed" : "Not assessed"}
@@ -716,7 +732,7 @@ Enrichment
               <button
                 type="button"
                 onClick={() => void handleAnalyze(Boolean(latest_assessment))}
-                disabled={intelligencePending !== null || !hasEnrichment}
+                disabled={isOpportunityArchived(lead) || intelligencePending !== null || !hasEnrichment}
                 className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {intelligencePending === "analyze"
@@ -729,33 +745,13 @@ Enrichment
           </div>
 
           <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-graphite-500">
-              Audit
-            </p>
-            <p className="mt-1 text-sm text-graphite-200">
-              {audit_report ? "Visible" : "Not generated"}
-            </p>
-            <p className="mt-1 text-xs text-graphite-500">
-              {audit_report
-                ? `Current report generated ${formatTimestamp(audit_report.generated_at)}`
-                : latest_assessment
-                  ? "Generate an audit report before outreach."
-                  : "Analysis is required before audit generation."}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void handleAudit(Boolean(audit_report))}
-                disabled={intelligencePending !== null || latest_assessment === null}
-                className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {intelligencePending === "audit"
-                  ? "Working…"
-                  : audit_report
-                    ? "Re-generate audit"
-                    : "Generate audit"}
-              </button>
-            </div>
+            <p className="text-xs uppercase text-graphite-500">Prepare Outreach</p>
+            <p className="mt-2 text-sm">Review scenario reports and the approved offer below.</p>
+            <a className="mt-3 inline-block text-accent-400" href="#outreach-preparation">Prepare Outreach</a>
+          </div>
+          <div className="rounded-lg border border-graphite-800 bg-graphite-950/40 p-3">
+            <p className="text-xs uppercase text-graphite-500">Review/Send</p>
+            <p className="mt-2 text-sm">Save edits, review and approve the email, then confirm sending. Nothing sends automatically.</p>
           </div>
         </div>
 
@@ -1180,6 +1176,7 @@ Enrichment
 
       {/* ── Visual Evidence (Phase 5.1 — street view reference evidence + analysable image entry point) ── */}
       <VisualEvidencePanel
+        readOnly={isOpportunityArchived(lead)}
         leadId={lead.id}
         evidence={detail.visual_evidence ?? []}
         onAdded={load}
@@ -1187,41 +1184,6 @@ Enrichment
 
       {/* ── Evidence Panel (collapsible, full width) ── */}
       <EvidencePanel items={evidenceItems} />
-
-      {/* ── Audit Report (existing, unchanged) ── */}
-      <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
-        <SectionHeading>
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            className="h-4 w-4 text-graphite-400"
-            aria-hidden="true"
-          >
-            <path
-              d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M14 2V8H20"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M16 13H8M16 17H8M10 9H8"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            />
-          </svg>
-          Audit Report
-        </SectionHeading>
-        <AuditReportDisplay report={audit_report} />
-      </section>
 
       {/* ── Event Timeline (vertical, replaces old EventHistory) ── */}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
@@ -1247,7 +1209,7 @@ Enrichment
           reviewState={review_state}
           outcomeState={outcome_state}
           hasAssessment={latest_assessment !== null}
-          hasAudit={audit_report !== null}
+          hasScenarioReports={Boolean(detail.scenario_reports?.length)}
           hasDraft={hasDraft}
           hasSentDraft={hasSentDraft}
         />
@@ -1278,7 +1240,7 @@ Enrichment
             {REVIEW_ACTIONS.map((action) => {
               const targetIndex = REVIEW_STATE_ORDER.indexOf(action.toState);
               const isAheadOfCurrent = targetIndex > currentReviewIndex;
-              const disabled = !isAheadOfCurrent || reviewPending !== null;
+              const disabled = isOpportunityArchived(lead) || !isAheadOfCurrent || reviewPending !== null;
               return (
                 <button
                   key={action.toState}
@@ -1346,6 +1308,10 @@ Enrichment
             </div>
           )}
 
+          <div id="outreach-preparation" />
+      <CompanyScenarioPanel detail={detail} selected={selectedTemplate} onSelect={setSelectedTemplate} onRefresh={()=>load({silent:true})} />
+          {!!latestDraft && <button type="button" disabled={isOpportunityArchived(lead) || generatingDraft || !selectedTemplate} onClick={handleGenerateDraft}>Regenerate from selected template</button>}
+          {latestDraft && generateError && <p role="alert" className="text-rose-300">{generateError}</p>}
           {/* Draft workspace */}
           {!latestDraft ? (
             <div className="space-y-3">
@@ -1375,17 +1341,19 @@ Enrichment
                     strokeLinejoin="round"
                   />
                 </svg>
-                {generatingDraft ? "Generating…" : "Generate draft"}
+                {generatingDraft ? "Generating…" : "Prepare Outreach"}
               </button>
               {generateError && (
                 <p className="rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
                   {generateError}
                 </p>
               )}
+              {!outreachBlockedReason && <GbpPreparation onPrepare={handlePrepareGbp} busy={gbpPreparing} error={gbpError} />}
             </div>
           ) : (
             <div className="space-y-3">
               <DraftEditor
+                readOnly={isOpportunityArchived(lead)}
                 draft={latestDraft}
                 onSave={(fields) => handleSaveDraft(latestDraft.id, fields)}
                 onApprove={() => handleApproveDraft(latestDraft.id)}
@@ -1402,7 +1370,7 @@ Enrichment
                 Attachments — coming soon
               </div>
 
-              {/* Audit PDF download */}
+              {/* Historical audit download retained for traceability */}
               {audit_report?.pdf_url && (
                 <a
                   href={audit_report.pdf_url}
@@ -1483,6 +1451,15 @@ Enrichment
         </section>
       </div>
 
+      <dialog ref={approvalDialog} aria-labelledby="approve-email-title" onCancel={() => setReviewConfirmed(false)} className="oe-actions-dialog w-[calc(100%-2rem)] max-w-lg rounded-md border border-graphite-700 bg-console-panel p-5 text-graphite-100">
+        <h2 id="approve-email-title" className="text-lg font-semibold">Review and approve email</h2>
+        <p className="mt-2 text-sm">Check the selected scenario reports, evidence, offer inclusions, price, GST, terms and destination against the proposed email.</p>
+        <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={reviewConfirmed} onChange={event => setReviewConfirmed(event.target.checked)} />I have reviewed the evidence, approved offer details and edited email.</label>
+        <p className="mt-3 text-xs text-graphite-400">Approval does not send the email. Sending requires a separate confirmation.</p>
+        {draftMutationError && <p role="alert" className="mt-3 text-rose-300">{draftMutationError}</p>}
+        <div className="mt-4 flex gap-2"><button type="button" disabled={!reviewConfirmed || approvingDraft} onClick={() => void confirmDraftApproval()} className="oe-primary rounded bg-accent-600 px-3 py-2 text-sm disabled:opacity-50">{approvingDraft ? "Approving…" : "Confirm approval"}</button><button type="button" disabled={approvingDraft} onClick={() => approvalDialog.current?.close()} className="rounded border border-graphite-600 px-3 py-2 text-sm">Cancel review</button></div>
+      </dialog>
+
       {/* ── Outcome Tracking (Phase 4, preserved) ── */}
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1522,7 +1499,7 @@ Enrichment
             <div className="flex flex-wrap gap-2">
               {OUTCOME_ACTIONS.map((action) => {
                 const isCurrent = outcome_state === action.toState;
-                const disabled = isCurrent || outcomePending !== null;
+                const disabled = isOpportunityArchived(lead) || isCurrent || outcomePending !== null;
                 return (
                   <button
                     key={action.toState}

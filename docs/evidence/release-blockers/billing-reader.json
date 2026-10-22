@@ -1,0 +1,37 @@
+{
+  "observedAt": "2026-10-21",
+  "worker": "billing-api",
+  "settings": {
+    "status": 200,
+    "success": true,
+    "configuration": [
+      {
+        "name": "ADMIN_API_KEY_ROLES",
+        "value": "runtime.viewer"
+      },
+      {
+        "name": "ADMIN_AUTH_MODE",
+        "value": "hmac+api-key"
+      }
+    ],
+    "credentialBindingNames": [
+      "ADMIN_API_KEY_HASHES",
+      "ADMIN_AUTH_SIGNING_KEY_B64",
+      "MAXAI_GITHUB_DISPATCH_TOKEN",
+      "STRIPE_WEBHOOK_SIGNING_SECRET"
+    ]
+  },
+  "unauthenticatedProbes": [
+    {
+      "route": "/api/v1/catalogue/plans/plan-maximisedai-small-business-website",
+      "status": 401
+    },
+    {
+      "route": "/api/v1/catalogue/plans/plan-maximisedai-small-business-website/prices/current",
+      "status": 401
+    }
+  ],
+  "authenticatedReader": "not executed: existing consumer key is held in write-only Supabase secrets; no secure local key found",
+  "requiredConsumerIdentity": "server-side catalogue reader, ApiKey, runtime.viewer (catalogue.read)",
+  "billingChanges": false
+}

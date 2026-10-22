@@ -1,0 +1,83 @@
+{
+  "inspectedAt": "2026-10-22T23:32:32+13:00",
+  "releaseCandidate": "0891f734f35427a52ad1c599bd8e8a520fc18d07",
+  "legal": {
+    "technicalComparison": "pass",
+    "paragraphCount": 6,
+    "opportunityEngineSource": "supabase/functions/_shared/gbpCommercial.ts:25",
+    "websiteSource": "maximisedai-site PR #19 src/data/gbp-offers.js",
+    "approvalPackReference": "docs/gbp-commercial/owner-approval.md:3",
+    "explicitLegalApprovalFound": false,
+    "releaseGate": "blocked_pending_written_legal_signoff"
+  },
+  "productionBillingReader": {
+    "result": "pass",
+    "checkedAt": "2026-10-22T10:24:53.143Z",
+    "mechanism": "MaximisedAI GitHub Actions read-only workflow using existing repository secrets",
+    "runId": 39762857733,
+    "headSha": "5cce90cdb5c6c7cadceaa1cdfaa9c66a6ecbcddd",
+    "baseEndpoint": "https://billing-api.maximisedai.com/api/v1",
+    "paths": [
+      "/catalogue/plans/{planId}",
+      "/catalogue/products/{productId}",
+      "/catalogue/plans/{planId}/prices/current"
+    ],
+    "sanitizedHttpResult": "All authenticated reads required by 12 approved live offers returned successful envelopes; workflow concluded success",
+    "credentialHandling": "Secret value was not read, printed, rotated or replaced"
+  },
+  "databaseRecovery": {
+    "result": "fail",
+    "project": "mgrnz-web (jqfodlzcsgfocyuawzyx)",
+    "planShown": "Free",
+    "mostRecentAvailableBackup": null,
+    "scheduledBackups": false,
+    "pitrEnabled": false,
+    "pitrRetention": null,
+    "identifiedRecoveryPoint": null,
+    "evidence": "Authenticated Supabase dashboard states that the Free Plan does not include project backups and that PITR is a Pro Plan add-on",
+    "requiredAction": "Provide and verify a recoverable pre-release database backup or enable an owner-approved backup/PITR facility before migration",
+    "restoreInitiated": false
+  },
+  "integratedStaging": {
+    "result": "pass",
+    "infrastructure": "Disposable PostgreSQL 17 database opp_release_test_gbp_20261022 plus fixture Billing/Cockpit and refusing SMTP harness",
+    "targetedOpportunityChecks": "59 passed",
+    "postgres17MigrationChecks": "11 passed",
+    "componentEvidenceReused": "Billing PR #52 focused 150 tests; website PR #19 fixture build with 30 routes; current PR checks green",
+    "stages": {
+      "discovery": "pass",
+      "assessment": "pass",
+      "scenarioQualificationG01G02": "pass",
+      "scenarioReport": "pass",
+      "emailPreparation": "pass",
+      "billingOfferFourPricesAuthGst": "pass",
+      "landingPages": "pass",
+      "cockpitEligibility": "pass",
+      "duplicatePrevention": "pass",
+      "refusingSmtpZeroOutbound": "pass",
+      "realPayments": "not_invoked"
+    }
+  },
+  "productionMigrationPreflight": {
+    "result": "fail",
+    "productionInspectedAt": "2026-10-22T10:32:03.004053Z",
+    "latestAppliedMigration": "20261016010631_content_cockpit_read_contract",
+    "pendingReleaseMigrations": [
+      "20261009145236_company_scenario_workflow.sql",
+      "20261018144011_opportunity_archive_restore_governance.sql",
+      "20261020234438_scenario_reports.sql",
+      "20261021003415_scenario_archive_release_compatibility.sql",
+      "20261021012142_scenario_owner_retention_reconciliation.sql",
+      "20261021121314_gbp_commercial_draft.sql"
+    ],
+    "dryRun": "blocked_before_plan_generation because remote migration versions are absent from this repository checkout",
+    "activeBatches": 3,
+    "batchMembers": 25,
+    "approvedUnsentDrafts": 0,
+    "sendingDrafts": 0,
+    "pendingReviewDrafts": 0,
+    "releaseTablesAlreadyPresent": false,
+    "productionPaused": false,
+    "requiredAction": "Reconcile the complete production migration history into an immutable release checkout and obtain a clean read-only dry run; define the deployment-window handling for the three existing batches"
+  }
+}

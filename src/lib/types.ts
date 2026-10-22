@@ -6,6 +6,10 @@
 
 /** A single row in the board/list response (GET {VITE_API_BASE}). */
 export interface OppRow {
+  company_scenarios?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   id: string;
   business_name: string;
   location: string | null;
@@ -14,7 +18,8 @@ export interface OppRow {
   enrichment_status?: string | null;
   enrichment_ready?: boolean;
   enrichment_running?: boolean;
-  batches?: { id: string; name: string }[];
+  batches?: { id: string; name: string; active?: boolean }[];
+  batch_member_active?: boolean;
   /** Decimal string from Postgres numeric, e.g. "168.00". Parse with parseFloat. */
   opportunity_score: string | null;
   demand_signal_score: number;
@@ -23,7 +28,8 @@ export interface OppRow {
   ai_readiness_score: number;
   recommended_outreach_angle: string | null;
   assessed_at: string | null;
-  has_audit: boolean;
+  has_audit?: boolean; // Historical compatibility only.
+  has_scenario_report?: boolean;
   outreach_status: string | null;
   updated_at: string;
 }
@@ -69,6 +75,7 @@ export interface AuditReportModel {
   // Free-form narrative content that may or may not be present — rendered
   // as-is when found, never fabricated.
   summary?: string;
+  gbpFinding?: string;
   narrative?: string;
   sections?: unknown;
   [key: string]: unknown;
@@ -95,6 +102,9 @@ export interface AuditReport {
 export type DraftStatus = "draft" | "approved" | "sent";
 
 export interface Draft {
+  send_state?: "sending" | "uncertain" | "sent" | null;
+  updated_at?: string;
+  selection?: { template_id: string; template_version: number; scenario_keys: string[]; offer_id: string; destination: string; findings?: {description:string}[]; reports?: import("../../supabase/functions/_shared/scenarioReports").ScenarioReport[] };
   id: string;
   subject: string | null;
   body: string;
@@ -102,6 +112,7 @@ export interface Draft {
   created_at: string;
   approved_at: string | null;
   sent_at: string | null;
+  gbp_commercial_snapshot?: import("../../supabase/functions/_shared/gbpCommercial").GbpCommercialSnapshot | null;
 }
 
 export type ReviewState =
@@ -156,6 +167,9 @@ export interface ConsoleEvent {
 
 /** The lead/business record embedded in the detail response. */
 export interface Lead {
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
   id: string;
   business_name: string;
   slug: string | null;
@@ -241,7 +255,10 @@ export interface AddAnalysableEvidenceInput {
 
 /** Full detail response (GET {VITE_API_BASE}/{id}). */
 export interface OppDetail {
-  batches?: { id: string; name: string }[];
+  scenario_reports?: {id:string;report:import("../../supabase/functions/_shared/scenarioReports").ScenarioReport}[];
+  batches?: { id: string; name: string; active?: boolean }[];
+  company_scenarios?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
+  outreach_options?: import("../../supabase/functions/_shared/companyScenarios").OutreachTemplate[];
   lead: Lead;
   latest_assessment: Assessment | null;
   assessments: Assessment[];
@@ -426,6 +443,7 @@ export interface DiscoveryEligibilityResult {
 }
 
 export interface DiscoveryCandidate {
+  scenario_matches?: import("../../supabase/functions/_shared/companyScenarios").ScenarioMatch[];
   id: string;
   run_id: string;
   source: string;

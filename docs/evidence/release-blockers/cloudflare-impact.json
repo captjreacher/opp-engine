@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-21",
+  "repository": "captjreacher/opp-engine",
+  "github": {
+    "rulesets": 0,
+    "runs": 0,
+    "workflows": 0,
+    "repositoryWebhooks": 0,
+    "protectedBranches": 0
+  },
+  "source": "authenticated Cloudflare dashboard, read only; Builds API denied OAuth token with 403",
+  "linkedWorker": "opp-engine",
+  "otherRepoLinkedApplicationsFound": 0,
+  "dashboardApplicationsInspected": 21,
+  "production": {
+    "command": "npx wrangler deploy",
+    "branch": "main",
+    "trafficPercent": 100,
+    "version": "2adf39b9-4376-43ee-b2a3-027e7d1be68b"
+  },
+  "nonProduction": {
+    "enabled": true,
+    "productionApiConfiguration": true,
+    "productionPromotion": false,
+    "previewPublication": true,
+    "command": "npx wrangler versions upload"
+  },
+  "watch": {
+    "includes": [
+      "*"
+    ],
+    "excludes": []
+  },
+  "deployHooks": 0,
+  "configurationChanged": false
+}

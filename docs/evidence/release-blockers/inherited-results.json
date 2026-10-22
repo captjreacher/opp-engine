@@ -1,0 +1,176 @@
+[
+  {
+    "name": "service role execution and JWT denial",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "audit insert failure atomic rollback",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "evidence/history byte retention archive/restore",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "actual Cockpit handoff and dedup after archive",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "visual findings immutable after archive",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "indirect evidence owner checked",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "Cockpit DELETE remains blocked pending shared contract",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "legacy archives require reviewed restore",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "durable company claim prevents demotion and archive",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "actual discovery import reuses archived lead",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "archived review history cannot be deleted",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "runtime truncate denied",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "handoff skip failure and customer preservation",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "candidate-only ancestry and reparenting",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "workflow history rewrites",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "owner maintenance truncate rollback",
+    "status": "PASS",
+    "detail": null
+  },
+  {
+    "name": "queue race archive first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "loser": "opportunity_archived",
+      "recorded_network_requests": 0
+    }
+  },
+  {
+    "name": "queue race operation first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "loser": "enrichment_running",
+      "recorded_network_requests": 1
+    }
+  },
+  {
+    "name": "claim race archive first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "loser": "opportunity_archived",
+      "recorded_network_requests": 0
+    }
+  },
+  {
+    "name": "claim race operation first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "loser": "enrichment_running",
+      "recorded_network_requests": 0
+    }
+  },
+  {
+    "name": "approval race archive first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "loser": "opportunity_archived",
+      "recorded_network_requests": 0
+    }
+  },
+  {
+    "name": "approval race operation first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "loser": "approved_outreach_conflict",
+      "recorded_network_requests": 0
+    }
+  },
+  {
+    "name": "handoff race archive first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "result": "serialized correctly"
+    }
+  },
+  {
+    "name": "handoff race operation first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "result": "serialized correctly"
+    }
+  },
+  {
+    "name": "review_event race archive first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "result": "serialized correctly"
+    }
+  },
+  {
+    "name": "review_event race operation first",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "result": "serialized correctly"
+    }
+  },
+  {
+    "name": "concurrent archive retry emits one event",
+    "status": "PASS",
+    "detail": {
+      "blocked": true,
+      "result": "serialized correctly"
+    }
+  }
+]

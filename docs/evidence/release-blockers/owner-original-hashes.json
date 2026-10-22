@@ -1,0 +1,74 @@
+[
+  {
+    "path": "src/components/DraftEditor.tsx",
+    "sha256": "5ba843dc219497656dafd3ffc3380c12e912a08e8e7ba7202837f4feb8bdfdf3"
+  },
+  {
+    "path": "src/components/OpportunityActions.tsx",
+    "sha256": "adbda43fc34dd71c4b5d5db55bae11c8a950c04f373cb29979bb9ee2d91a38ba"
+  },
+  {
+    "path": "src/lib/audit-generator-identity.test.ts",
+    "sha256": "b8b42551648c28a4ee3af1e6c768a1a64e39268dc351a0297c12b58be9afc681"
+  },
+  {
+    "path": "src/lib/bulk-enrichment.ts",
+    "sha256": "01d74dd41ade76a28413d3ce698292fd2a5ca844bb0cfc00fe253ed63512eecb"
+  },
+  {
+    "path": "src/lib/opportunity-lifecycle-safety.test.ts",
+    "sha256": "54c3d0583d73ff4ce5793cda90aaaa64d43321793ead278bc125262c02ab0991"
+  },
+  {
+    "path": "src/lib/opportunity-lifecycle.test.ts",
+    "sha256": "94ee42bca4e6595263e84717c79e485d2bc8d3fab8ddea4c3b0f461867d1fdb3"
+  },
+  {
+    "path": "src/lib/types.ts",
+    "sha256": "e3a703d98f3c01156bafe39dbd2881829533309192584dc3dc844f9010ec5eab"
+  },
+  {
+    "path": "src/routes/OpportunityBatches.tsx",
+    "sha256": "18999892227ac30ebe50be5cd04e55b0def8ff0bff228c62aff3e69d77bf6b4f"
+  },
+  {
+    "path": "src/routes/OpportunityDetail.tsx",
+    "sha256": "900d64ebe6bb12027187f5e3e55887f6b993b68ce51bb24977e0e1289506e111"
+  },
+  {
+    "path": "src/routes/OpportunityList.tsx",
+    "sha256": "d456693b6baa4bbd6f85587e6f7410e694af7419a82ce3d97a636861e8d7fe44"
+  },
+  {
+    "path": "supabase/functions/_shared/opportunityLifecycle.ts",
+    "sha256": "749466f7e2639a4c7de1624067741232cf6dc9b23bbca0690307fc22980961d8"
+  },
+  {
+    "path": "supabase/functions/local-business-enrich/index.ts",
+    "sha256": "411d50ae77f80ce553a3df8df0a53dca39abf0cba34cdd411543939e73baf5c4"
+  },
+  {
+    "path": "supabase/functions/opportunities/index.ts",
+    "sha256": "41a8f50674c950089130aa280775f356caae641d2dc75cb0ac4ad8f0c8f58623"
+  },
+  {
+    "path": "supabase/migrations/20261018144011_opportunity_archive_restore_governance.sql",
+    "sha256": "88a4dcc8e10e3330db6b38c79d45289f69788481fe3305f0779ddcfd6d537a62"
+  },
+  {
+    "path": "docs/opportunity-lifecycle-shared-contract.md",
+    "sha256": "bf04af661de884c188f48b8000522e1be5d3323891c3448037aae5cebfb55026"
+  },
+  {
+    "path": "src/lib/opportunity-send.test.tsx",
+    "sha256": "0237e92240a7a369bc5a264732e7a5655727c028a72b4d23fc86b421e154a7bc"
+  },
+  {
+    "path": "supabase/tests/opportunity_send_claim.sql",
+    "sha256": "aedffe1cd035c3b42b82d39eba7dacc33594979b209fbf9b38b4167e3c9362ff"
+  },
+  {
+    "path": "tests/lifecycle-integration.py",
+    "sha256": "3bb1db95963eb643b0984b87e1ed56abb9dd0a183a63cf72a458c6d21a0677d3"
+  }
+]

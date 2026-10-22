@@ -1,3 +1,6 @@
+import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, billingReadConfiguration, type ScenarioReport, type ApprovedDetails, type Offer } from "../_shared/scenarioReports.ts";
+import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTemplate, type ScenarioMatch, type OutreachTemplate, type CompanyScenario } from "../_shared/companyScenarios.ts";
+import { isOpportunityArchived, lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, type OpportunityLifecycleView } from "../_shared/opportunityLifecycle.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
 import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Supabase Edge Function: `opportunities`
@@ -31,8 +34,8 @@ import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 //   GET   /opportunities/discovery-runs/:runId        -> durable run status
 //   GET   /opportunities/discovery-runs/:runId/candidates
 //   POST  /opportunities/discovery-candidates/:candidateId/acknowledge
-//   POST  /opportunities/discovery-runs/:runId/candidates/{import|assess|audit}
-//   POST  /opportunities/:id/{assess|audit}           -> canonical single-record intelligence action
+//   POST  /opportunities/discovery-runs/:runId/candidates/{import|assess}
+//   POST  /opportunities/:id/assess                   -> assessment with automatic scenario reports
 //   POST  /opportunities/:id/outreach                 -> generate + store a draft (never sends)
 //   PATCH /opportunities/:id/outreach/:draftId        -> edit/save or approve a draft (never sends)
 //   POST  /opportunities/:id/outreach/:draftId/send   -> send an APPROVED draft via SMTP (operator-gated)
@@ -43,6 +46,8 @@ import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 // Auth: `Authorization: Bearer <OPERATOR_TOKEN>` (or `x-operator-token`). Fails closed if unset.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { GBP_OFFER_MAP, buildGbpSnapshot, gbpFinding, gbpOutreach, qualifyGbp, type GbpCommercialSnapshot } from '../_shared/gbpCommercial.ts';
+import { resolveGbpBillingPrice } from '../_shared/gbpBilling.ts';
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -71,13 +76,13 @@ const DEFAULT_DISCOVERY_SCENARIO_SLUG = "local-digital-presence";
 const SUPPORTED_DISCOVERY_SCENARIO_SLUGS = new Set([
   DEFAULT_DISCOVERY_SCENARIO_SLUG,
 ]);
-const AUDIT_REPORT_VERSION = "opportunity-engine-v1";
+
 
 const cors = {
   "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers":
     "authorization, x-operator-token, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   Vary: "Origin",
 };
 
@@ -386,7 +391,7 @@ async function candidateForLead(
 ): Promise<Record<string, unknown> | null> {
   const { data, error } = await supabase
     .from("opportunity_discovery_candidates")
-    .select("id,run_id,eligibility_status,eligibility_result,eligibility_acknowledged,imported_lead_id,duplicate_lead_id")
+    .select("id,run_id,source_payload,eligibility_status,eligibility_result,eligibility_acknowledged,imported_lead_id,duplicate_lead_id")
     .or(`imported_lead_id.eq.${leadId},duplicate_lead_id.eq.${leadId}`)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -643,7 +648,8 @@ async function sendSmtpEmail(
     const response = await readSmtpResponse(conn);
     if (smtpStatus(response) !== 250)
       throw new Error(`SMTP DATA failed: ${response.trim()}`);
-    await smtpCommand(conn, "QUIT", [221]);
+    // DATA acceptance is final; QUIT failure must not invite duplicate delivery.
+    try { await smtpCommand(conn, "QUIT", [221]); } catch { /* already accepted */ }
   } catch (error) {
     throw new Error(
       `SMTP email failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -674,7 +680,7 @@ interface PlacesResult {
 async function refreshRunCounts(runId: string): Promise<void> {
   const { data, error } = await supabase
     .from("opportunity_discovery_candidates")
-    .select("enrichment_status, assessment_status, audit_status, error_info")
+    .select("enrichment_status, assessment_status, error_info")
     .eq("run_id", runId);
   if (error)
     throw new Error(`candidate_count_refresh_failed: ${error.message}`);
@@ -684,20 +690,17 @@ async function refreshRunCounts(runId: string): Promise<void> {
     (row) =>
       row.enrichment_status === "failed" ||
       row.assessment_status === "failed" ||
-      row.audit_status === "failed" ||
-      Object.keys((row.error_info as JsonObject | null) ?? {}).length > 0,
+      ((row.error_info as JsonObject | null)?.stage !== "audit" && Object.keys((row.error_info as JsonObject | null) ?? {}).length > 0),
   ).length;
   const activeStatuses = new Set([
     "queued",
     "enriching",
     "scoring",
-    "auditing",
   ]);
   const terminal = rows.every(
     (row) =>
       !activeStatuses.has(String(row.enrichment_status ?? "")) &&
-      !activeStatuses.has(String(row.assessment_status ?? "")) &&
-      !activeStatuses.has(String(row.audit_status ?? "")),
+      !activeStatuses.has(String(row.assessment_status ?? "")),
   );
 
   const { error: updateError } = await supabase
@@ -709,7 +712,6 @@ async function refreshRunCounts(runId: string): Promise<void> {
       ).length,
       candidates_scored: rows.filter((r) => r.assessment_status === "scored")
         .length,
-      audits_generated: rows.filter((r) => r.audit_status === "audited").length,
       failures,
       ...(terminal && failures > 0 ? { status: "partially_completed" } : {}),
     })
@@ -1240,9 +1242,11 @@ async function executeDiscoveryRun(
       });
     }
     if (candidates.length) {
+      const {data:scenarioRun,error:scenarioRunError}=await supabase.from("opportunity_discovery_runs").select("scenario_set").eq("id",runId).single();
+      if(scenarioRunError) throw scenarioRunError;
       const { data: inserted, error } = await supabase
         .from("opportunity_discovery_candidates")
-        .insert(candidates)
+        .insert(candidates.map(candidate=>({...candidate,scenario_matches:evaluateScenarios((scenarioRun?.scenario_set ?? []) as CompanyScenario[],{lead:candidate,provider:candidate.source_payload},"google_places",new Date().toISOString())})))
         .select("id,business_name");
       if (error) throw error;
       const { error: eventError } = await supabase.from("events").insert(
@@ -1471,6 +1475,7 @@ async function createDiscoveryRun(payload: JsonObject): Promise<Response> {
       status: "queued",
       current_stage: "queued",
       scenario_id: scenario.id,
+      scenario_set: (await enabledCompanyScenarios()).filter(item => !resolvedCategories.length || resolvedCategories.some(category => categorySupportsScenario(category,item.slug))),
       location_place_id: locationPlaceId,
       location_latitude: latitude,
       location_longitude: longitude,
@@ -2376,7 +2381,7 @@ async function importCandidates(
     );
   const { data: candidates, error } = await supabase
     .from("opportunity_discovery_candidates")
-    .select("id,business_name,run_id")
+    .select("id,business_name,run_id,scenario_matches")
     .eq("run_id", runId)
     .in("id", ids);
   if (error) throw error;
@@ -2390,6 +2395,7 @@ async function importCandidates(
         { p_candidate_id: candidate.id },
       );
       if (rpcError) throw rpcError;
+      await persistCompanyMatches(String((data as JsonObject).lead_id),(candidate.scenario_matches ?? []) as ScenarioMatch[]);
       results.push({
         candidate_id: candidate.id,
         ok: true,
@@ -2501,8 +2507,7 @@ async function assessOpportunity(
       };
     }
     return {
-      ok: true,
-      assessment: existing as JsonObject,
+      ...(await runOpportunityAnalysis(leadId)),
       evidence:
         (lead?.enrichment_diagnostics as JsonObject | null)
           ?.enrichment_result ?? {},
@@ -2596,8 +2601,7 @@ async function assessOpportunity(
       throw new Error(`lead_diagnostics_lookup_failed: ${leadError.message}`);
 
     return {
-      ok: true,
-      assessment: assessment as JsonObject,
+      ...(await runOpportunityAnalysis(leadId,true)),
       evidence:
         (lead?.enrichment_diagnostics as JsonObject | null)
           ?.enrichment_result ?? {},
@@ -2755,6 +2759,7 @@ async function runOpportunityAnalysis(
     };
   }
   if (!lead) return { ok: false, error: "opportunity_not_found" };
+  if (isOpportunityArchived(lead)) return { ok: false, error: "opportunity_archived" };
   const enrichmentResult =
     ((lead.enrichment_diagnostics as JsonObject | null)
       ?.enrichment_result as JsonObject | null) ?? null;
@@ -2770,23 +2775,32 @@ async function runOpportunityAnalysis(
   let assessment = (assessments ?? [])[0] as AssessmentRecord | undefined;
   const leadUpdatedAt = Date.parse(String(lead.updated_at ?? ""));
   const assessmentUpdatedAt = Date.parse(String(assessment?.assessed_at ?? ""));
+  const activeScenarios=await applicableCompanyScenarios(leadId);
+  const previousMatches=(assessment as unknown as {scenario_matches?:ScenarioMatch[]} | undefined)?.scenario_matches??[];
+  const scenarioSetCurrent=previousMatches.length===activeScenarios.length && activeScenarios.every(s=>previousMatches.some(m=>m.scenario_id===s.id && m.scenario_version===s.version));
   const canPromoteExisting =
+    scenarioSetCurrent &&
     !!assessment &&
     !retry &&
     Number.isFinite(leadUpdatedAt) &&
     Number.isFinite(assessmentUpdatedAt) &&
     leadUpdatedAt <= assessmentUpdatedAt;
-  if (!canPromoteExisting) {
+  if (!canPromoteExisting || !Array.isArray((assessment as unknown as JsonObject)?.scenario_matches) || !((assessment as unknown as JsonObject).scenario_matches as unknown[]).length) {
     const scoring = buildAnalysisScoring(
       lead as Record<string, unknown>,
       enrichmentResult,
     );
+    const discoveryCandidate=await candidateForLead(leadId);
+    const scenarioMatches=evaluateScenarios(activeScenarios,{lead,provider:discoveryCandidate?.source_payload??{},enrichment:enrichmentResult},"recorded_discovery_and_enrichment",new Date().toISOString());
+    const aggregate=aggregateScenarios(scenarioMatches,scoring.demand_signal_score,scoring.trust_leakage_score);
     const inserted = await supabase
       .from("local_business_lead_assessments")
       .insert({
         lead_id: leadId,
         demand_signal_score: scoring.demand_signal_score,
-        trust_leakage_score: scoring.trust_leakage_score,
+        trust_leakage_score: aggregate.trust_leakage_score,
+        scenario_matches:scenarioMatches,
+        score_explanation:aggregate.explanation,
         conversion_maturity_score: scoring.conversion_maturity_score,
         ai_readiness_score: scoring.ai_readiness_score,
         assessment_summary: scoring.assessment_summary,
@@ -2812,8 +2826,10 @@ async function runOpportunityAnalysis(
         error: `analysis_insert_failed: ${inserted.error?.message ?? "no row returned"}`,
       };
     }
+    await persistCompanyMatches(leadId,scenarioMatches,true);
     assessment = inserted.data as AssessmentRecord;
   }
+  await prepareScenarioReports(leadId, assessment as unknown as JsonObject, lead as JsonObject);
   await supabase.from("opportunity_console_audit_log").insert({
     action: "analysis_completed",
     lead_id: leadId,
@@ -2842,167 +2858,10 @@ async function runOpportunityAnalysis(
   };
 }
 
-function reportBand(score: number): string {
-  if (score >= 100) return "high";
-  if (score >= 60) return "medium";
-  return "low";
-}
-
-async function auditOpportunity(
-  leadId: string,
-  retry = false,
-): Promise<{ ok: boolean; audit?: JsonObject; error?: string }> {
-  const [{ data: lead }, { data: assessment }] = await Promise.all([
-    supabase
-      .from("local_business_leads")
-      .select("*")
-      .eq("id", leadId)
-      .maybeSingle(),
-    supabase
-      .from("local_business_lead_assessments")
-      .select("*")
-      .eq("lead_id", leadId)
-      .order("assessed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  if (!lead) return { ok: false, error: "opportunity_not_found" };
-  if (!assessment) return { ok: false, error: "assessment_required" };
-  const { data: existing } = await supabase
-    .from("local_business_audit_reports")
-    .select("*")
-    .eq("lead_id", leadId)
-    .eq("assessment_id", assessment.id)
-    .eq("report_version", AUDIT_REPORT_VERSION)
-    .limit(1)
-    .maybeSingle();
-  if (existing && !retry) return { ok: true, audit: existing as JsonObject };
-  await supabase.rpc("emit_local_business_event", {
-    p_lead_id: leadId,
-    p_event_type: "local_business.audit_generation_started",
-    p_status: "started",
-    p_payload: { assessment_id: assessment.id },
-  });
-  try {
-    const score = Number(assessment.opportunity_score ?? 0);
-    const enrichment = ((lead.enrichment_diagnostics as JsonObject | null)
-      ?.enrichment_result ?? {}) as JsonObject;
-    const reportModel = {
-      business: {
-        name: lead.business_name,
-        category: lead.category,
-        location: lead.suburb ?? lead.region,
-        websiteUrl: lead.website_url,
-        source: lead.source,
-      },
-      scoreBand: reportBand(score),
-      metrics: [
-        {
-          id: "opportunity",
-          label: "Opportunity",
-          value: score,
-          band: reportBand(score),
-          sourceField: "opportunity_score",
-        },
-        {
-          id: "demand",
-          label: "Demand signal",
-          value: assessment.demand_signal_score,
-          band: reportBand(Number(assessment.demand_signal_score)),
-          sourceField: "demand_signal_score",
-        },
-        {
-          id: "trust",
-          label: "Trust leakage",
-          value: assessment.trust_leakage_score,
-          band: reportBand(Number(assessment.trust_leakage_score)),
-          sourceField: "trust_leakage_score",
-        },
-        {
-          id: "conversion",
-          label: "Conversion maturity",
-          value: assessment.conversion_maturity_score,
-          band: reportBand(Number(assessment.conversion_maturity_score)),
-          sourceField: "conversion_maturity_score",
-        },
-        {
-          id: "ai",
-          label: "AI readiness",
-          value: assessment.ai_readiness_score,
-          band: reportBand(Number(assessment.ai_readiness_score)),
-          sourceField: "ai_readiness_score",
-        },
-      ],
-      summary: assessment.assessment_summary,
-      sections: [
-        {
-          id: "evidence",
-          title: "Observed evidence",
-          summary: lead.trust_summary,
-          items: Array.isArray(enrichment.evidence) ? enrichment.evidence : [],
-        },
-      ],
-      riskFlags: enrichment.risk_flags ?? lead.risk_flags ?? [],
-      metadata: {
-        generatedAt: new Date().toISOString(),
-        assessmentId: assessment.id,
-        generatedBy: "opportunity-engine",
-        scoringSource: assessment.assessed_by,
-      },
-    };
-    // generated_by is an auth.users UUID; shared operator auth has no user ID.
-    // Omit it to preserve existing user attribution on updates. Application
-    // attribution remains in reportModel.metadata.generatedBy above.
-    const insert = {
-      lead_id: leadId,
-      assessment_id: assessment.id,
-      report_version: AUDIT_REPORT_VERSION,
-      generated_at: new Date().toISOString(),
-      metadata_json: {
-        report_model: reportModel,
-        validation: { customer_ready: true },
-      },
-    };
-    const { data: audit, error } = existing
-      ? await supabase
-          .from("local_business_audit_reports")
-          .update(insert)
-          .eq("id", existing.id)
-          .select("*")
-          .single()
-      : await supabase
-          .from("local_business_audit_reports")
-          .insert(insert)
-          .select("*")
-          .single();
-    if (error) throw error;
-    await supabase.rpc("emit_local_business_event", {
-      p_lead_id: leadId,
-      p_event_type: "local_business.audit_generated",
-      p_status: "completed",
-      p_payload: {
-        audit_report_id: audit.id,
-        assessment_id: assessment.id,
-        report_version: AUDIT_REPORT_VERSION,
-      },
-    });
-    return { ok: true, audit: audit as JsonObject };
-  } catch (error) {
-    const detail = String((error as Error).message).slice(0, 300);
-    await supabase.rpc("emit_local_business_event", {
-      p_lead_id: leadId,
-      p_event_type: "local_business.audit_generation_failed",
-      p_status: "failed",
-      p_payload: { assessment_id: assessment.id, detail },
-    });
-    return { ok: false, error: detail };
-  }
-}
-
 async function processCandidateBatch(
   runId: string,
   payload: JsonObject,
-  operation: "assess" | "audit",
+  operation: "assess",
 ): Promise<Response> {
   const ids = uuidList(payload.candidate_ids);
   if (!ids)
@@ -3024,8 +2883,8 @@ async function processCandidateBatch(
     return json({ error: "candidate_scope_mismatch" }, 422);
 
   const runPatch = {
-    status: operation === "assess" ? "scoring" : "auditing",
-    current_stage: operation === "assess" ? "scoring" : "auditing",
+    status: "scoring",
+    current_stage: "scoring",
     completed_at: null,
   };
   const { error: runStartError } = await supabase
@@ -3041,9 +2900,7 @@ async function processCandidateBatch(
     if (!leadId) {
       const detail = "Import the candidate before processing.";
       const statusPatch =
-        operation === "assess"
-          ? { assessment_status: "failed" }
-          : { audit_status: "failed" };
+        { assessment_status: "failed" };
       const errorInfo = {
         stage: operation,
         detail,
@@ -3077,9 +2934,7 @@ async function processCandidateBatch(
     ) {
       const requiresAcknowledgement = candidateNeedsAcknowledgement(candidateRecord);
       const statusPatch =
-        operation === "assess"
-          ? { assessment_status: "failed" }
-          : { audit_status: "failed" };
+        { assessment_status: "failed" };
       const errorInfo = {
         ...candidateGateErrorInfo(candidateRecord, operation),
         candidate_id: candidate.id,
@@ -3117,13 +2972,11 @@ async function processCandidateBatch(
     }
 
     const runningPatch =
-      operation === "assess"
-        ? {
+      {
             enrichment_status: "enriching",
             assessment_status: "scoring",
             error_info: {},
-          }
-        : { audit_status: "auditing", error_info: {} };
+          };
     const { error: runningError } = await supabase
       .from("opportunity_discovery_candidates")
       .update(runningPatch)
@@ -3141,14 +2994,11 @@ async function processCandidateBatch(
     const result: {
       ok: boolean;
       assessment?: JsonObject;
-      audit?: JsonObject;
       evidence?: unknown;
       error?: string;
       diagnostics?: JsonObject;
     } =
-      operation === "assess"
-        ? await assessOpportunity(leadId, payload.retry === true)
-        : await auditOpportunity(leadId, payload.retry === true);
+      await assessOpportunity(leadId, payload.retry === true);
 
     const errorInfo = result.ok
       ? {}
@@ -3162,22 +3012,18 @@ async function processCandidateBatch(
           failed_at: new Date().toISOString(),
         };
     const finalPatch = result.ok
-      ? operation === "assess"
-        ? {
+      ? {
             enrichment_status: "enriched",
             assessment_status: "scored",
             preliminary_score: result.assessment?.opportunity_score ?? null,
             enrichment_evidence: result.evidence ?? {},
             error_info: {},
           }
-        : { audit_status: "audited", error_info: {} }
-      : operation === "assess"
-        ? {
+      : {
             enrichment_status: "failed",
             assessment_status: "failed",
             error_info: errorInfo,
-          }
-        : { audit_status: "failed", error_info: errorInfo };
+          };
 
     const { error: finalUpdateError } = await supabase
       .from("opportunity_discovery_candidates")
@@ -3218,7 +3064,7 @@ async function processCandidateBatch(
     .update({
       status: failed ? "partially_completed" : "completed",
       current_stage:
-        operation === "assess" ? "scoring_complete" : "auditing_complete",
+        "scoring_complete",
       completed_at: new Date().toISOString(),
     })
     .eq("id", runId);
@@ -3238,43 +3084,137 @@ async function processCandidateBatch(
   );
 }
 
-async function singleIntelligenceAction(
-  leadId: string,
-  payload: JsonObject,
-  operation: "assess" | "audit",
-): Promise<Response> {
-  const result =
-    operation === "assess"
-      ? await assessOpportunity(leadId, payload.retry === true)
-      : await auditOpportunity(leadId, payload.retry === true);
-  if (!result.ok)
-    return json(
-      { error: `${operation}_failed`, detail: result.error },
-      result.error === "opportunity_not_found" ? 404 : 422,
-    );
-  return json(result);
-}
-
 // ---- Existing opportunity / outreach handlers ------------------------------
 
-async function listOpportunities(): Promise<Response> {
-  const [leadRes, draftRes, auditRes, analysisEventRes] = await Promise.all([
+function projectBatchTag(tag: {released_at?:unknown;opportunity_batches:unknown}) {
+  const relation=Array.isArray(tag.opportunity_batches)?tag.opportunity_batches[0]:tag.opportunity_batches;
+  const batch=relation as {id:string;name:string;archived_at?:string}|null;
+  return batch ? {...batch,active:!tag.released_at && !batch.archived_at} : null;
+}
+async function enabledCompanyScenarios(): Promise<CompanyScenario[]> {
+  const {data,error} = await supabase.from("opportunity_scenarios").select("*").eq("status","active");
+  if(error) throw error;
+  const latest=new Map<string,CompanyScenario>();
+  for(const scenario of (data??[]) as CompanyScenario[]) if(!latest.has(scenario.slug) || latest.get(scenario.slug)!.version<scenario.version) latest.set(scenario.slug,scenario);
+  return [...latest.values()];
+}
+async function applicableCompanyScenarios(leadId:string): Promise<CompanyScenario[]> {
+  const active=await enabledCompanyScenarios();
+  const candidate=await candidateForLead(leadId);
+  if(!candidate?.run_id) return active; // Legacy companies have no category restriction.
+  const {data:run,error}=await supabase.from("opportunity_discovery_runs").select("category_slugs,category_slug,all_categories,scenario_set").eq("id",candidate.run_id).single();
+  if(error) throw error;
+  const slugs=Array.isArray(run.category_slugs)&&run.category_slugs.length?run.category_slugs:run.category_slug?[run.category_slug]:[];
+  if(run.all_categories || !slugs.length) return active;
+  const {data:categories,error:categoryError}=await supabase.from("opportunity_categories").select("slug,compatible_scenarios").in("slug",slugs);
+  if(categoryError) throw categoryError;
+  if(!categories?.length) {
+    const snapshot=(run.scenario_set??[]) as CompanyScenario[];
+    return active.filter(scenario=>snapshot.some(previous=>previous.slug===scenario.slug));
+  }
+  return active.filter(scenario=>categories.some(category=>categorySupportsScenario(category,scenario.slug)));
+}
+async function companyMatches(leadId:string): Promise<ScenarioMatch[]> {
+  const {data,error}=await supabase.from("opportunity_company_scenarios").select("*").eq("lead_id",leadId);
+  if(error) throw error; return (data ?? []) as ScenarioMatch[];
+}
+async function persistCompanyMatches(leadId:string,matches:ScenarioMatch[],replace=false) {
+  if(!matches.length) return;
+  const {error}=await supabase.rpc("persist_opportunity_company_scenarios",{p_lead_id:leadId,p_matches:matches,p_replace:replace});
+  if(error) throw error;
+}
+async function outreachOptions(id:string) {
+  const active=await applicableCompanyScenarios(id);
+  const {data:assessment,error:assessmentError}=await supabase.from("local_business_lead_assessments").select("scenario_matches,assessed_at").eq("lead_id",id).order("assessed_at",{ascending:false}).limit(1).maybeSingle();
+  if(assessmentError) throw assessmentError;
+  const matches=((assessment?.scenario_matches??[]) as ScenarioMatch[]).filter(m=>active.some(s=>s.id===m.scenario_id && s.version===m.scenario_version));
+  const {data,error}=await supabase.from("opportunity_outreach_templates").select("*").eq("enabled",true);
+  if(error) throw error; return {matches,templates:compatibleTemplates(matches,(data ?? []) as OutreachTemplate[])};
+}
+async function changeBatchMembership(id:string,payload:JsonObject): Promise<Response> {
+  if(payload.confirm_move!==true || typeof payload.from!=="string" || typeof payload.to!=="string") return json({error:"explicit_move_required"},422);
+  const {error}=await supabase.rpc("move_opportunity_batch_member",{p_lead_id:id,p_from:payload.from,p_to:payload.to});
+  return error ? json({error:"membership_move_failed",detail:error.message},409) : json({ok:true});
+}
+async function archiveBatch(id:string): Promise<Response> {
+  const {error}=await supabase.rpc("archive_opportunity_batch",{p_batch_id:id});
+  return error ? json({error:error.message},409) : json({ok:true});
+}
+async function prepareScenarioReports(id:string, assessment:JsonObject, lead:JsonObject) {
+  if(lead.archived_at || lead.status === "archived") {
+    const {data,error}=await supabase.from("opportunity_scenario_reports").select("id,report").eq("lead_id",id).eq("assessment_id",assessment.id).order("created_at",{ascending:false});
+    if(error) throw error;
+    return (data??[]) as Array<{id:string;report:ScenarioReport}>;
+  }
+  const matches=(assessment.scenario_matches??[]) as ScenarioMatch[];
+  const {data:templates,error:templateError}=await supabase.from("opportunity_outreach_templates").select("*").eq("enabled",true);
+  if(templateError) throw templateError;
+  const results: Array<{id:string;report:ScenarioReport}>=[];
+  for(const match of matches) {
+    const {data:scenario,error}=await supabase.from("opportunity_scenarios").select("*").eq("id",match.scenario_id).eq("version",match.scenario_version).single();
+    if(error) throw error;
+    const options=(templates??[]).filter(t=>(t.scenario_keys as string[]).includes(match.scenario_key));
+    for(const template of options.length?options:[null]) {
+      let offer=null,blocked=null;
+      try {
+        if(!template) throw new Error("No approved scenario-to-offer mapping.");
+        selectTemplate(matches, [template as OutreachTemplate],template.id);
+        offer=await resolveOffer(template as OutreachTemplate & {approved_details:ApprovedDetails},billingReadConfiguration(name=>Deno.env.get(name)));
+      } catch(error) {blocked=(error as Error).message;}
+      const report=buildScenarioReport({lead,assessment,scenario,match,template:template as OutreachTemplate|null,offer,blocked});
+      const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(canonicalJson(report)));
+      const fingerprint=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,"0")).join("");
+      const {error:insertError}=await supabase.from("opportunity_scenario_reports").upsert({lead_id:id,assessment_id:assessment.id,scenario_id:match.scenario_id,fingerprint,report},{onConflict:"fingerprint",ignoreDuplicates:true});
+      if(insertError) throw insertError;
+      const {data:stored,error:readError}=await supabase.from("opportunity_scenario_reports").select("id,report").eq("fingerprint",fingerprint).single();
+      if(readError) throw readError;
+      results.push(stored as {id:string;report:ScenarioReport});
+    }
+  }
+  return results;
+}
+async function prepareSelectedOutreach(id:string,requested?:string) {
+  const {data:lead,error}=await supabase.from("local_business_leads").select("*").eq("id",id).single();
+  if(error) throw error;
+  if(lead.archived_at || lead.status === "archived" || lead.status === "disqualified") throw new Error("Opportunity is not available for outreach.");
+  const {data:assessment,error:assessmentError}=await supabase.from("local_business_lead_assessments").select("*").eq("lead_id",id).order("assessed_at",{ascending:false}).limit(1).maybeSingle();
+  if(assessmentError) throw assessmentError;
+  if(!assessment || !assessmentIsCurrent(assessment.assessed_at,lead.enrichment_diagnostics)) throw new Error("Current assessment required.");
+  const {matches,templates}=await outreachOptions(id);
+  const template=selectTemplate(matches,templates,requested);
+  const reports=(await prepareScenarioReports(id,assessment,lead)).filter(r=>r.report.source_template?.id===template.id && template.scenario_keys.includes(r.report.scenario.key));
+  if(reports.length!==template.scenario_keys.length) throw new Error("Every selected scenario requires a report.");
+  const rendered=reportEmail(template,reports.map(r=>r.report),lead.business_name);
+  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,offer_id:template.offer_id,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
+}
+async function validateDraftSelection(id:string,draft:JsonObject): Promise<string | null> {
+  try {
+    const selection=draft.selection as JsonObject | null;
+    if(!selection?.report_ids) return "Regenerate this legacy draft with scenario reports and current approved offers.";
+    const {selection:current,rendered,template}=await prepareSelectedOutreach(id,String(selection.template_id));
+    if(canonicalJson(selection)!==canonicalJson(current)) return "Assessment, template or approved offer changed; regenerate and review.";
+    return validateEmailEdit(String(draft.subject??""),String(draft.body??""),rendered,(template as OutreachTemplate & {edit_phrases?:string[]}).edit_phrases);
+  } catch(error) {return String((error as Error).message);}
+}
+
+async function listOpportunities(view: OpportunityLifecycleView = "active"): Promise<Response> {
+  const [leadRes, draftRes, scenarioReportRes, analysisEventRes] = await Promise.all([
     supabase
       .from("local_business_leads")
-      .select("id, business_name, suburb, region, category, status, updated_at, enrichment_status, enrichment_diagnostics")
+      .select("id, business_name, suburb, region, category, status, updated_at, enrichment_status, enrichment_diagnostics, archived_at, archived_by, archive_reason")
       .order("updated_at", { ascending: false }),
     supabase
       .from("local_business_outreach_drafts")
       .select("lead_id, status, created_at")
       .order("created_at", { ascending: false }),
-    supabase.from("local_business_audit_reports").select("lead_id,assessment_id"),
+    supabase.from("opportunity_scenario_reports").select("lead_id,assessment_id"),
     supabase
       .from("opportunity_console_audit_log")
       .select("lead_id, metadata, created_at")
       .eq("action", "analysis_completed")
       .order("created_at", { ascending: false }),
   ]);
-  for (const result of [leadRes, draftRes, auditRes, analysisEventRes]) {
+  for (const result of [leadRes, draftRes, scenarioReportRes, analysisEventRes]) {
     if ((result as { error?: unknown }).error) {
       throw (result as { error: unknown }).error;
     }
@@ -3307,9 +3247,11 @@ async function listOpportunities(): Promise<Response> {
       created_at: string;
     }>,
   );
+  const {data:companyTags,error:companyTagsError}=await supabase.from("opportunity_company_scenarios").select("*");
+  if(companyTagsError) throw companyTagsError;
   const opportunities = (
     (leadRes.data ?? []) as Array<Record<string, unknown>>
-  ).map((lead) => {
+  ).filter((lead) => lifecycleMatches(lead.archived_at, view, lead.status)).map((lead) => {
     const analysisEvent = latestAnalysis.get(String(lead.id));
     const assessmentId = cleanText(analysisEvent?.metadata?.assessment_id, 80);
     const candidateAssessment = assessmentId
@@ -3318,10 +3260,14 @@ async function listOpportunities(): Promise<Response> {
     const assessment = candidateAssessment && assessmentIsCurrent(candidateAssessment.assessed_at, lead.enrichment_diagnostics) ? candidateAssessment : null;
     return {
       id: lead.id,
+      company_scenarios:(companyTags??[]).filter(match=>match.lead_id===lead.id),
       business_name: lead.business_name,
       location: lead.suburb ?? lead.region ?? null,
       industry: lead.category ?? null,
       pipeline_status: lead.status ?? null,
+      archived_at: lead.archived_at ?? null,
+      archived_by: lead.archived_by ?? null,
+      archive_reason: lead.archive_reason ?? null,
       enrichment_status: lead.enrichment_status ?? null,
       enrichment_ready: enrichmentReadiness(lead.enrichment_status, lead.enrichment_diagnostics).ready,
       enrichment_running: enrichmentReadiness(lead.enrichment_status, lead.enrichment_diagnostics).running,
@@ -3333,7 +3279,7 @@ async function listOpportunities(): Promise<Response> {
       recommended_outreach_angle:
         assessment?.recommended_outreach_angle ?? null,
       assessed_at: assessment?.assessed_at ?? null,
-      has_audit: !!assessment && (auditRes.data ?? []).some((report) => report.lead_id === lead.id && report.assessment_id === assessment.id),
+      has_scenario_report: !!assessment && (scenarioReportRes.data ?? []).some((report) => report.lead_id === lead.id && report.assessment_id === assessment.id),
       outreach_status: latestDrafts.get(String(lead.id))?.status ?? null,
       updated_at: lead.updated_at,
     };
@@ -3344,15 +3290,18 @@ async function listOpportunities(): Promise<Response> {
       parseNumber(a.opportunity_score, Number.NEGATIVE_INFINITY),
   );
   const { data: tags, error: tagError } = await supabase.from("opportunity_batch_members")
-    .select("lead_id,opportunity_batches(id,name)");
+    .select("lead_id,released_at,opportunity_batches(id,name,archived_at)");
   if (tagError) throw tagError;
-  return json({ opportunities: opportunities.map((opportunity) => ({
+  return json({ lifecycle_capabilities: LIFECYCLE_CAPABILITIES, opportunities: opportunities.map((opportunity) => ({
     ...opportunity,
-    batches: (tags ?? []).filter((tag) => tag.lead_id === opportunity.id).map((tag) => tag.opportunity_batches),
+    batches: (tags ?? []).filter((tag) => tag.lead_id === opportunity.id).map(projectBatchTag).filter(Boolean),
   })) });
 }
 
 async function getOpportunity(id: string): Promise<Response> {
+  const {data:claimRows,error:claimReadError}=await supabase.from("opportunity_outreach_send_claims").select("draft_id,state").eq("lead_id",id);
+  if(claimReadError) throw claimReadError;
+  const sendClaims=claimRows ?? [];
   const { data: lead, error: leadErr } = await supabase
     .from("local_business_leads")
     .select("*")
@@ -3430,28 +3379,36 @@ async function getOpportunity(id: string): Promise<Response> {
     : null;
 
   const { data: batchTags, error: batchTagsError } = await supabase.from("opportunity_batch_members")
-    .select("opportunity_batches(id,name)").eq("lead_id", id);
+    .select("released_at,opportunity_batches(id,name,archived_at)").eq("lead_id", id);
   if (batchTagsError) throw batchTagsError;
 
+  const scenarioReports=visibleAssessment ? await prepareScenarioReports(id,visibleAssessment as unknown as JsonObject,lead as JsonObject) : [];
+  const { data: gbpReportRows, error: gbpReportError } = await supabase.from('opportunity_scenario_reports').select('id,report').eq('lead_id', id);
+  if (gbpReportError) throw gbpReportError;
+  const gbpReports = (gbpReportRows ?? []).filter((row) => row.report?.gbp_commercial_snapshot && row.report?.source_assessment_id === visibleAssessment?.id);
   return json({
+    scenario_reports:[...scenarioReports, ...gbpReports],
     lead,
+    lifecycle_capabilities: LIFECYCLE_CAPABILITIES,
     latest_assessment: visibleAssessment,
     assessments: assessments.data ?? [],
     audit_report: visibleAudit,
     audit_reports: reports.data ?? [],
     events: events.data ?? [],
-    outreach_drafts: drafts.data ?? [],
+    outreach_drafts: (drafts.data ?? []).map(draft => ({...draft, send_state: sendClaims.find(claim => claim.draft_id === draft.id)?.state ?? null})),
     review_state,
     outcome_state,
     console_events: cEvents,
     visual_evidence: visualEvidence.data ?? [],
-    batches: (batchTags ?? []).map((tag) => tag.opportunity_batches),
+    batches: (batchTags ?? []).map(projectBatchTag).filter(Boolean),
+    company_scenarios:await companyMatches(id),
+    outreach_options:isOpportunityArchived(lead) ? [] : (await outreachOptions(id)).templates,
   });
 }
 
 // GET /opportunities/pipeline — outcome buckets + summary metrics (existing data only).
 async function pipelineView(): Promise<Response> {
-  const [listRes, draftsRes, eventsRes] = await Promise.all([
+  const [listRes, draftsRes, eventsRes, archivedRes] = await Promise.all([
     supabase
       .from("v_opportunity_list")
       .select("id, business_name, industry, opportunity_score, has_audit"),
@@ -3461,8 +3418,9 @@ async function pipelineView(): Promise<Response> {
       .select("lead_id, action, created_at")
       .in("action", Object.keys(OUTCOME_EVENT_TO_STATE))
       .order("created_at", { ascending: false }),
+    supabase.from("local_business_leads").select("id,archived_at,status"),
   ]);
-  for (const r of [listRes, draftsRes, eventsRes]) {
+  for (const r of [listRes, draftsRes, eventsRes, archivedRes]) {
     if ((r as { error?: unknown }).error) throw (r as { error: unknown }).error;
   }
   const leads = (listRes.data ?? []) as Array<Record<string, unknown>>;
@@ -3485,9 +3443,11 @@ async function pipelineView(): Promise<Response> {
     drafts.filter((d) => d.status === "sent").map((d) => d.lead_id),
   );
 
+  const archivedIds = new Set((archivedRes.data ?? []).filter(isOpportunityArchived).map((row) => row.id));
   const opportunities: Array<Record<string, unknown>> = [];
   for (const l of leads) {
     const id = l.id as string;
+    if (archivedIds.has(id)) continue;
     const outcome =
       latestOutcome.get(id) ?? (sentLeadIds.has(id) ? "sent" : null);
     if (!outcome) continue; // only sent+ opportunities appear on the pipeline
@@ -3559,7 +3519,7 @@ async function createOutreach(
 ): Promise<Response> {
   const { data: lead, error: leadErr } = await supabase
     .from("local_business_leads")
-    .select("id, business_name, email, website_url, category, suburb, region")
+    .select("id, business_name, email, website_url, category, suburb, region, enrichment_diagnostics")
     .eq("id", id)
     .maybeSingle();
   if (leadErr) throw leadErr;
@@ -3597,39 +3557,21 @@ async function createOutreach(
     );
   }
 
-  const { data: assessment } = await supabase
-    .from("local_business_lead_assessments")
-    .select("opportunity_score, recommended_outreach_angle")
-    .eq("lead_id", id)
-    .order("assessed_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const angle = (assessment?.recommended_outreach_angle ?? "")
-    .toString()
-    .trim();
-  const biz = (lead.business_name ?? "your business").toString();
-  const subject =
-    (payload.subject as string | undefined)?.trim() ||
-    `Quick opportunity audit for ${biz}`;
-  const body =
-    (payload.body as string | undefined)?.trim() ||
-    [
-      `Kia ora,`,
-      ``,
-      `We ran a quick online-visibility audit for ${biz}. ${angle ? angle + "." : "There are a few clear quick wins we can share."}`,
-      ``,
-      `Would you like the full audit summary — no obligation? Happy to walk you through the top three fixes.`,
-      ``,
-      `Ngā mihi,`,
-      `MGRNZ`,
-    ].join("\n");
+  let selection:JsonObject;
+  let rendered:ReturnType<typeof reportEmail>;
+  try {
+    const prepared=await prepareSelectedOutreach(id,typeof payload.template_id==="string"?payload.template_id:undefined);
+    selection=prepared.selection;
+    rendered=prepared.rendered;
+  } catch(error) {return json({error:"outreach_mapping_not_ready",detail:String((error as Error).message)},422);}
+  const {subject,body}=rendered;
 
   const { data: draft, error: insErr } = await supabase
     .from("local_business_outreach_drafts")
     .insert({
       lead_id: id,
       channel: "email",
+      selection,
       subject,
       body,
       status: "draft",
@@ -3646,9 +3588,108 @@ async function createOutreach(
       lead_id: id,
       draft_id: draft.id,
       actor: "operator-console",
-      metadata: { subject: draft.subject, channel: draft.channel },
+      metadata: { subject: draft.subject, channel: draft.channel, selection:draft.selection },
     });
   return json({ draft, audit_logged: !auditErr }, 201);
+}
+
+// Local draft preparation only. The release switch is deliberately absent:
+// GBP drafts can be reviewed but the send endpoint rejects them unconditionally.
+async function prepareGbpCommercial(id: string, payload: Record<string, unknown>): Promise<Response> {
+  if (Deno.env.get('GBP_COMMERCIAL_DRAFT_ENABLED') !== 'true') return json({ error: 'gbp_commercial_not_enabled' }, 409);
+  const qualified = qualifyGbp(payload);
+  if (!qualified.ok) return json({ error: qualified.reason }, 422);
+  const q = qualified.value;
+  const offerMap = GBP_OFFER_MAP[q.scenarioCode];
+  const [leadResult, candidate, reviewState, assessmentResult, draftResult, scenarioResult, templateResult] = await Promise.all([
+    supabase.from('local_business_leads').select('*').eq('id', id).maybeSingle(),
+    candidateForLead(id),
+    deriveReviewState(id),
+    supabase.from('local_business_lead_assessments').select('*').eq('lead_id', id).order('assessed_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('local_business_outreach_drafts').select('id,status,gbp_commercial_snapshot').eq('lead_id', id),
+    supabase.from('opportunity_scenarios').select('*').eq('slug', offerMap.slug).eq('version', 1).maybeSingle(),
+    supabase.from('opportunity_outreach_templates').select('*').eq('id', offerMap.templateId).maybeSingle(),
+  ]);
+  for (const result of [leadResult, assessmentResult, draftResult, scenarioResult, templateResult]) if (result.error) throw result.error;
+  const lead = leadResult.data;
+  if (!lead) return json({ error: 'not_found' }, 404);
+  if (reviewState !== 'contact_ready') return json({ error: 'contact_review_required' }, 409);
+  if (candidate && !classificationAllowsProgress(eligibilityClassification(candidate as JsonObject), candidate.eligibility_acknowledged === true)) return json({ error: 'outreach_not_commercially_eligible' }, 422);
+  if (q.scenarioCode === 'G02' && lead.google_maps_url !== q.evidenceUrl) return json({ error: 'profile_evidence_mismatch' }, 422);
+  if (q.scenarioCode === 'G01' && lead.google_maps_url && q.searchResult === 'no_match') return json({ error: 'known_profile_conflicts_with_no_match' }, 422);
+  if (draftResult.data?.length) return json({ error: 'outreach_already_exists' }, 409);
+  const assessment = assessmentResult.data;
+  if (!assessment || !assessmentIsCurrent(assessment.assessed_at, lead.enrichment_diagnostics)) return json({ error: 'current_assessment_required' }, 409);
+  const scenario = scenarioResult.data;
+  const template = templateResult.data;
+  if (!scenario || scenario.status !== 'draft' || scenario.commercial_config?.offer_product_id !== offerMap.productId || scenario.commercial_config?.destination !== new URL(offerMap.destination).pathname || scenario.commercial_config?.plans?.[qualified.band] !== offerMap.plans[qualified.band] || scenario.outreach_config?.message_template !== offerMap.template) return json({ error: 'gbp_scenario_config_unavailable' }, 409);
+  if (!template || template.enabled !== false || template.version !== 1 || template.name !== offerMap.template || template.offer_id !== offerMap.productId || template.destination !== offerMap.destination || canonicalJson(template.scenario_keys) !== canonicalJson([q.scenarioCode])) return json({ error: 'gbp_template_config_unavailable' }, 409);
+
+  let snapshot: GbpCommercialSnapshot;
+  try {
+    const price = await resolveGbpBillingPrice(q.scenarioCode, qualified.band);
+    snapshot = buildGbpSnapshot(q, qualified.band, price);
+  } catch (error) {
+    return json({ error: 'gbp_billing_offer_unavailable', detail: String((error as Error).message) }, 409);
+  }
+  const message = gbpOutreach(String(lead.business_name ?? 'your business'), q, snapshot);
+  const offer: Offer = {
+    id: snapshot.planId, name: offerMap.title, description: snapshot.description,
+    components: [...snapshot.inclusions],
+    price: { kind: 'fixed', amountMinor: snapshot.amountMinor, currency: snapshot.currency, taxTreatment: snapshot.taxTreatment, taxRate: snapshot.taxRate },
+    price_version: snapshot.priceVersionId, price_text: snapshot.commercialLine,
+    gst: 'GST exclusive (15%)', terms: [...snapshot.terms, `Exclusions: ${snapshot.exclusions}`],
+    destination: snapshot.destination, source: 'Billing Kernel current price',
+  };
+  const match: ScenarioMatch = {
+    scenario_key: q.scenarioCode, scenario_id: scenario.id, scenario_version: scenario.version,
+    state: 'confirmed', assessed_at: q.observedAt!, score: null,
+    evidence: [{ key: q.scenarioCode === 'G01' ? 'gbp_search' : 'gbp_profile', description: gbpFinding(q), source: q.evidenceUrl ?? `Documented Google Maps search: ${q.searchQuery}, ${q.searchLocation}`, value: q, score: 100, supported: true }],
+  };
+  const report = { ...buildScenarioReport({ lead, assessment, scenario, match, template: template as OutreachTemplate, offer, blocked: null }), gbp_commercial_snapshot: snapshot, gbp_qualification: q };
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalJson(report)));
+  const fingerprint = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const { error: reportError } = await supabase.from('opportunity_scenario_reports').upsert({ lead_id: id, assessment_id: assessment.id, scenario_id: scenario.id, fingerprint, report }, { onConflict: 'fingerprint', ignoreDuplicates: true });
+  if (reportError) throw reportError;
+  const { data: stored, error: readError } = await supabase.from('opportunity_scenario_reports').select('id,report').eq('fingerprint', fingerprint).single();
+  if (readError || !stored) throw readError ?? new Error('gbp_report_unavailable');
+  const selection = { template_id: template.id, template_version: template.version, scenario_keys: [q.scenarioCode], offer_id: offerMap.productId, destination: snapshot.destination, report_ids: [stored.id], reports: [report], assessment_id: assessment.id, findings: match.evidence };
+  const { data: draft, error: insertError } = await supabase.from('local_business_outreach_drafts').insert({ lead_id: id, channel: 'email', subject: message.subject, body: message.body, status: 'draft', created_by: 'operator-console', scenario_id: scenario.id, scenario_version: scenario.version, selection, gbp_commercial_snapshot: snapshot }).select('*').single();
+  if (insertError) return json({ error: 'gbp_draft_create_failed', detail: insertError.message }, 409);
+  await supabase.from('opportunity_console_audit_log').insert({ action: 'outreach_draft_created', lead_id: id, draft_id: draft.id, actor: 'operator-console', metadata: { scenario_code: q.scenarioCode, plan_id: snapshot.planId, price_version_id: snapshot.priceVersionId } });
+  return json({ draft, commercial_snapshot: snapshot, report_id: stored.id }, 201);
+}
+
+async function validateGbpDraft(id: string, draft: JsonObject): Promise<string | null> {
+  try {
+    const snapshot = draft.gbp_commercial_snapshot as GbpCommercialSnapshot;
+    const selection = draft.selection as JsonObject | null;
+    const offer = GBP_OFFER_MAP[snapshot.scenarioCode];
+    if (!offer || !selection || selection.template_id !== offer.templateId || selection.offer_id !== offer.productId || selection.destination !== offer.destination || canonicalJson(selection.scenario_keys) !== canonicalJson([snapshot.scenarioCode])) return 'GBP template or destination changed.';
+    const { data: template } = await supabase.from('opportunity_outreach_templates').select('name,enabled,offer_id,destination').eq('id', offer.templateId).maybeSingle();
+    if (!template || template.enabled !== false || template.name !== offer.template || template.offer_id !== offer.productId || template.destination !== offer.destination) return 'GBP template was withdrawn or changed.';
+    const reportIds = Array.isArray(selection.report_ids) ? selection.report_ids : [];
+    const reportId = reportIds[0];
+    if (typeof reportId !== 'string' || reportIds.length !== 1) return 'GBP Scenario Report is missing.';
+    const { data: stored, error } = await supabase.from('opportunity_scenario_reports').select('report').eq('id', reportId).eq('lead_id', id).maybeSingle();
+    if (error || !stored?.report) return 'GBP Scenario Report is unavailable.';
+    const report = stored.report as JsonObject;
+    if (!Array.isArray(selection.reports) || selection.reports.length !== 1 || canonicalJson(selection.reports[0]) !== canonicalJson(report)) return 'Reviewed GBP Scenario Report changed.';
+    const q = report.gbp_qualification;
+    const qualified = qualifyGbp(q);
+    if (!qualified.ok || qualified.value.scenarioCode !== snapshot.scenarioCode || qualified.band !== snapshot.serviceBand) return 'GBP qualification changed.';
+    const reportOffer = report.offer as JsonObject | null;
+    if (canonicalJson(report.gbp_commercial_snapshot) !== canonicalJson(snapshot) || reportOffer?.id !== snapshot.planId || reportOffer?.description !== snapshot.description || canonicalJson(reportOffer?.components) !== canonicalJson(snapshot.inclusions) || canonicalJson(reportOffer?.terms) !== canonicalJson([...snapshot.terms, `Exclusions: ${snapshot.exclusions}`]) || reportOffer?.price_text !== snapshot.commercialLine || reportOffer?.price_version !== snapshot.priceVersionId || reportOffer?.destination !== snapshot.destination) return 'GBP report and commercial snapshot differ.';
+    const businessName = String((report.business as JsonObject | null)?.name ?? '');
+    const expected = gbpOutreach(businessName, qualified.value, snapshot);
+    if (draft.subject !== expected.subject || draft.body !== expected.body) return 'GBP report and email differ.';
+    const current = await resolveGbpBillingPrice(snapshot.scenarioCode, snapshot.serviceBand);
+    const rebuilt = buildGbpSnapshot(qualified.value, qualified.band, current);
+    if (canonicalJson(rebuilt) !== canonicalJson(snapshot)) return 'GBP price or approved scope changed.';
+    return null;
+  } catch (error) {
+    return String((error as Error).message);
+  }
 }
 
 // PATCH /:id/outreach/:draftId — edit/save or approve a draft. NEVER sends.
@@ -3657,6 +3698,16 @@ async function updateOutreach(
   draftId: string,
   payload: Record<string, unknown>,
 ): Promise<Response> {
+  const {data:existing,error:existingError}=await supabase.from("local_business_outreach_drafts").select("*").eq("id",draftId).eq("lead_id",id).maybeSingle();
+  if(existingError) throw existingError;
+  if(!existing) return json({error:"not_found"},404);
+  if(existing.status==="sent" || existing.sent_at) return json({error:"already_sent"},409);
+  if(existing.gbp_commercial_snapshot && (payload.body !== undefined || payload.subject !== undefined)) return json({error:"gbp_commercial_copy_locked"},409);
+  const edited=(typeof payload.subject==="string" && payload.subject!==existing.subject) || (typeof payload.body==="string" && payload.body!==existing.body);
+  if(edited) {
+    const editError=await validateDraftSelection(id,{...existing,...(typeof payload.subject==="string"?{subject:payload.subject}:{}),...(typeof payload.body==="string"?{body:payload.body}:{})});
+    if(editError) return json({error:"unsupported_email_edit",detail:editError},422);
+  }
   const fields: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
@@ -3676,17 +3727,26 @@ async function updateOutreach(
     );
   }
   if (status === "approved") {
+    if(edited) return json({error:"save_before_approval"},422);
+    if(payload.reviewed!==true) return json({error:"manual_review_required"},422);
+    const selectionError=existing.gbp_commercial_snapshot ? await validateGbpDraft(id,existing) : await validateDraftSelection(id,existing);
+    if(selectionError) return json({error:"outreach_mapping_not_ready",detail:selectionError},422);
+    if(typeof payload.expected_updated_at !== "string" || payload.expected_updated_at !== existing.updated_at) return json({error:"reviewed_draft_changed",detail:"Reload and review the latest saved email before approving."},409);
     fields.status = "approved";
     fields.approved_by = "operator-console";
     fields.approved_at = new Date().toISOString();
     action = "outreach_draft_approved";
-  } else if (status === "draft") {
+  } else if (status === "draft" || edited) {
+    fields.approved_at = null;
+    fields.approved_by = null;
     fields.status = "draft";
   }
 
   const { data: draft, error } = await supabase
     .from("local_business_outreach_drafts")
     .update(fields)
+    .eq("updated_at", existing.updated_at)
+    .eq("status", existing.status)
     .eq("id", draftId)
     .eq("lead_id", id)
     .select("*")
@@ -3699,13 +3759,24 @@ async function updateOutreach(
     lead_id: id,
     draft_id: draftId,
     actor: "operator-console",
-    metadata: { status: draft.status },
+    metadata: { status: draft.status, selection:draft.selection },
   });
   return json({ draft });
 }
 
 // POST /:id/outreach/:draftId/send — send an APPROVED draft via internal SMTP. Operator-gated, no auto-send.
-async function sendOutreach(id: string, draftId: string): Promise<Response> {
+async function sendOutreach(id: string, draftId: string, payload: JsonObject): Promise<Response> {
+  if(payload.confirm_send!==true) return json({error:"manual_send_required"},422);
+  const { data: draft, error: dErr } = await supabase
+    .from("local_business_outreach_drafts")
+    .select("*")
+    .eq("id", draftId)
+    .eq("lead_id", id)
+    .maybeSingle();
+  if (dErr) throw dErr;
+  if (!draft) return json({ error: "not_found" }, 404);
+  if (draft.gbp_commercial_snapshot) return json({ error: 'gbp_commercial_send_not_released' }, 409);
+
   let smtp: SmtpConfig;
   try {
     smtp = getSmtpConfig();
@@ -3719,15 +3790,6 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
   const LIVE =
     (Deno.env.get("OUTREACH_SEND_MODE") ?? "test").toLowerCase() === "live";
 
-  const { data: draft, error: dErr } = await supabase
-    .from("local_business_outreach_drafts")
-    .select("*")
-    .eq("id", draftId)
-    .eq("lead_id", id)
-    .maybeSingle();
-  if (dErr) throw dErr;
-  if (!draft) return json({ error: "not_found" }, 404);
-
   if (draft.status === "sent" || draft.sent_at)
     return json({ error: "already_sent", sent_at: draft.sent_at }, 409);
   if (draft.status !== "approved") {
@@ -3740,11 +3802,18 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
     );
   }
 
+  const selectionError=await validateDraftSelection(id,draft);
+  if(selectionError) return json({error:"outreach_mapping_not_ready",detail:selectionError},422);
+  const candidate=await candidateForLead(id);
+  if(candidate && !classificationAllowsProgress(eligibilityClassification(candidate as JsonObject),candidate.eligibility_acknowledged===true)) return json({error:"outreach_not_commercially_eligible"},422);
   const { data: lead } = await supabase
     .from("local_business_leads")
-    .select("business_name, email")
+    .select("business_name, email, phone, status")
     .eq("id", id)
     .maybeSingle();
+  if(!lead || lead.status==="disqualified") return json({error:"outreach_not_commercially_eligible"},422);
+  const {data:eligibility,error:eligibilityError}=await supabase.rpc("check_prospect_eligibility",{p_business_name:lead.business_name,p_email:lead.email,p_phone:lead.phone});
+  if(eligibilityError || !classificationAllowsProgress(String(eligibility?.classification??"unknown"),candidate?.eligibility_acknowledged===true)) return json({error:"outreach_not_commercially_eligible",detail:"Current Cockpit eligibility could not be confirmed."},422);
   const prospectEmail = (lead?.email ?? "").trim();
 
   const recipient = OVERRIDE_TO || (LIVE ? prospectEmail : "");
@@ -3775,47 +3844,26 @@ async function sendOutreach(id: string, draftId: string): Promise<Response> {
       ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
       : "") + htmlFromBody(String(draft.body ?? ""));
 
+  const {error:claimError}=await supabase.rpc("claim_scenario_outreach_send",{p_draft_id:draftId,p_lead_id:id,p_subject:draft.subject,p_body:draft.body,p_selection:draft.selection,p_updated_at:draft.updated_at,p_expected_email:lead.email,p_send_metadata:{recipient,overridden,transport:"smtp",live:LIVE,selection:draft.selection}});
+  if(claimError) return json({error:"send_claim_exists",detail:"A prior send attempt requires explicit reconciliation."},409);
   try {
     await sendSmtpEmail(smtp, { subject, text, html }, draftId, recipient);
   } catch (e) {
-    await supabase.from("opportunity_console_audit_log").insert({
-      action: "outreach_send_failed",
-      lead_id: id,
-      draft_id: draftId,
-      actor: "operator-console",
-      metadata: {
-        recipient,
-        error: String((e as Error).message).slice(0, 300),
-      },
-    });
+    await supabase.rpc("complete_scenario_outreach_send",{p_lead_id:id,p_draft_id:draftId,p_sent:false,p_detail:String((e as Error).message).slice(0,300)});
     return json(
       {
         error: "send_failed",
         detail: String((e as Error).message).slice(0, 300),
-        retryable: true,
+        retryable: false,
+        reconciliation_required:true,
       },
       502,
     );
   }
 
-  const { data: updated, error: uErr } = await supabase
-    .from("local_business_outreach_drafts")
-    .update({ status: "sent", sent_at: new Date().toISOString() })
-    .eq("id", draftId)
-    .eq("lead_id", id)
-    .select("*")
-    .single();
-  if (uErr) throw uErr;
-
-  await supabase.from("opportunity_console_audit_log").insert({
-    action: "outreach_sent",
-    lead_id: id,
-    draft_id: draftId,
-    actor: "operator-console",
-    metadata: { recipient, overridden, transport: "smtp", live: LIVE },
-  });
-
-  return json({ draft: updated, sent_to: recipient, overridden });
+  const {data:completion,error:completionError}=await supabase.rpc("complete_scenario_outreach_send",{p_lead_id:id,p_draft_id:draftId,p_sent:true,p_detail:null});
+  if(completionError) return json({error:"send_completion_unconfirmed",detail:"Delivery may have completed. Reconcile the retained send claim; do not retry.",reconciliation_required:true},502);
+  return json({ draft: completion.draft, sent_to: recipient, overridden });
 }
 
 async function setReview(
@@ -3923,21 +3971,25 @@ async function createOpportunityBatch(payload: JsonObject): Promise<Response> {
   const { data, error } = await supabase.rpc("create_opportunity_batch", {
     p_batch_id: payload.id, p_name: name, p_lead_ids: ids, p_record_filter: recordFilter,
   });
-  if (error) return json({ error: "batch_creation_failed", detail: error.message }, 409);
+  if (error) {
+    const {data:memberships,error:membershipError}=await supabase.from("opportunity_batch_members").select("lead_id,opportunity_batches(id,name)").in("lead_id",ids).is("released_at",null);
+    if(membershipError) throw membershipError;
+    return json({ error: "batch_creation_failed", detail: error.message, existing_memberships:memberships??[] }, 409);
+  }
   return json({ batch: data }, 201);
 }
 
 async function getOpportunityBatch(id: string): Promise<Response> {
   const [{ data: batch, error }, { data: members, error: memberError }] = await Promise.all([
     supabase.from("opportunity_batches").select("*").eq("id", id).maybeSingle(),
-    supabase.from("opportunity_batch_members").select("lead_id").eq("batch_id", id),
+    supabase.from("opportunity_batch_members").select("lead_id,released_at").eq("batch_id", id),
   ]);
   if (error || memberError) throw error ?? memberError;
   if (!batch) return json({ error: "not_found" }, 404);
-  const response = await listOpportunities();
+  const response = await listOpportunities("all");
   const list = await response.json();
   const memberIds = new Set((members ?? []).map((member) => member.lead_id));
-  return json({ batch, opportunities: list.opportunities.filter((row: { id: string }) => memberIds.has(row.id)) });
+  return json({batch,opportunities:list.opportunities.filter((row:{id:string})=>memberIds.has(row.id)).map((row:{id:string})=>({...row,batch_member_active:!batch.archived_at && !(members ?? []).find(m=>m.lead_id===row.id)?.released_at}))});
 }
 
 async function updateOpportunityBatch(id: string, payload: JsonObject): Promise<Response> {
@@ -4115,6 +4167,30 @@ async function requestVisualInspection(
   return json({ inspection: body }, response.status);
 }
 
+async function requireActiveOpportunity(id: string): Promise<Response | null> {
+  const { data, error } = await supabase.from("local_business_leads").select("id,archived_at,status").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!data) return json({ error: "not_found" }, 404);
+  return isOpportunityArchived(data) ? json({ error: "opportunity_archived", detail: "Restore this opportunity before starting or changing operational work." }, 409) : null;
+}
+
+async function setOpportunityLifecycle(id: string, archived: boolean, payload: unknown): Promise<Response> {
+  const input = validateLifecyclePayload(payload);
+  if (!input.valid) return json({ error: "confirmation_required", detail: "Confirm the lifecycle action explicitly; reason must be at most 500 characters." }, 400);
+  const { data, error } = await supabase.rpc("set_opportunity_archived", { p_lead_id: id, p_archived: archived, p_reason: input.reason });
+  if (error) {
+    const code = ["enrichment_running", "approved_outreach_conflict", "opportunity_archived", "send_in_progress", "legacy_archive_review_required"].find(value => error.message.includes(value));
+    if (code) return json({ error: code, detail: code === "legacy_archive_review_required" ? "Legacy archive restoration requires an owner decision; no prior disposition will be guessed." : code === "send_in_progress" ? "Reconcile the protected send claim before archiving." : code === "approved_outreach_conflict" ? "Resolve approved outreach before archiving. An approved draft may be sending." : "Wait for enrichment or other operational work to finish before archiving." }, 409);
+    throw error;
+  }
+  if (!data || !data.ok) return json({ error: data?.error ?? "lifecycle_update_failed" }, data?.error === "not_found" ? 404 : 500);
+  return json(data);
+}
+
+function denyPermanentOpportunityDeletion(): Response {
+  return json({ error: "permanent_deletion_unavailable", detail: PERMANENT_DELETION_UNAVAILABLE }, 403);
+}
+
 // ---- Router -----------------------------------------------------------------
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -4140,15 +4216,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (!authorized(req)) return json({ error: "unauthorized" }, 401);
 
   try {
+    if(parts.length===2 && parts[1]==="batch-membership" && req.method==="POST") return await changeBatchMembership(parts[0],await req.json());
     if (parts[0] === "batches") {
+      if(req.method==="POST" && parts.length===3 && parts[2]==="archive") return await archiveBatch(parts[1]);
       if (req.method === "GET" && parts.length === 1) return await listOpportunityBatches();
       if (req.method === "POST" && parts.length === 1) return await createOpportunityBatch(await req.json());
       if (req.method === "GET" && parts.length === 2) return await getOpportunityBatch(parts[1]);
       if (req.method === "PATCH" && parts.length === 2) return await updateOpportunityBatch(parts[1], await req.json());
       return json({ error: "not_found" }, 404);
     }
-    if (req.method === "GET" && parts.length === 0)
-      return await listOpportunities();
+    if (req.method === "GET" && parts.length === 0) {
+      const view = lifecycleView(url.searchParams.get("lifecycle"));
+      return view ? await listOpportunities(view) : json({ error: "invalid_lifecycle_view" }, 400);
+    }
     if (req.method === "GET" && parts.length === 1 && parts[0] === "pipeline")
       return await pipelineView();
     if (
@@ -4216,11 +4296,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       parts[2] === "candidates" &&
       parts[3] === "audit"
     ) {
-      return await processCandidateBatch(
-        parts[1],
-        await req.json().catch(() => ({})),
-        "audit",
-      );
+      return json({error:"audit_retired"},410);
     }
     if (
       req.method === "GET" &&
@@ -4302,6 +4378,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
         await req.json().catch(() => ({})),
       );
     }
+    const recordPath = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(parts[0] ?? "");
+    if (recordPath && req.method === "DELETE" && parts.length === 1) return denyPermanentOpportunityDeletion();
+    if (recordPath && req.method === "POST" && parts.length === 2 && ["archive", "restore"].includes(parts[1])) {
+      return await setOpportunityLifecycle(parts[0], parts[1] === "archive", await req.json().catch(() => null));
+    }
+    if (recordPath && ["POST", "PATCH"].includes(req.method)) {
+      const blocked = await requireActiveOpportunity(parts[0]);
+      if (blocked) return blocked;
+    }
     if (req.method === "GET" && parts.length === 1)
       return await getOpportunity(parts[0]);
     if (req.method === "PATCH" && parts.length === 1) {
@@ -4321,12 +4406,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       );
     }
     if (req.method === "POST" && parts.length === 2 && parts[1] === "audit") {
-      return await singleIntelligenceAction(
-        parts[0],
-        await req.json().catch(() => ({})),
-        "audit",
-      );
+      return json({error:"audit_retired",detail:"Scenario reports are prepared automatically from assessments."},410);
     }
+
     if (
       req.method === "POST" &&
       parts.length === 2 &&
@@ -4334,13 +4416,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
     ) {
       return await createOutreach(parts[0], await req.json().catch(() => ({})));
     }
+    if (req.method === 'POST' && parts.length === 3 && parts[1] === 'gbp-commercial' && parts[2] === 'prepare') {
+      return await prepareGbpCommercial(parts[0], await req.json().catch(() => ({})));
+    }
     if (
       req.method === "POST" &&
       parts.length === 4 &&
       parts[1] === "outreach" &&
       parts[3] === "send"
     ) {
-      return await sendOutreach(parts[0], parts[2]);
+      return await sendOutreach(parts[0], parts[2], await req.json());
     }
     if (
       req.method === "PATCH" &&

@@ -1,3 +1,4 @@
+import { isOpportunityArchived } from "../_shared/opportunityLifecycle.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -3021,6 +3022,7 @@ export async function handler(req: Request) {
     const resolved = await resolveLead(supabase, body);
     leadId = resolved.leadId;
     businessName = resolved.businessName;
+    if (isOpportunityArchived(resolved.lead)) return jsonResponse({ ok: false, error: "opportunity_archived", lead_id: leadId }, 409);
     existingDiagnostics = resolved.lead.enrichment_diagnostics;
 
     // ── Claim: never enrich the same lead concurrently ─────────────────────
@@ -3077,13 +3079,17 @@ export async function handler(req: Request) {
     // Persist the run record BEFORE any provider work so an invocation that dies
     // mid-flight is still identifiable as stale (queue_requested_at plus the
     // execution start) and can be reclaimed without waiting for this code to run.
-    await supabase
+    const { error: claimWriteError } = await supabase
       .from("local_business_leads")
       .update({
         enrichment_status: "enriching",
         enrichment_diagnostics: buildDiagnostics({}),
       })
       .eq("id", leadId);
+    if (claimWriteError) {
+      if (claimWriteError.message.includes("opportunity_archived")) return jsonResponse({ ok: false, error: "opportunity_archived", lead_id: leadId }, 409);
+      throw claimWriteError;
+    }
 
     const startedPayload = {
       lead_id: leadId,

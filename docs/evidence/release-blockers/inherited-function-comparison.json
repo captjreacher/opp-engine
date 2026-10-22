@@ -1,0 +1,27 @@
+[
+  {
+    "function": "check_prospect_eligibility",
+    "arguments": "p_business_name text, p_email text, p_phone text",
+    "matches": true
+  },
+  {
+    "function": "opportunity_apply_default_output_scenario",
+    "arguments": "",
+    "matches": true
+  },
+  {
+    "function": "opportunity_attempt_cockpit_handoff",
+    "arguments": "p_draft_id uuid, p_send_metadata jsonb",
+    "matches": true
+  },
+  {
+    "function": "opportunity_import_discovery_candidate",
+    "arguments": "p_candidate_id uuid",
+    "matches": true
+  },
+  {
+    "function": "queue_local_business_enrichment",
+    "arguments": "p_lead_id uuid, p_project_url text, p_operator_token text, p_retry boolean",
+    "matches": true
+  }
+]

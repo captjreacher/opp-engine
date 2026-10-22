@@ -15,12 +15,12 @@ const budgetSource = readFileSync(
 const queueMigration = readFileSync(
   resolve("supabase/migrations/20260822171709_queue_opportunity_enrichment_pg_net.sql"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 const recoveryMigration = readFileSync(
   resolve("supabase/migrations/20260915120000_opportunity_enrichment_budget_recovery.sql"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 const uiSource = readFileSync(resolve("src/routes/OpportunityDetail.tsx"), "utf8");
 

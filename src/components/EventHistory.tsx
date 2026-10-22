@@ -1,6 +1,8 @@
 import type { ConsoleEvent } from "../lib/types";
 
 const ACTION_LABEL: Record<string, string> = {
+  opportunity_archived: "Opportunity archived",
+  opportunity_restored: "Opportunity restored",
   opportunity_review_started: "Review started",
   opportunity_review_completed: "Review completed",
   opportunity_contact_ready: "Marked contact ready",

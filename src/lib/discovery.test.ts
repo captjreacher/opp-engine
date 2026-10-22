@@ -147,7 +147,7 @@ describe("discovery form validation", () => {
   });
 
   it("identifies every active run state", () => {
-    for (const status of ["queued", "discovering", "enriching", "scoring", "auditing"]) expect(isActiveDiscoveryStatus(status)).toBe(true);
+    for (const status of ["queued", "discovering", "enriching", "scoring"]) expect(isActiveDiscoveryStatus(status)).toBe(true);
     for (const status of ["completed", "partially_completed", "failed", "cancelled"]) expect(isActiveDiscoveryStatus(status)).toBe(false);
   });
 });
