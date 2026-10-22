@@ -145,24 +145,27 @@ This section supersedes the older blocker status above for the authorised GBP re
 
 | Blocker | Evidence | Pass/fail | Remaining action | Responsible party |
 | --- | --- | --- | --- | --- |
-| Final legal approval | The six paragraphs below match byte-for-byte between Opportunity Engine `GBP_TERMS` and MaximisedAI PR #19. The approval pack says the owner supplied the wording separately and that it remains subject to final legal review. No written legal approval was found in the supplied documents, PR reviews or PR comments. | **BLOCKED — technical comparison passed; legal approval absent** | Legal counsel or the owner must record explicit written approval of this exact text and document reference. | Owner / legal counsel |
+| Independent legal review | Owner business approval for the revised seven paragraphs below was recorded on 22 October 2026 for GBP Setup and GBP Improvement. No independent legal review evidence has been provided. | **BLOCKED — business wording approved; independent legal review not evidenced** | Obtain and record independent legal review of this exact text before release. | Owner / legal counsel |
 | Production Billing authentication | Read-only GitHub Actions run `39762857733` used the existing protected production URL/key secrets at site PR head `5cce90c`. At `2026-10-22T10:24:53.143Z`, authenticated product, plan and current-price reads for all 12 existing approved live offers succeeded. The tested base was `https://billing-api.maximisedai.com/api/v1`; sanitized paths were `/catalogue/plans/{planId}`, `/catalogue/products/{productId}` and `/catalogue/plans/{planId}/prices/current`. The run and artifact contain no credential. | **PASS** | Repeat after Billing deployment and before GBP publication, reading the four GBP plans while they are still unpublished, then again after publication. | Release engineer |
 | Database recovery readiness | Authenticated Supabase dashboard inspection for production project `mgrnz-web` (`jqfodlzcsgfocyuawzyx`) shows the organization/project on the **Free** plan. Scheduled Backups states that Free does not include project backups. Point in Time states PITR is a Pro add-on. Most recent backup: **none available**. PITR: **disabled**, so retention and a recoverable timestamp are absent. No restore was started. | **FAIL** | Before migration, provide and verify a recoverable backup or enable an owner-approved scheduled-backup/PITR facility, then record the backup ID/time and authorized recovery operator. | Owner / Supabase project administrator |
 | Integrated staging rehearsal | A coordinated isolated rehearsal used disposable PostgreSQL 17 database `opp_release_test_gbp_20261022`, fixture Billing/Cockpit, the existing refusing-SMTP harness and prior unchanged component evidence. Fresh targeted Opportunity Engine checks: **59 passed**; fresh PostgreSQL migration/locking checks: **11 passed**. Billing PR #52 focused evidence remains **150 passed**; website PR #19 fixture build remains **30 routes built** and current PR checks are green. | **PASS** | Preserve the evidence and rerun only if a release head or environment contract changes. | Release engineer |
 | Production migration preflight | Read-only production inspection at `2026-10-22T10:32:03.004053Z` found 3 batches with 25 members and zero approved-unsent, sending, pending-review or sent drafts. The latest applied migration is `20261016010631_content_cockpit_read_contract`; none of the six release tables/columns checked is present. A linked `supabase db push --include-all --dry-run` stopped before plan generation because the checkout lacks numerous already-applied production migration files. No repair command was run. | **FAIL** | Reconcile the complete production migration history into an immutable release checkout and obtain a clean dry run. During the separately authorised window, quiesce the three batches and operator sending before applying the six migrations. | Database release engineer / Opportunity Engine operator |
 
-### Exact cancellation and refund wording awaiting legal sign-off
+### Approved GBP payment and cancellation wording
 
-Document references: owner-supplied wording recorded by the implementation request; [owner-approval.md](gbp-commercial/owner-approval.md) states that it is subject to final legal review; executable copy at `supabase/functions/_shared/gbpCommercial.ts:25`; page copy at MaximisedAI PR #19 `src/data/gbp-offers.js`.
+**Owner business approval:** 22 October 2026. **Scope:** GBP Setup and GBP Improvement. **Status:** Approved business wording; independent legal review not yet evidenced. Document references: [owner-approval.md](gbp-commercial/owner-approval.md), Billing PR #52 `docs/gbp-commercial-terms.md`, executable copy at `supabase/functions/_shared/gbpCommercial.ts`, and page copy at MaximisedAI PR #19 `src/data/gbp-offers.js`.
 
-1. Payment is required in full before work begins.
-2. You may cancel your order before work commences and receive a full refund, except for any third-party costs that were clearly disclosed and expressly agreed to as non-refundable before purchase.
-3. If you cancel after work has commenced, we may charge a reasonable amount for work already completed and any agreed, non-recoverable third-party costs. Any remaining prepaid balance will be refunded.
-4. Where we are unable to complete the agreed services, we will discuss an appropriate remedy, including a refund where applicable.
-5. Nothing in these terms limits your rights under the New Zealand Consumer Guarantees Act 1993 or other applicable consumer protection legislation.
-6. Google Business Profile verification, approval and processing times are controlled by Google and cannot be guaranteed.
+1. Payment is required in full before work begins, unless explicitly agreed otherwise in writing.
+2. You may cancel your order before work begins. We will refund the amount paid, less any reasonable costs already incurred in preparing or arranging the service and any third-party costs clearly disclosed and expressly agreed to as non-refundable before purchase.
+3. If you cancel after work has commenced, we may deduct reasonable charges for work already completed and any agreed, non-recoverable third-party costs. Any remaining prepaid balance will be refunded.
+4. Where a refund is due, we will process it within seven calendar days of confirming the refund amount. The time taken for funds to appear in your account may depend on your payment provider.
+5. Where we are unable to complete the agreed services, we will discuss an appropriate remedy, including a refund where applicable.
+6. Nothing in these terms limits your rights under the New Zealand Consumer Guarantees Act 1993 or other applicable consumer protection legislation.
+7. Google controls Business Profile verification, approval, suspension decisions and processing times. We cannot guarantee approval, verification or continued listing availability. We will, however, carry out the agreed services with reasonable care and skill.
 
-**Legal status: PENDING.** Matching implementation text proves consistency; it does not constitute legal approval.
+**Independent legal review: NOT EVIDENCED.** Matching implementation text proves consistency; it does not constitute legal sign-off.
+
+On 23 October 2026, the seven paragraphs were checked for exact equality across Billing PR #52 documentation, the MaximisedAI PR #19 source and both built GBP pages, Opportunity Engine PR #19 snapshot source, and this release record. The website suite passed 496/496 tests and its Billing fixture build generated both GBP pages. Opportunity Engine's focused GBP commercial test passed 5/5, its full suite passed 417 tests with 23 skipped, its production build passed, and Deno checked the opportunities Edge Function. Billing's focused catalogue seed suite passed 26/26. These are wording and build checks; they do not close the independent legal review, recovery or migration blockers.
 
 ### Staging stage results
 
@@ -194,6 +197,6 @@ The migrations are additive, so application rollback retains new tables, columns
 
 - Technical: production has no scheduled backup or PITR recovery point.
 - Technical: the release checkout cannot produce a migration dry-run plan until its history is reconciled with production.
-- External approval: explicit written legal sign-off for the six paragraphs is absent.
+- External approval: independent legal review evidence for the owner-approved seven paragraphs is absent.
 
 The production Billing reader and isolated integrated rehearsal are closed. The release is **not yet READY FOR OWNER RELEASE CONFIRMATION**.

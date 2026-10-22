@@ -1,6 +1,6 @@
 # GBP commercial offers — owner approval pack
 
-> **Implementation authorization received 22 October 2026.** The owner approved the two packages, four tier prices, scope and proposed terms for draft/local implementation only. Production activation, deployment, catalogue publication, payment activation and outreach remain unauthorized. The owner supplied payment and cancellation wording separately; it is reproduced in the local page drafts subject to final legal review. The implementation request supersedes the proposed landing paths below with `/products/gbp-setup/` and `/products/gbp-improvement/`.
+> **Owner business approval recorded 22 October 2026.** The owner approved the two packages, four tier prices, scope and the revised seven-paragraph payment and cancellation wording for GBP Setup and GBP Improvement. Independent legal review of that wording is not yet evidenced. Production activation, deployment, catalogue publication, payment activation and outreach remain unauthorized. The exact approved wording is recorded in [the release blocker review](../release-blocker-review.md#approved-gbp-payment-and-cancellation-wording). The implementation request supersedes the proposed landing paths below with `/products/gbp-setup/` and `/products/gbp-improvement/`.
 
 **Status:** proposal for owner decision, 22 October 2026. No offer in this document is approved, published or sendable. Amounts and scope below are proposed, not a statement of the live Billing catalogue.
 
@@ -58,7 +58,7 @@ Google determines available verification methods and may require additional step
 | Billing identity | Two new products, two one-off plans each; draft fixed price versions | Approve IDs and catalogue grouping; authorize later publication separately |
 | Destinations | Dedicated drafts at `/gbp-setup/` and `/gbp-improvement/`; contact CTA only after release | Approve slugs, copy and contact path |
 | G01 / G02 | §4 mappings, initially inactive | Approve scenario meaning and evidence gates |
-| Legal/payment terms | Existing approved Terms of Service plus a written order; invoice, cancellation and validity details unresolved | Supply or approve exact terms before activation |
+| Legal/payment terms | Owner approved the revised seven-paragraph GBP payment and cancellation wording on 22 October 2026; independent legal review is not yet evidenced | Obtain independent legal review evidence before release |
 | Release | No public price or outreach until Billing, page and scenario gates pass together | Separate implementation/release authorization |
 
 ## 4. Proposed G01/G02 mapping and shared commercial contract

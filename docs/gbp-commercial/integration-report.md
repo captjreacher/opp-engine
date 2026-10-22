@@ -1,6 +1,6 @@
 # GBP commercial offers — draft integration report
 
-**Review state, 22 October 2026:** local code and draft PRs only. Owner approval covers package scope and prices, with the supplied payment and cancellation wording subject to final legal review. No production Billing seed, migration, catalogue publication, payment activation, site deployment or outreach was performed.
+**Review state, 22 October 2026:** local code and draft PRs only. Owner business approval covers GBP Setup and GBP Improvement package scope, prices and the revised seven-paragraph payment and cancellation wording. Independent legal review is not yet evidenced. No production Billing seed, migration, catalogue publication, payment activation, site deployment or outreach was performed.
 
 ## Coordinated changes
 

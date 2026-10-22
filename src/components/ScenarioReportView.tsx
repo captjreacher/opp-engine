@@ -76,7 +76,7 @@ export default function ScenarioReportView({
             {r.offer ? (
               <>
                 <p>{r.offer.price_text}</p>
-                <p>{r.offer.terms.join("; ")}</p>
+                {r.offer.terms.map((term) => <p key={term}>{term}</p>)}
                 <a
                   className="text-accent-400"
                   href={r.offer.destination}

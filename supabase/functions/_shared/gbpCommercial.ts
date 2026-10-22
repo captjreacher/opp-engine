@@ -23,12 +23,13 @@ export const GBP_OFFER_MAP = {
 } as const;
 
 export const GBP_TERMS = [
-  'Payment is required in full before work begins.',
-  'You may cancel your order before work commences and receive a full refund, except for any third-party costs that were clearly disclosed and expressly agreed to as non-refundable before purchase.',
-  'If you cancel after work has commenced, we may charge a reasonable amount for work already completed and any agreed, non-recoverable third-party costs. Any remaining prepaid balance will be refunded.',
+  'Payment is required in full before work begins, unless explicitly agreed otherwise in writing.',
+  'You may cancel your order before work begins. We will refund the amount paid, less any reasonable costs already incurred in preparing or arranging the service and any third-party costs clearly disclosed and expressly agreed to as non-refundable before purchase.',
+  'If you cancel after work has commenced, we may deduct reasonable charges for work already completed and any agreed, non-recoverable third-party costs. Any remaining prepaid balance will be refunded.',
+  'Where a refund is due, we will process it within seven calendar days of confirming the refund amount. The time taken for funds to appear in your account may depend on your payment provider.',
   'Where we are unable to complete the agreed services, we will discuss an appropriate remedy, including a refund where applicable.',
   'Nothing in these terms limits your rights under the New Zealand Consumer Guarantees Act 1993 or other applicable consumer protection legislation.',
-  'Google Business Profile verification, approval and processing times are controlled by Google and cannot be guaranteed.',
+  'Google controls Business Profile verification, approval, suspension decisions and processing times. We cannot guarantee approval, verification or continued listing availability. We will, however, carry out the agreed services with reasonable care and skill.',
 ] as const;
 
 export const GBP_SCOPE = {
@@ -139,6 +140,6 @@ export function gbpOutreach(businessName: string, q: GbpQualification, snapshot:
     : `We reviewed your public Business Profile at ${q.evidenceUrl} and observed: ${q.observation?.trim().slice(0, 300)}.`;
   return {
     subject: `${offer.title} for ${businessName}`,
-    body: `Kia ora,\n\n${finding}\n\n${snapshot.description}\nIncludes: ${snapshot.inclusions.join('; ')}\nExcludes: ${snapshot.exclusions}\n${snapshot.commercialLine}\nTerms: ${snapshot.terms.join('; ')}\n\nWould you like to discuss the next step?\n\nNgā mihi,\nMaximisedAI`,
+    body: `Kia ora,\n\n${finding}\n\n${snapshot.description}\nIncludes: ${snapshot.inclusions.join('; ')}\nExcludes: ${snapshot.exclusions}\n${snapshot.commercialLine}\nTerms:\n\n${snapshot.terms.join('\n\n')}\n\nWould you like to discuss the next step?\n\nNgā mihi,\nMaximisedAI`,
   };
 }

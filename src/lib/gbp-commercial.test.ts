@@ -6,6 +6,18 @@ const setup: GbpQualification = { scenarioCode: 'G01', serviceCount: 3, customer
 const improvement: GbpQualification = { scenarioCode: 'G02', serviceCount: 4, customerConfirmed: true, profileStatus: 'verified_controlled', humanReviewed: true, observedAt: '2026-10-22T00:00:00Z', evidenceUrl: 'https://maps.google.com/example', searchResult: 'matching_profile', observation: 'The published hours differ from the customer-confirmed hours.' };
 
 describe('GBP commercial qualification', () => {
+  it('uses the seven owner-approved payment and cancellation paragraphs in order', () => {
+    expect(GBP_TERMS).toEqual([
+      'Payment is required in full before work begins, unless explicitly agreed otherwise in writing.',
+      'You may cancel your order before work begins. We will refund the amount paid, less any reasonable costs already incurred in preparing or arranging the service and any third-party costs clearly disclosed and expressly agreed to as non-refundable before purchase.',
+      'If you cancel after work has commenced, we may deduct reasonable charges for work already completed and any agreed, non-recoverable third-party costs. Any remaining prepaid balance will be refunded.',
+      'Where a refund is due, we will process it within seven calendar days of confirming the refund amount. The time taken for funds to appear in your account may depend on your payment provider.',
+      'Where we are unable to complete the agreed services, we will discuss an appropriate remedy, including a refund where applicable.',
+      'Nothing in these terms limits your rights under the New Zealand Consumer Guarantees Act 1993 or other applicable consumer protection legislation.',
+      'Google controls Business Profile verification, approval, suspension decisions and processing times. We cannot guarantee approval, verification or continued listing availability. We will, however, carry out the agreed services with reasonable care and skill.',
+    ]);
+  });
+
   it('requires customer-confirmed count, evidence and separate profile findings', () => {
     expect(qualifyGbp(setup)).toMatchObject({ ok: true, band: '1-3' });
     expect(qualifyGbp(improvement)).toMatchObject({ ok: true, band: '4-5' });
@@ -36,6 +48,7 @@ describe('GBP commercial qualification', () => {
       expect(email.body).toContain(snapshot.commercialLine);
       expect(email.body).toContain(snapshot.exclusions);
       for (const term of GBP_TERMS) expect(email.body).toContain(term);
+      expect(email.body).toContain(`Terms:\n\n${GBP_TERMS.join('\n\n')}`);
       for (const inclusion of snapshot.inclusions) expect(email.body).toContain(inclusion);
       expect(email.body).not.toMatch(/guaranteed rankings|recurring SEO reporting/i);
       expect(snapshot.commercialLine).toContain('no subscription');
