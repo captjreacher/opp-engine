@@ -8,6 +8,7 @@ export type ApprovedDetails = {
 };
 export type Offer = {
   id: string;
+  product_id: string;
   name: string;
   description: string;
   components: string[];
@@ -92,6 +93,7 @@ export async function resolveOffer(
   const plan = await read(`plans/${id}`);
   if (
     plan.planId !== template.offer_id ||
+    (template.product_id && plan.productId !== template.product_id) ||
     plan.isSellable !== true ||
     plan.isArchived === true ||
     !requiredText(plan.name) ||
@@ -150,6 +152,7 @@ export async function resolveOffer(
   }
   return {
     id: template.offer_id,
+    product_id: plan.productId as string,
     name: plan.name,
     description: plan.description,
     components: details.inclusions,

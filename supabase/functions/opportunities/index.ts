@@ -72,6 +72,7 @@ const DEFAULT_DISCOVERY_SCENARIO_SLUG = "local-digital-presence";
 // until this path supports them. Extend deliberately, never by status alone.
 const SUPPORTED_DISCOVERY_SCENARIO_SLUGS = new Set([
   DEFAULT_DISCOVERY_SCENARIO_SLUG,
+  "website-improvement",
 ]);
 
 
@@ -3174,7 +3175,7 @@ async function prepareSelectedOutreach(id:string,requested?:string) {
   const reports=(await prepareScenarioReports(id,assessment,lead)).filter(r=>r.report.source_template?.id===template.id && template.scenario_keys.includes(r.report.scenario.key));
   if(reports.length!==template.scenario_keys.length) throw new Error("Every selected scenario requires a report.");
   const rendered=reportEmail(template,reports.map(r=>r.report),lead.business_name);
-  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,offer_id:template.offer_id,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
+  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,product_id:template.product_id ?? null,offer_id:template.offer_id,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
 }
 async function validateDraftSelection(id:string,draft:JsonObject): Promise<string | null> {
   try {
