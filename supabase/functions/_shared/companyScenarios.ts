@@ -175,6 +175,8 @@ export type OutreachTemplate = {
   combined: boolean;
   subject: string;
   body: string;
+  /** Billing product expected to own the selected plan. Optional for legacy mappings. */
+  product_id?: string | null;
   offer_id: string;
   destination: string | null;
   destination_verified_at: string | null;

@@ -29,6 +29,7 @@ const template: OutreachTemplate & {
   enabled: true,
   subject: "Opportunity for {{business_name}}",
   body: "Hello,\nWe reviewed the recorded observations for {{business_name}}.",
+  product_id: "product-existing",
   offer_id: "plan-existing",
   destination: "https://maximisedai.com/products/verified",
   destination_verified_at: "2026-10-01",
@@ -161,6 +162,15 @@ describe("approved Billing resolution", () => {
     await expect(
       resolveOffer(template, config, billing(plan, pv)),
     ).rejects.toThrow();
+  });
+  it("rejects a plan when it is owned by a different configured Billing product", async () => {
+    await expect(
+      resolveOffer(
+        { ...template, product_id: "product-not-the-owner" },
+        config,
+        billing(),
+      ),
+    ).rejects.toThrow("Offer is missing, withdrawn or incomplete.");
   });
   it("does not substitute zero for published POA", async () => {
     const offer = await resolveOffer(

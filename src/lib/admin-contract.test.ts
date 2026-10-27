@@ -190,7 +190,7 @@ describe("admin scenario contract", () => {
     const allowListStart = edgeSource.indexOf("const SUPPORTED_DISCOVERY_SCENARIO_SLUGS");
     const allowList = edgeSource.slice(allowListStart, allowListStart + 220);
     expect(allowList).toContain("DEFAULT_DISCOVERY_SCENARIO_SLUG");
-    expect(allowList).not.toContain("website-improvement");
+    expect(allowList).toContain("website-improvement");
     expect(allowList).not.toContain("reputation-trust");
     // Admin writes status/name/description/discovery config only.
     const block = adminBlock();

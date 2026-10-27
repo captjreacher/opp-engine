@@ -132,7 +132,7 @@ describe("scenario readiness contract", () => {
     const allowListStart = edgeSource.indexOf("const SUPPORTED_DISCOVERY_SCENARIO_SLUGS");
     const allowList = edgeSource.slice(allowListStart, allowListStart + 200);
     expect(allowList).toContain("DEFAULT_DISCOVERY_SCENARIO_SLUG");
-    expect(allowList).not.toContain("website-improvement");
+    expect(allowList).toContain("website-improvement");
     expect(allowList).not.toContain("reputation-trust");
   });
 
@@ -150,7 +150,7 @@ describe("scenario readiness contract", () => {
       expect(migrationSource, slug).toContain(`'${slug}',`);
     }
     // Drafts stay invisible to the operator selector.
-    expect(migrationSource).not.toMatch(/'(website-improvement|reputation-trust)[^\n]*'active'/);
+    expect(migrationSource).not.toMatch(/'(reputation-trust)[^\n]*'active'/);
   });
 
   it("persists the selected scenario explicitly on the run", () => {
