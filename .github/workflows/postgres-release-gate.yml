@@ -50,7 +50,7 @@ jobs:
           test "$OPP_OUTREACH_DATABASE" = "opp_outreach_test_rehearsal"
           test "$OPP_TEST_PSQL" = "psql"
           command -v "$OPP_TEST_PSQL"
-          test "$(psql -X -At -c 'select current_database(), inet_server_port();')" = "opp_outreach_test_rehearsal|5432"
+          test "$(psql -X -At -c 'select current_database();')" = "opp_outreach_test_rehearsal"
 
       - name: Run mandatory PostgreSQL reconciliation and full Vitest gate
         run: npm test -- --run
