@@ -21,7 +21,7 @@ function execute(name: string, deps: Record<string, unknown>) {
 }
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
-function harness() {
+function harness(options: { gbp?: boolean; gbpValidationError?: string | null } = {}) {
   const draft = {
     id: "draft",
     status: "approved",
@@ -29,6 +29,13 @@ function harness() {
     body: "Reviewed facts and approved offer",
     selection: { report_ids: ["report"] },
     updated_at: "2026-10-21",
+    approval_fingerprint: "a".repeat(64),
+    approved_current_assessment_id: "assessment",
+    approved_scenario_report_id: "report",
+    approved_recipient: "sink@example.invalid",
+    approved_destination_url: "https://example.invalid/offer",
+    approved_commercial_reference: {},
+    ...(options.gbp ? { gbp_commercial_snapshot: { scenarioCode: "G01" } } : {}),
   };
   const calls: string[] = [];
   const mail = vi.fn(async () => {
@@ -63,7 +70,11 @@ function harness() {
       calls.push(name);
       if (name === "check_prospect_eligibility")
         return { data: { classification: "eligible" }, error: null };
-      if (name === "complete_scenario_outreach_send")
+      if (name === "opportunity_claim_outreach_send")
+        return { data: { ok: true, attempt_id: "attempt" }, error: null };
+      if (name === "opportunity_start_outreach_send")
+        return { data: { ok: true, state: "sending", attempt_id: "attempt" }, error: null };
+      if (name === "opportunity_finish_outreach_send")
         return { data: { draft: { ...draft, status: "sent" } }, error: null };
       return { data: null, error: null };
     },
@@ -72,6 +83,7 @@ function harness() {
     calls.push("revalidate-offer");
     return null as string | null;
   });
+  const validateGbp = vi.fn(async () => options.gbpValidationError ?? null);
   const send = execute("sendOutreach", {
     supabase: { from: query, rpc },
     json,
@@ -83,6 +95,7 @@ function harness() {
       },
     },
     validateDraftSelection: validate,
+    validateGbpDraft: validateGbp,
     candidateForLead: async () => null,
     classificationAllowsProgress: (c: string) => c === "eligible",
     eligibilityClassification: () => "eligible",
@@ -91,7 +104,7 @@ function harness() {
     htmlFromBody: (s: string) => s,
     sendSmtpEmail: mail,
   });
-  return { send, draft, calls, rpc, mail, validate };
+  return { send, draft, calls, rpc, mail, validate, validateGbp };
 }
 describe("release manual-send boundary (mock transport only)", () => {
   it("orders commercial revalidation, fresh eligibility, atomic claim, mock transport and atomic completion", async () => {
@@ -101,19 +114,16 @@ describe("release manual-send boundary (mock transport only)", () => {
     expect(h.calls).toEqual([
       "revalidate-offer",
       "check_prospect_eligibility",
-      "claim_scenario_outreach_send",
+      "opportunity_claim_outreach_send",
+      "opportunity_start_outreach_send",
       "mock-transport",
-      "complete_scenario_outreach_send",
+      "opportunity_finish_outreach_send",
     ]);
     expect(h.rpc).toHaveBeenCalledWith(
-      "claim_scenario_outreach_send",
+      "opportunity_claim_outreach_send",
       expect.objectContaining({
-        p_expected_email: "fixture@example.invalid",
-        p_selection: h.draft.selection,
-        p_send_metadata: expect.objectContaining({
-          recipient: "sink@example.invalid",
-          live: false,
-        }),
+        p_approval_fingerprint: "a".repeat(64),
+        p_recipient: "sink@example.invalid",
       }),
     );
     expect(h.mail).toHaveBeenCalledTimes(1);
@@ -136,6 +146,35 @@ describe("release manual-send boundary (mock transport only)", () => {
     expect(h.rpc).not.toHaveBeenCalled();
     expect(h.mail).not.toHaveBeenCalled();
   });
+  it.each([
+    "GBP template was withdrawn or changed.",
+    "GBP report and commercial snapshot differ.",
+    "GBP price or approved scope changed.",
+  ])("revalidates GBP at send time and blocks %s before claim or transport", async (detail) => {
+    const h = harness({ gbp: true, gbpValidationError: detail });
+    const response = await h.send("lead", "draft", { confirm_send: true });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: "outreach_mapping_not_ready", detail });
+    expect(h.validateGbp).toHaveBeenCalledWith("lead", h.draft);
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.mail).not.toHaveBeenCalled();
+  });
+  it("passes a valid GBP draft through validation but preserves the unreleased send gate", async () => {
+    const h = harness({ gbp: true });
+    const response = await h.send("lead", "draft", { confirm_send: true });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "gbp_commercial_send_not_released" });
+    expect(h.validateGbp).toHaveBeenCalledWith("lead", h.draft);
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.mail).not.toHaveBeenCalled();
+  });
+  it("fails closed for an unknown GBP scenario before claim or SMTP", async () => {
+    const h = harness({ gbp: true, gbpValidationError: "GBP template or destination changed." });
+    h.draft.gbp_commercial_snapshot = { scenarioCode: "unknown" };
+    expect((await h.send("lead", "draft", { confirm_send: true })).status).toBe(422);
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.mail).not.toHaveBeenCalled();
+  });
   it("retains an uncertain claim after a mock transport error and does not retry", async () => {
     const h = harness();
     h.mail.mockRejectedValue(new Error("Mock uncertainty"));
@@ -146,16 +185,20 @@ describe("release manual-send boundary (mock transport only)", () => {
       reconciliation_required: true,
     });
     expect(h.rpc).toHaveBeenCalledWith(
-      "complete_scenario_outreach_send",
-      expect.objectContaining({ p_sent: false }),
+      "opportunity_finish_outreach_send",
+      expect.objectContaining({ p_state: "send_unknown" }),
     );
     expect(h.mail).toHaveBeenCalledTimes(1);
   });
   it("does not report success if post-transport atomic completion fails", async () => {
     const h = harness();
     h.rpc.mockImplementation(async (name: string) =>
-      name === "complete_scenario_outreach_send"
+      name === "opportunity_finish_outreach_send"
         ? { data: null, error: { message: "Mock transaction failure" } }
+        : name === "opportunity_claim_outreach_send"
+          ? { data: { ok: true, attempt_id: "attempt" }, error: null }
+          : name === "opportunity_start_outreach_send"
+            ? { data: { ok: true, state: "sending", attempt_id: "attempt" }, error: null }
         : name === "check_prospect_eligibility"
           ? { data: { classification: "eligible" }, error: null }
           : { data: null, error: null },

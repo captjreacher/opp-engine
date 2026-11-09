@@ -48,6 +48,7 @@ import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { GBP_OFFER_MAP, buildGbpSnapshot, gbpFinding, gbpOutreach, qualifyGbp, type GbpCommercialSnapshot } from '../_shared/gbpCommercial.ts';
 import { resolveGbpBillingPrice } from '../_shared/gbpBilling.ts';
+import { approvalFingerprint } from '../_shared/outreachSafety.ts';
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -3197,6 +3198,34 @@ async function validateDraftSelection(id:string,draft:JsonObject): Promise<strin
   } catch(error) {return String((error as Error).message);}
 }
 
+async function approvalProvenance(id: string, draft: JsonObject): Promise<Record<string, unknown>> {
+  const selection = (draft.selection ?? {}) as JsonObject;
+  const { data: assessment, error: assessmentError } = await supabase.from("local_business_lead_assessments").select("id,scenario_id").eq("lead_id", id).order("assessed_at", { ascending: false }).limit(1).maybeSingle();
+  if (assessmentError || !assessment) throw assessmentError ?? new Error("current_assessment_required");
+  const reportIds = Array.isArray(selection.report_ids) ? selection.report_ids.filter((value): value is string => typeof value === "string") : [];
+  if (!reportIds.length) throw new Error("scenario_report_required");
+  const { data: reports, error: reportsError } = await supabase.from("opportunity_scenario_reports").select("id,lead_id,assessment_id,scenario_id,fingerprint,created_at,report").eq("lead_id", id).eq("assessment_id", assessment.id).in("id", reportIds);
+  if (reportsError || !reports || reports.length !== reportIds.length) throw reportsError ?? new Error("scenario_report_identity_mismatch");
+  const reportReferences = reports.map((report) => ({ id: report.id, scenario_id: report.scenario_id, fingerprint: report.fingerprint })).sort((a, b) => a.id.localeCompare(b.id));
+  const scenarioReportId = reportReferences[0].id;
+  const scenarioReportFingerprint = reportReferences[0].fingerprint;
+  const { data: audit, error: auditError } = await supabase.from("local_business_audit_reports").select("id,assessment_id,outreach_identity_fingerprint").eq("lead_id", id).eq("assessment_id", assessment.id).order("generated_at", { ascending: false }).limit(1).maybeSingle();
+  if (auditError) throw auditError;
+  const { recipient } = outreachRecipient((await supabase.from("local_business_leads").select("email").eq("id", id).single()).data?.email);
+  if (!recipient || !isValidEmailAddress(recipient)) throw new Error("invalid_recipient");
+  const destination = String((draft.gbp_commercial_snapshot as JsonObject | null)?.destination ?? selection.destination ?? "");
+  const commercial = { offer_id: selection.offer_id ?? null, snapshot: draft.gbp_commercial_snapshot ?? null, catalogue: reports.map((report) => { const offer = (report.report as JsonObject | null)?.offer as JsonObject | null; return { id: offer?.id ?? null, price_version: offer?.price_version ?? null, destination: offer?.destination ?? null }; }) };
+  const identity = {
+    lead_id: id, current_assessment_id: assessment.id, scenario_id: draft.scenario_id ?? assessment.scenario_id ?? null,
+    scenario_report_id: scenarioReportId, scenario_report_fingerprint: scenarioReportFingerprint, scenario_report_references: reportReferences,
+    audit_report_id: audit?.id ?? null, audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null,
+    billing: commercial, destination_url: destination, recipient,
+    subject: String(draft.subject ?? ""), body: String(draft.body ?? ""),
+  };
+  const approval = await approvalFingerprint(identity as never);
+  return { ...identity, approval_fingerprint: approval, approved_current_assessment_id: assessment.id, approved_scenario_report_id: scenarioReportId, approved_scenario_report_fingerprint: scenarioReportFingerprint, approved_scenario_report_references: reportReferences, approved_audit_report_id: audit?.id ?? null, approved_audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null, approved_billing_offer_id: String(selection.offer_id ?? ""), approved_recipient: recipient, approved_destination_url: destination, approved_commercial_reference: commercial };
+}
+
 async function listOpportunities(view: OpportunityLifecycleView = "active"): Promise<Response> {
   const [leadRes, draftRes, scenarioReportRes, analysisEventRes] = await Promise.all([
     supabase
@@ -3299,9 +3328,9 @@ async function listOpportunities(view: OpportunityLifecycleView = "active"): Pro
 }
 
 async function getOpportunity(id: string): Promise<Response> {
-  const {data:claimRows,error:claimReadError}=await supabase.from("opportunity_outreach_send_claims").select("draft_id,state").eq("lead_id",id);
-  if(claimReadError) throw claimReadError;
-  const sendClaims=claimRows ?? [];
+  const {data:attemptRows,error:attemptReadError}=await supabase.from("opportunity_outreach_send_attempts").select("draft_id,state,attempt_id").eq("lead_id",id);
+  if(attemptReadError) throw attemptReadError;
+  const sendAttempts=attemptRows ?? [];
   const { data: lead, error: leadErr } = await supabase
     .from("local_business_leads")
     .select("*")
@@ -3395,7 +3424,7 @@ async function getOpportunity(id: string): Promise<Response> {
     audit_report: visibleAudit,
     audit_reports: reports.data ?? [],
     events: events.data ?? [],
-    outreach_drafts: (drafts.data ?? []).map(draft => ({...draft, send_state: sendClaims.find(claim => claim.draft_id === draft.id)?.state ?? null})),
+    outreach_drafts: (drafts.data ?? []).map(draft => ({...draft, send_state: sendAttempts.find(attempt => attempt.draft_id === draft.id)?.state ?? null})),
     review_state,
     outcome_state,
     console_events: cEvents,
@@ -3732,14 +3761,18 @@ async function updateOutreach(
     const selectionError=existing.gbp_commercial_snapshot ? await validateGbpDraft(id,existing) : await validateDraftSelection(id,existing);
     if(selectionError) return json({error:"outreach_mapping_not_ready",detail:selectionError},422);
     if(typeof payload.expected_updated_at !== "string" || payload.expected_updated_at !== existing.updated_at) return json({error:"reviewed_draft_changed",detail:"Reload and review the latest saved email before approving."},409);
+    let provenance: Record<string, unknown>;
+    try { provenance = await approvalProvenance(id, existing); } catch (error) { return json({ error: "approval_provenance_unavailable", detail: String((error as Error).message) }, 409); }
     fields.status = "approved";
     fields.approved_by = "operator-console";
     fields.approved_at = new Date().toISOString();
+    Object.assign(fields, provenance);
     action = "outreach_draft_approved";
   } else if (status === "draft" || edited) {
     fields.approved_at = null;
     fields.approved_by = null;
     fields.status = "draft";
+    Object.assign(fields, { approval_fingerprint: null, approved_audit_report_id: null, approved_billing_offer_id: null, approved_current_assessment_id: null, approved_scenario_report_id: null, approved_scenario_report_fingerprint: null, approved_scenario_report_references: null, approved_audit_report_fingerprint: null, approved_recipient: null, approved_destination_url: null, approved_commercial_reference: null });
   }
 
   const { data: draft, error } = await supabase
@@ -3775,7 +3808,11 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
     .maybeSingle();
   if (dErr) throw dErr;
   if (!draft) return json({ error: "not_found" }, 404);
-  if (draft.gbp_commercial_snapshot) return json({ error: 'gbp_commercial_send_not_released' }, 409);
+  if (draft.gbp_commercial_snapshot) {
+    const gbpValidationError = await validateGbpDraft(id, draft);
+    if (gbpValidationError) return json({ error: "outreach_mapping_not_ready", detail: gbpValidationError }, 422);
+    return json({ error: "gbp_commercial_send_not_released" }, 409);
+  }
 
   let smtp: SmtpConfig;
   try {
@@ -3844,12 +3881,23 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
       ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
       : "") + htmlFromBody(String(draft.body ?? ""));
 
-  const {error:claimError}=await supabase.rpc("claim_scenario_outreach_send",{p_draft_id:draftId,p_lead_id:id,p_subject:draft.subject,p_body:draft.body,p_selection:draft.selection,p_updated_at:draft.updated_at,p_expected_email:lead.email,p_send_metadata:{recipient,overridden,transport:"smtp",live:LIVE,selection:draft.selection}});
-  if(claimError) return json({error:"send_claim_exists",detail:"A prior send attempt requires explicit reconciliation."},409);
+  const provenance = {
+    lead_id: id, current_assessment_id: draft.approved_current_assessment_id, scenario_id: draft.scenario_id,
+    scenario_report_id: draft.approved_scenario_report_id, scenario_report_fingerprint: draft.approved_scenario_report_fingerprint,
+    scenario_report_references: draft.approved_scenario_report_references ?? [],
+    audit_report_id: draft.approved_audit_report_id, audit_report_fingerprint: draft.approved_audit_report_fingerprint,
+    billing: draft.approved_commercial_reference, destination_url: draft.approved_destination_url,
+    recipient, subject, body: String(draft.body ?? ""), approval_fingerprint: draft.approval_fingerprint,
+  };
+  const {data:claim,error:claimError}=await supabase.rpc("opportunity_claim_outreach_send",{p_draft_id:draftId,p_attempt_id:crypto.randomUUID(),p_approval_fingerprint:draft.approval_fingerprint,p_current_assessment_id:provenance.current_assessment_id,p_scenario_id:provenance.scenario_id,p_scenario_report_id:provenance.scenario_report_id,p_scenario_report_fingerprint:provenance.scenario_report_fingerprint,p_audit_report_id:provenance.audit_report_id,p_audit_report_fingerprint:provenance.audit_report_fingerprint,p_recipient:recipient,p_destination_url:provenance.destination_url,p_snapshot:provenance,p_claim_ttl_seconds:120});
+  if(claimError || !claim?.ok) return json({error:claim?.error ?? "send_claim_failed",detail:"The canonical send attempt could not be claimed."},409);
+  const attemptId = String(claim.attempt_id);
+  const {data:started,error:startError}=await supabase.rpc("opportunity_start_outreach_send",{p_draft_id:draftId,p_attempt_id:attemptId});
+  if(startError || !started?.ok) return json({error:"send_start_failed",detail:"The canonical send attempt could not be started."},409);
   try {
     await sendSmtpEmail(smtp, { subject, text, html }, draftId, recipient);
   } catch (e) {
-    await supabase.rpc("complete_scenario_outreach_send",{p_lead_id:id,p_draft_id:draftId,p_sent:false,p_detail:String((e as Error).message).slice(0,300)});
+    await supabase.rpc("opportunity_finish_outreach_send",{p_draft_id:draftId,p_attempt_id:attemptId,p_state:"send_unknown",p_error:String((e as Error).message).slice(0,300)});
     return json(
       {
         error: "send_failed",
@@ -3861,7 +3909,7 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
     );
   }
 
-  const {data:completion,error:completionError}=await supabase.rpc("complete_scenario_outreach_send",{p_lead_id:id,p_draft_id:draftId,p_sent:true,p_detail:null});
+  const {data:completion,error:completionError}=await supabase.rpc("opportunity_finish_outreach_send",{p_draft_id:draftId,p_attempt_id:attemptId,p_state:"sent",p_error:null});
   if(completionError) return json({error:"send_completion_unconfirmed",detail:"Delivery may have completed. Reconcile the retained send claim; do not retry.",reconciliation_required:true},502);
   return json({ draft: completion.draft, sent_to: recipient, overridden });
 }
