@@ -21,7 +21,7 @@ function execute(name: string, deps: Record<string, unknown>) {
 }
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
-function harness(options: { gbp?: boolean; gbpValidationError?: string | null } = {}) {
+function harness(options: { gbp?: boolean; gbpSnapshot?: boolean; gbpValidationError?: string | null; dispatch?: "website" | "gbp" | "unsupported" } = {}) {
   const draft = {
     id: "draft",
     status: "approved",
@@ -35,7 +35,7 @@ function harness(options: { gbp?: boolean; gbpValidationError?: string | null } 
     approved_recipient: "sink@example.invalid",
     approved_destination_url: "https://example.invalid/offer",
     approved_commercial_reference: {},
-    ...(options.gbp ? { gbp_commercial_snapshot: { scenarioCode: "G01" } } : {}),
+    ...(options.gbp && options.gbpSnapshot !== false ? { gbp_commercial_snapshot: { scenarioCode: "G01" } } : {}),
   };
   const calls: string[] = [];
   const mail = vi.fn(async () => {
@@ -84,6 +84,7 @@ function harness(options: { gbp?: boolean; gbpValidationError?: string | null } 
     return null as string | null;
   });
   const validateGbp = vi.fn(async () => options.gbpValidationError ?? null);
+  const classify = vi.fn(async () => ({ kind: options.dispatch ?? (options.gbp ? "gbp" : "website"), ...(options.gbp ? { scenarioCode: "G01" } : {}) }));
   const send = execute("sendOutreach", {
     supabase: { from: query, rpc },
     json,
@@ -96,6 +97,7 @@ function harness(options: { gbp?: boolean; gbpValidationError?: string | null } 
     },
     validateDraftSelection: validate,
     validateGbpDraft: validateGbp,
+    classifyOutreachDraft: classify,
     candidateForLead: async () => null,
     classificationAllowsProgress: (c: string) => c === "eligible",
     eligibilityClassification: () => "eligible",
@@ -104,7 +106,7 @@ function harness(options: { gbp?: boolean; gbpValidationError?: string | null } 
     htmlFromBody: (s: string) => s,
     sendSmtpEmail: mail,
   });
-  return { send, draft, calls, rpc, mail, validate, validateGbp };
+  return { send, draft, calls, rpc, mail, validate, validateGbp, classify };
 }
 describe("release manual-send boundary (mock transport only)", () => {
   it("orders commercial revalidation, fresh eligibility, atomic claim, mock transport and atomic completion", async () => {
@@ -114,6 +116,7 @@ describe("release manual-send boundary (mock transport only)", () => {
     expect(h.calls).toEqual([
       "revalidate-offer",
       "check_prospect_eligibility",
+      "revalidate-offer",
       "opportunity_claim_outreach_send",
       "opportunity_start_outreach_send",
       "mock-transport",
@@ -156,6 +159,27 @@ describe("release manual-send boundary (mock transport only)", () => {
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ error: "outreach_mapping_not_ready", detail });
     expect(h.validateGbp).toHaveBeenCalledWith("lead", h.draft);
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.mail).not.toHaveBeenCalled();
+  });
+
+  it("classifies a GBP draft from authoritative identity even when its snapshot is null", async () => {
+    const h = harness({ gbp: true, gbpSnapshot: false, dispatch: "gbp", gbpValidationError: "GBP commercial snapshot is required." });
+    const response = await h.send("lead", "draft", { confirm_send: true });
+    expect(response.status).toBe(422);
+    expect(h.classify).toHaveBeenCalledWith("lead", h.draft);
+    expect(h.validateGbp).toHaveBeenCalledWith("lead", h.draft);
+    expect(h.validate).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.mail).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an unsupported or ambiguous scenario before claim or SMTP", async () => {
+    const h = harness({ dispatch: "unsupported" });
+    const response = await h.send("lead", "draft", { confirm_send: true });
+    expect(response.status).toBe(422);
+    expect(h.validate).not.toHaveBeenCalled();
+    expect(h.validateGbp).not.toHaveBeenCalled();
     expect(h.rpc).not.toHaveBeenCalled();
     expect(h.mail).not.toHaveBeenCalled();
   });
@@ -255,6 +279,41 @@ describe("read-only archived report materialisation", () => {
 });
 
 describe("human review snapshot and shortcut", () => {
+  it("does not approve a GBP draft with missing provenance through Website validation", async () => {
+    const existing = {
+      id: "draft",
+      status: "draft",
+      subject: "GBP review",
+      body: "Body",
+      updated_at: "2026-10-21T01:00:00Z",
+      selection: { scenario_keys: ["G01"], report_ids: ["report"] },
+    };
+    const q: any = {
+      select: () => q,
+      eq: () => q,
+      maybeSingle: async () => ({ data: existing, error: null }),
+      update: vi.fn(),
+    };
+    const validateWebsite = vi.fn(async () => null);
+    const validateGbp = vi.fn(async () => "GBP commercial snapshot is required.");
+    const approve = execute("updateOutreach", {
+      supabase: { from: () => q },
+      json,
+      classifyOutreachDraft: async () => ({ kind: "gbp", scenarioCode: "G01" }),
+      validateDraftSelection: validateWebsite,
+      validateGbpDraft: validateGbp,
+    });
+    const response = await approve("lead", "draft", {
+      status: "approved",
+      reviewed: true,
+      expected_updated_at: existing.updated_at,
+    });
+    expect(response.status).toBe(422);
+    expect(validateGbp).toHaveBeenCalledWith("lead", existing);
+    expect(validateWebsite).not.toHaveBeenCalled();
+    expect(q.update).not.toHaveBeenCalled();
+  });
+
   it("refuses approval when another operator has changed the saved draft", async () => {
     const existing = {
       id: "draft",
@@ -274,6 +333,7 @@ describe("human review snapshot and shortcut", () => {
       supabase: { from: () => q },
       json,
       validateDraftSelection: async () => null,
+      classifyOutreachDraft: async () => ({ kind: "website" }),
     });
     expect(
       (

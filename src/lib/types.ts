@@ -104,7 +104,7 @@ export type DraftStatus = "draft" | "approved" | "sent";
 export interface Draft {
   send_state?: "sending" | "uncertain" | "sent" | null;
   updated_at?: string;
-  selection?: { template_id: string; template_version: number; scenario_keys: string[]; offer_id: string; destination: string; findings?: {description:string}[]; reports?: import("../../supabase/functions/_shared/scenarioReports").ScenarioReport[] };
+  selection?: { template_id: string; template_version: number; scenario_keys: string[]; scenario_id?: string | null; scenario_version?: number | null; offer_id: string; product_id?: string | null; destination: string; findings?: {description:string}[]; reports?: import("../../supabase/functions/_shared/scenarioReports").ScenarioReport[] };
   id: string;
   subject: string | null;
   body: string;

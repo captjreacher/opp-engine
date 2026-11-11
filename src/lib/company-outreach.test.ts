@@ -48,6 +48,7 @@ function harness(
     getSmtpConfig: () => ({}),
     Deno: { env: { get: () => "" } },
     validateDraftSelection: validate,
+    classifyOutreachDraft: async () => ({ kind: "website" }),
     sendSmtpEmail: send,
     candidateForLead: async () => null,
     classificationAllowsProgress: (

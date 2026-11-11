@@ -55,6 +55,8 @@ const migrationLineage = [
   "20261021012142_scenario_owner_retention_reconciliation.sql",
   "20261021121314_gbp_commercial_draft.sql",
   "20261107090000_outreach_architecture_reconciliation.sql",
+  "20261108090000_outreach_send_boundary_hardening.sql",
+  "20261108100000_outreach_canonical_identity.sql",
 ];
 
 suite(
@@ -80,7 +82,7 @@ suite(
       end $$;`);
       sql(readFileSync("tests/fixtures/opportunity-release-schema.sql", "utf8"));
 
-      for (const migration of migrationLineage.slice(0, -1))
+      for (const migration of migrationLineage.slice(0, -3))
         sql(readFileSync(`supabase/migrations/${migration}`, "utf8"));
 
       // Legacy approved data is deliberately incomplete. The final migration
@@ -107,6 +109,7 @@ suite(
       `);
 
       sql(readFileSync("supabase/migrations/20261107090000_outreach_architecture_reconciliation.sql", "utf8"));
+      sql(readFileSync("supabase/migrations/20261108090000_outreach_send_boundary_hardening.sql", "utf8"));
     }, 60000);
 
     it("invalidates incomplete legacy approvals and classifies legacy claims", () => {
@@ -115,11 +118,44 @@ suite(
       expect(sql(`select historical_classification from opportunity_outreach_send_claims where draft_id='${id(3)}'`)).toBe("legacy_incomplete");
     });
 
+    it("rejects report Billing identity substitutions at the atomic claim boundary", () => {
+      const lead = id(40), assessment = id(41), scenario = id(42), report = id(43), template = id(44), draft = id(45);
+      const offer = (overrides: Partial<Record<string, string>> = {}) => JSON.stringify({ id: overrides.id ?? "plan-1", plan_id: overrides.plan_id ?? "plan-1", product_id: overrides.product_id ?? "product-1", price_version: overrides.price_version ?? "price-1", destination: overrides.destination ?? "https://example.invalid/offer" });
+      const reportOffer = offer();
+      sql(`insert into local_business_leads(id,business_name,status,email) values('${lead}','Claim identity fixture','assessed','claim@example.invalid');
+        insert into local_business_lead_assessments(id,lead_id,assessed_at) values('${assessment}','${lead}',now());
+        insert into opportunity_scenarios(id,slug,name,status,version) values('${scenario}','claim-identity','Claim identity','active',1);
+        insert into opportunity_scenario_reports(id,lead_id,assessment_id,scenario_id,fingerprint,report) values('${report}','${lead}','${assessment}','${scenario}',repeat('c',64),jsonb_build_object('business',jsonb_build_object('id','${lead}'),'scenario',jsonb_build_object('id','${scenario}','key','claim-identity','version',1),'offer','${reportOffer}'::jsonb));
+        insert into opportunity_outreach_templates(id,version,name,scenario_keys,combined,subject,body,offer_id,product_id,destination,destination_verified_at,enabled) values('${template}',1,'Claim identity',array['claim-identity'],false,'Subject','Body','plan-1','product-1','https://example.invalid/offer',now(),true);
+        insert into local_business_outreach_drafts(id,lead_id,subject,body,status,selection,scenario_id,scenario_version,approval_fingerprint,approved_current_assessment_id,approved_scenario_report_id,approved_scenario_report_fingerprint,approved_scenario_report_references,approved_billing_offer_id,approved_recipient,approved_destination_url,approved_commercial_reference) values('${draft}','${lead}','Subject','Body','approved',jsonb_build_object('template_id','${template}','template_version',1,'scenario_keys',array['claim-identity'],'offer_id','plan-1','product_id','product-1','destination','https://example.invalid/offer','assessment_id','${assessment}','report_ids',array['${report}']), '${scenario}',1,repeat('a',64),'${assessment}','${report}',repeat('c',64),jsonb_build_array(jsonb_build_object('id','${report}','scenario_id','${scenario}','fingerprint',repeat('c',64))),'plan-1','claim@example.invalid','https://example.invalid/offer',jsonb_build_object('offer_id','plan-1','catalogue',jsonb_build_array('${reportOffer}'::jsonb)));`);
+      const mismatches = [
+        { name: "offer", value: { id: "plan-2" } },
+        { name: "plan", value: { plan_id: "plan-2" } },
+        { name: "product", value: { product_id: "product-2" } },
+        { name: "price", value: { price_version: "price-2" } },
+        { name: "destination", value: { destination: "https://example.invalid/other" } },
+      ];
+      for (const [index, mismatch] of mismatches.entries()) {
+        const billing = offer(mismatch.value);
+        sql(`update local_business_outreach_drafts set approved_commercial_reference=jsonb_build_object('offer_id','plan-1','catalogue',jsonb_build_array('${billing}'::jsonb)) where id='${draft}';`);
+        const result = sql(`select opportunity_claim_outreach_send('${draft}','${id(50 + index)}',repeat('a',64),'${assessment}','${scenario}','${report}',repeat('c',64),null,null,'claim@example.invalid','https://example.invalid/offer',jsonb_build_object('lead_id','${lead}','approval_fingerprint',repeat('a',64),'recipient','claim@example.invalid','destination_url','https://example.invalid/offer','subject','Subject','body','Body','billing',jsonb_build_object('offer_id','plan-1','catalogue',jsonb_build_array('${billing}'::jsonb)),'scenario_report_references',jsonb_build_array(jsonb_build_object('id','${report}','scenario_id','${scenario}','fingerprint',repeat('c',64)))),120)->>'error';`);
+        expect(result).toBe("commercial_snapshot_mismatch");
+      }
+    });
+
     it("installs the canonical attempt ledger, lead relationship and active-send index", () => {
       expect(sql("select count(*) from information_schema.columns where table_name='opportunity_outreach_send_attempts' and column_name='lead_id'")).toBe("1");
       expect(sql("select count(*) from pg_indexes where indexname='opportunity_outreach_send_attempts_active_idx'")).toBe("1");
       expect(sql("select relrowsecurity from pg_class where oid='public.opportunity_outreach_send_attempts'::regclass")).toBe("t");
       expect(sql("select has_table_privilege('service_role','opportunity_outreach_send_attempts','INSERT')")).toBe("f");
+    });
+
+    it("rolls back an injected migration failure without leaving partial schema", () => {
+      const marker = "__outreach_rehearsal_partial_schema";
+      const injected = readFileSync("supabase/migrations/20261108090000_outreach_send_boundary_hardening.sql", "utf8")
+        .replace("begin;", `begin; create table public.${marker}(id integer); do $$ begin raise exception 'injected_migration_failure'; end $$;`);
+      expect(() => sql(injected)).toThrow();
+      expect(sql(`select to_regclass('public.${marker}')`)).toBe("");
     });
 
     it("fails closed for direct service-role ledger mutation and retired claim RPCs", () => {

@@ -30,6 +30,57 @@ function execute(name: string, deps: Record<string, unknown>) {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
 describe("scenario outreach handler boundaries", () => {
+  it.each([1, 2])("resolves and persists %s canonical Website scenario report(s) through the real preparation path", async (count) => {
+    const inserts: Array<{ table: string; row: any }> = [];
+    const scenarios = Array.from({ length: count }, (_, i) => ({ id: `scenario-${i}`, key: `website-${i}`, version: i + 1 }));
+    const reports = scenarios.map((scenario, i) => ({
+      id: `report-${i}`,
+      report: {
+        scenario,
+        source_template: { id: "website-template", version: 3 },
+      },
+    }));
+    const template = { id: "website-template", version: 3, scenario_keys: scenarios.map((scenario) => scenario.key), offer_id: "website-plan", product_id: "website-product", destination: "https://example.invalid/website" };
+    const queryFor = (table: string) => {
+      const query: any = {
+        select: () => query,
+        eq: () => query,
+        order: () => query,
+        limit: () => query,
+        maybeSingle: async () => table === "local_business_leads" ? { data: { id: "lead", business_name: "Business", enrichment_diagnostics: {} }, error: null } : { data: { id: "assessment", assessed_at: "2026-11-01", scenario_matches: [] }, error: null },
+        single: async () => ({ data: { id: "draft", status: "draft" }, error: null }),
+        insert: (row: any) => { inserts.push({ table, row }); return query; },
+      };
+      return query;
+    };
+    const supabase = { from: queryFor };
+    const prepare = execute("prepareSelectedOutreach", {
+      supabase,
+      assessmentIsCurrent: () => true,
+      outreachOptions: async () => ({ matches: [], templates: [template] }),
+      selectTemplate: () => template,
+      prepareScenarioReports: async () => reports,
+      reportEmail: () => ({ subject: "Subject", body: "Body" }),
+    });
+    const create = execute("createOutreach", {
+      supabase,
+      json,
+      candidateForLead: async () => null,
+      prepareSelectedOutreach: prepare,
+    });
+    expect((await create("lead", { template_id: template.id })).status).toBe(201);
+    const draft = inserts.find((entry) => entry.table === "local_business_outreach_drafts")!.row;
+    expect(draft.selection.report_ids).toEqual(reports.map((report) => report.id));
+    expect(draft.selection.scenario_keys).toEqual(template.scenario_keys);
+    if (count === 1) {
+      expect(draft.scenario_id).toBe(scenarios[0].id);
+      expect(draft.scenario_version).toBe(scenarios[0].version);
+    } else {
+      expect(draft.scenario_id).toBeNull();
+      expect(draft.scenario_version).toBeNull();
+    }
+  });
+
   it("creates one business draft from all selected reports and never invokes mail or audits", async () => {
     const insert = vi.fn();
     const from = vi.fn((table: string) => {
@@ -171,6 +222,7 @@ describe("scenario outreach handler boundaries", () => {
       supabase: { from: () => query },
       json,
       validateDraftSelection: async () => null,
+      classifyOutreachDraft: async () => ({ kind: "website" }),
     });
     expect((await mutate("lead", "draft", { body: "Kia ora," })).status).toBe(
       200,

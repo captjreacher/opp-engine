@@ -3184,9 +3184,74 @@ async function prepareSelectedOutreach(id:string,requested?:string) {
   const {matches,templates}=await outreachOptions(id);
   const template=selectTemplate(matches,templates,requested);
   const reports=(await prepareScenarioReports(id,assessment,lead)).filter(r=>r.report.source_template?.id===template.id && template.scenario_keys.includes(r.report.scenario.key));
-  if(reports.length!==template.scenario_keys.length) throw new Error("Every selected scenario requires a report.");
+  if(reports.length!==template.scenario_keys.length || new Set(reports.map(r=>r.report.scenario.key)).size!==template.scenario_keys.length) throw new Error("Every selected scenario requires exactly one report.");
+  const selectedScenarioIds=reports.map(r=>r.report.scenario.id);
+  const selectedScenarioVersions=reports.map(r=>r.report.scenario.version);
+  if(reports.some(r=>!r.id || !r.report.scenario.id || !Number.isInteger(r.report.scenario.version))) throw new Error("Every selected scenario requires authoritative identity.");
   const rendered=reportEmail(template,reports.map(r=>r.report),lead.business_name);
-  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,offer_id:template.offer_id,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
+  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,scenario_id:reports.length===1?selectedScenarioIds[0]:null,scenario_version:reports.length===1?selectedScenarioVersions[0]:null,offer_id:template.offer_id,product_id:template.product_id ?? null,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
+}
+type OutreachDispatch = { kind: "website" } | { kind: "gbp"; scenarioCode: "G01" | "G02" } | { kind: "unsupported"; reason: string };
+async function classifyOutreachDraft(leadId: string, draft: JsonObject): Promise<OutreachDispatch> {
+  const selection = draft.selection as JsonObject | null;
+  const keys = Array.isArray(selection?.scenario_keys) ? selection.scenario_keys : null;
+  const reportIds = Array.isArray(selection?.report_ids) ? selection.report_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
+  const uniqueKeys = keys && keys.every((key) => typeof key === "string" && key.trim().length > 0) ? [...new Set(keys as string[])] : [];
+  if (!keys || uniqueKeys.length !== keys.length || uniqueKeys.length === 0 || reportIds.length !== uniqueKeys.length || new Set(reportIds).size !== reportIds.length) return { kind: "unsupported", reason: "scenario_identity_required" };
+  const { data: reports, error: reportError } = await supabase.from("opportunity_scenario_reports").select("id,lead_id,assessment_id,scenario_id,fingerprint,created_at,report").eq("lead_id", leadId).in("id", reportIds);
+  if (reportError || !reports || reports.length !== reportIds.length) return { kind: "unsupported", reason: "scenario_report_identity_unavailable" };
+  const reportRows = reports as Array<{ id: string; lead_id: string; assessment_id: string; scenario_id: string; fingerprint: string; created_at: string; report: JsonObject | null }>;
+  const { data: template, error: templateError } = await supabase.from("opportunity_outreach_templates").select("*").eq("id", selection?.template_id).maybeSingle();
+  if (templateError || !template || template.version !== selection?.template_version || canonicalJson(template.scenario_keys) !== canonicalJson(keys) || template.id !== selection?.template_id) return { kind: "unsupported", reason: "template_identity_unavailable" };
+  const reportKeys = reportRows.map((row) => String((row.report?.scenario as JsonObject | null)?.key ?? ""));
+  if (reportKeys.some((key) => !key) || canonicalJson([...reportKeys].sort()) !== canonicalJson(uniqueKeys.slice().sort())) return { kind: "unsupported", reason: "scenario_identity_mismatch" };
+  for (const row of reportRows) {
+    const report = row.report;
+    const scenario = report?.scenario as JsonObject | null;
+    const sourceScenario = report?.source_scenario as JsonObject | null;
+    const sourceTemplate = report?.source_template as JsonObject | null;
+    if (!report || row.lead_id !== leadId || row.assessment_id !== selection?.assessment_id || row.scenario_id !== scenario?.id || row.scenario_id !== sourceScenario?.id || scenario?.key !== sourceScenario?.slug && scenario?.key !== sourceScenario?.key || scenario?.version !== sourceScenario?.version || sourceTemplate?.id !== template.id || sourceTemplate?.version !== template.version || (uniqueKeys.length===1 && (draft.scenario_id !== row.scenario_id || draft.scenario_version !== scenario?.version)) || (uniqueKeys.length>1 && (draft.scenario_id !== null && draft.scenario_id !== undefined || draft.scenario_version !== null && draft.scenario_version !== undefined))) return { kind: "unsupported", reason: "scenario_report_template_identity_mismatch" };
+  }
+  const { data: lead, error: leadError } = await supabase.from("local_business_leads").select("id,business_name").eq("id", leadId).maybeSingle();
+  if (leadError || !lead) return { kind: "unsupported", reason: "opportunity_identity_unavailable" };
+  const { data: assessment, error: assessmentError } = await supabase.from("local_business_lead_assessments").select("id,scenario_matches").eq("id", selection?.assessment_id).eq("lead_id", leadId).maybeSingle();
+  if (assessmentError || !assessment) return { kind: "unsupported", reason: "assessment_identity_unavailable" };
+  const matches = Array.isArray(assessment.scenario_matches) ? assessment.scenario_matches as Array<JsonObject> : [];
+  for (const row of reportRows) {
+    const report = row.report!;
+    const scenario = report.scenario as JsonObject;
+    const match = matches.find(candidate => candidate.scenario_id === row.scenario_id && candidate.scenario_version === scenario.version && (candidate.scenario_key === scenario.key || candidate.scenario_key === scenario.slug));
+    if (!match || String((report.business as JsonObject | null)?.id ?? "") !== leadId || String(report.source_assessment_id ?? "") !== String(assessment.id)) return { kind: "unsupported", reason: "canonical_ownership_mismatch" };
+  }
+  const { data: scenarios, error: scenarioError } = await supabase.from("opportunity_scenarios").select("id,slug,version,status").in("id", reportRows.map(row => row.scenario_id));
+  const unreleasedGbpScenario = uniqueKeys.length === 1 && (uniqueKeys[0] === "G01" || uniqueKeys[0] === "G02");
+  if (scenarioError || !scenarios || scenarios.length !== reportRows.length || scenarios.some(s => (s.status !== "active" && !unreleasedGbpScenario) || !reportRows.some(row => row.scenario_id === s.id && row.report?.scenario?.version === s.version && row.report?.scenario?.key === s.slug))) return { kind: "unsupported", reason: "canonical_scenario_unavailable" };
+  if (!unreleasedGbpScenario) {
+    const commercialIdentities = reportRows.map(row => {
+      const offer = row.report?.offer as JsonObject | null;
+      return {
+        id: String(offer?.id ?? ""),
+        plan_id: String(offer?.plan_id ?? ""),
+        product_id: String(offer?.product_id ?? ""),
+        price_version: String(offer?.price_version ?? ""),
+        destination: String(offer?.destination ?? ""),
+      };
+    });
+    if (commercialIdentities.some(offer => !offer.id || !offer.plan_id || !offer.product_id || !offer.price_version || !offer.destination || offer.id !== String(selection.offer_id ?? "") || offer.plan_id !== String(selection.offer_id ?? "") || offer.product_id !== String(selection.product_id ?? "") || offer.product_id !== String(template.product_id ?? "") || offer.destination !== String(selection.destination ?? "") || offer.destination !== String(template.destination ?? "")) || commercialIdentities.some(offer => canonicalJson(offer) !== canonicalJson(commercialIdentities[0]))) return { kind: "unsupported", reason: "report_commercial_identity_mismatch" };
+  }
+  const { data: relatedReports, error: relatedError } = await supabase.from("opportunity_scenario_reports").select("id,scenario_id,created_at").eq("lead_id", leadId).eq("assessment_id", selection?.assessment_id).in("scenario_id", reportRows.map((row) => row.scenario_id));
+  if (relatedError || !relatedReports) return { kind: "unsupported", reason: "scenario_report_history_unavailable" };
+  if (relatedReports.some((candidate) => reportRows.some((row) => candidate.scenario_id === row.scenario_id && candidate.created_at > row.created_at && candidate.id !== row.id))) return { kind: "unsupported", reason: "scenario_report_superseded" };
+  const gbpKeys = uniqueKeys.filter((key): key is "G01" | "G02" => key === "G01" || key === "G02");
+  if (gbpKeys.length > 0) {
+    if (gbpKeys.length !== uniqueKeys.length || uniqueKeys.length !== 1) return { kind: "unsupported", reason: "ambiguous_gbp_scenario" };
+    const code = gbpKeys[0];
+    const offer = GBP_OFFER_MAP[code];
+    if (template.id !== offer.templateId || template.offer_id !== offer.productId || template.product_id !== offer.productId || template.destination !== offer.destination || selection.offer_id !== offer.productId || selection.product_id !== offer.productId || selection.destination !== offer.destination) return { kind: "unsupported", reason: "gbp_template_identity_mismatch" };
+    return { kind: "gbp", scenarioCode: code };
+  }
+  if (template.enabled !== true || typeof template.product_id !== "string" || selection?.product_id !== template.product_id || selection.offer_id !== template.offer_id || selection.destination !== template.destination) return { kind: "unsupported", reason: "website_template_identity_mismatch" };
+  return { kind: "website" };
 }
 async function validateDraftSelection(id:string,draft:JsonObject): Promise<string | null> {
   try {
@@ -3214,9 +3279,9 @@ async function approvalProvenance(id: string, draft: JsonObject): Promise<Record
   const { recipient } = outreachRecipient((await supabase.from("local_business_leads").select("email").eq("id", id).single()).data?.email);
   if (!recipient || !isValidEmailAddress(recipient)) throw new Error("invalid_recipient");
   const destination = String((draft.gbp_commercial_snapshot as JsonObject | null)?.destination ?? selection.destination ?? "");
-  const commercial = { offer_id: selection.offer_id ?? null, snapshot: draft.gbp_commercial_snapshot ?? null, catalogue: reports.map((report) => { const offer = (report.report as JsonObject | null)?.offer as JsonObject | null; return { id: offer?.id ?? null, price_version: offer?.price_version ?? null, destination: offer?.destination ?? null }; }) };
+  const commercial = { offer_id: selection.offer_id ?? null, snapshot: draft.gbp_commercial_snapshot ?? null, catalogue: reports.map((report) => { const offer = (report.report as JsonObject | null)?.offer as JsonObject | null; return { id: offer?.id ?? null, plan_id: offer?.plan_id ?? null, product_id: offer?.product_id ?? null, price_version: offer?.price_version ?? null, destination: offer?.destination ?? null }; }) };
   const identity = {
-    lead_id: id, current_assessment_id: assessment.id, scenario_id: draft.scenario_id ?? assessment.scenario_id ?? null,
+    lead_id: id, current_assessment_id: assessment.id, scenario_id: selection.scenario_id ?? (reportReferences.length === 1 ? reportReferences[0].scenario_id : null),
     scenario_report_id: scenarioReportId, scenario_report_fingerprint: scenarioReportFingerprint, scenario_report_references: reportReferences,
     audit_report_id: audit?.id ?? null, audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null,
     billing: commercial, destination_url: destination, recipient,
@@ -3601,6 +3666,8 @@ async function createOutreach(
       lead_id: id,
       channel: "email",
       selection,
+      scenario_id: selection.scenario_id ?? null,
+      scenario_version: selection.scenario_version ?? null,
       subject,
       body,
       status: "draft",
@@ -3663,7 +3730,8 @@ async function prepareGbpCommercial(id: string, payload: Record<string, unknown>
   }
   const message = gbpOutreach(String(lead.business_name ?? 'your business'), q, snapshot);
   const offer: Offer = {
-    id: snapshot.planId, name: offerMap.title, description: snapshot.description,
+    id: snapshot.planId, plan_id: snapshot.planId, product_id: snapshot.productId,
+    name: offerMap.title, description: snapshot.description,
     components: [...snapshot.inclusions],
     price: { kind: 'fixed', amountMinor: snapshot.amountMinor, currency: snapshot.currency, taxTreatment: snapshot.taxTreatment, taxRate: snapshot.taxRate },
     price_version: snapshot.priceVersionId, price_text: snapshot.commercialLine,
@@ -3682,7 +3750,7 @@ async function prepareGbpCommercial(id: string, payload: Record<string, unknown>
   if (reportError) throw reportError;
   const { data: stored, error: readError } = await supabase.from('opportunity_scenario_reports').select('id,report').eq('fingerprint', fingerprint).single();
   if (readError || !stored) throw readError ?? new Error('gbp_report_unavailable');
-  const selection = { template_id: template.id, template_version: template.version, scenario_keys: [q.scenarioCode], offer_id: offerMap.productId, destination: snapshot.destination, report_ids: [stored.id], reports: [report], assessment_id: assessment.id, findings: match.evidence };
+  const selection = { template_id: template.id, template_version: template.version, scenario_keys: [q.scenarioCode], offer_id: offerMap.productId, product_id: snapshot.productId, destination: snapshot.destination, report_ids: [stored.id], reports: [report], assessment_id: assessment.id, findings: match.evidence };
   const { data: draft, error: insertError } = await supabase.from('local_business_outreach_drafts').insert({ lead_id: id, channel: 'email', subject: message.subject, body: message.body, status: 'draft', created_by: 'operator-console', scenario_id: scenario.id, scenario_version: scenario.version, selection, gbp_commercial_snapshot: snapshot }).select('*').single();
   if (insertError) return json({ error: 'gbp_draft_create_failed', detail: insertError.message }, 409);
   await supabase.from('opportunity_console_audit_log').insert({ action: 'outreach_draft_created', lead_id: id, draft_id: draft.id, actor: 'operator-console', metadata: { scenario_code: q.scenarioCode, plan_id: snapshot.planId, price_version_id: snapshot.priceVersionId } });
@@ -3692,11 +3760,12 @@ async function prepareGbpCommercial(id: string, payload: Record<string, unknown>
 async function validateGbpDraft(id: string, draft: JsonObject): Promise<string | null> {
   try {
     const snapshot = draft.gbp_commercial_snapshot as GbpCommercialSnapshot;
+    if (!snapshot || typeof snapshot !== "object") return "GBP commercial snapshot is required.";
     const selection = draft.selection as JsonObject | null;
     const offer = GBP_OFFER_MAP[snapshot.scenarioCode];
-    if (!offer || !selection || selection.template_id !== offer.templateId || selection.offer_id !== offer.productId || selection.destination !== offer.destination || canonicalJson(selection.scenario_keys) !== canonicalJson([snapshot.scenarioCode])) return 'GBP template or destination changed.';
-    const { data: template } = await supabase.from('opportunity_outreach_templates').select('name,enabled,offer_id,destination').eq('id', offer.templateId).maybeSingle();
-    if (!template || template.enabled !== false || template.name !== offer.template || template.offer_id !== offer.productId || template.destination !== offer.destination) return 'GBP template was withdrawn or changed.';
+    if (!offer || !selection || selection.template_id !== offer.templateId || selection.offer_id !== offer.productId || selection.product_id !== offer.productId || selection.destination !== offer.destination || snapshot.productId !== offer.productId || snapshot.planId !== offer.plans[snapshot.serviceBand] || canonicalJson(selection.scenario_keys) !== canonicalJson([snapshot.scenarioCode])) return 'GBP template or destination changed.';
+    const { data: template } = await supabase.from('opportunity_outreach_templates').select('name,enabled,offer_id,product_id,destination').eq('id', offer.templateId).maybeSingle();
+    if (!template || template.enabled !== false || template.name !== offer.template || template.offer_id !== offer.productId || template.product_id !== offer.productId || template.destination !== offer.destination) return 'GBP template was withdrawn or changed.';
     const reportIds = Array.isArray(selection.report_ids) ? selection.report_ids : [];
     const reportId = reportIds[0];
     if (typeof reportId !== 'string' || reportIds.length !== 1) return 'GBP Scenario Report is missing.';
@@ -3708,7 +3777,7 @@ async function validateGbpDraft(id: string, draft: JsonObject): Promise<string |
     const qualified = qualifyGbp(q);
     if (!qualified.ok || qualified.value.scenarioCode !== snapshot.scenarioCode || qualified.band !== snapshot.serviceBand) return 'GBP qualification changed.';
     const reportOffer = report.offer as JsonObject | null;
-    if (canonicalJson(report.gbp_commercial_snapshot) !== canonicalJson(snapshot) || reportOffer?.id !== snapshot.planId || reportOffer?.description !== snapshot.description || canonicalJson(reportOffer?.components) !== canonicalJson(snapshot.inclusions) || canonicalJson(reportOffer?.terms) !== canonicalJson([...snapshot.terms, `Exclusions: ${snapshot.exclusions}`]) || reportOffer?.price_text !== snapshot.commercialLine || reportOffer?.price_version !== snapshot.priceVersionId || reportOffer?.destination !== snapshot.destination) return 'GBP report and commercial snapshot differ.';
+    if (canonicalJson(report.gbp_commercial_snapshot) !== canonicalJson(snapshot) || reportOffer?.id !== snapshot.planId || reportOffer?.plan_id !== snapshot.planId || reportOffer?.product_id !== snapshot.productId || reportOffer?.description !== snapshot.description || canonicalJson(reportOffer?.components) !== canonicalJson(snapshot.inclusions) || canonicalJson(reportOffer?.terms) !== canonicalJson([...snapshot.terms, `Exclusions: ${snapshot.exclusions}`]) || reportOffer?.price_text !== snapshot.commercialLine || reportOffer?.price_version !== snapshot.priceVersionId || reportOffer?.destination !== snapshot.destination) return 'GBP report and commercial snapshot differ.';
     const businessName = String((report.business as JsonObject | null)?.name ?? '');
     const expected = gbpOutreach(businessName, qualified.value, snapshot);
     if (draft.subject !== expected.subject || draft.body !== expected.body) return 'GBP report and email differ.';
@@ -3731,10 +3800,13 @@ async function updateOutreach(
   if(existingError) throw existingError;
   if(!existing) return json({error:"not_found"},404);
   if(existing.status==="sent" || existing.sent_at) return json({error:"already_sent"},409);
-  if(existing.gbp_commercial_snapshot && (payload.body !== undefined || payload.subject !== undefined)) return json({error:"gbp_commercial_copy_locked"},409);
   const edited=(typeof payload.subject==="string" && payload.subject!==existing.subject) || (typeof payload.body==="string" && payload.body!==existing.body);
+  const dispatch = await classifyOutreachDraft(id, existing);
+  if (dispatch.kind === "unsupported") return json({error:"outreach_mapping_not_ready",detail:dispatch.reason},422);
+  if(dispatch.kind === "gbp" && (payload.body !== undefined || payload.subject !== undefined)) return json({error:"gbp_commercial_copy_locked"},409);
   if(edited) {
-    const editError=await validateDraftSelection(id,{...existing,...(typeof payload.subject==="string"?{subject:payload.subject}:{}),...(typeof payload.body==="string"?{body:payload.body}:{})});
+    const editedDraft={...existing,...(typeof payload.subject==="string"?{subject:payload.subject}:{}),...(typeof payload.body==="string"?{body:payload.body}:{})};
+    const editError=dispatch.kind === "gbp" ? await validateGbpDraft(id,editedDraft) : await validateDraftSelection(id,editedDraft);
     if(editError) return json({error:"unsupported_email_edit",detail:editError},422);
   }
   const fields: Record<string, unknown> = {
@@ -3758,7 +3830,7 @@ async function updateOutreach(
   if (status === "approved") {
     if(edited) return json({error:"save_before_approval"},422);
     if(payload.reviewed!==true) return json({error:"manual_review_required"},422);
-    const selectionError=existing.gbp_commercial_snapshot ? await validateGbpDraft(id,existing) : await validateDraftSelection(id,existing);
+    const selectionError=dispatch.kind === "gbp" ? await validateGbpDraft(id,existing) : await validateDraftSelection(id,existing);
     if(selectionError) return json({error:"outreach_mapping_not_ready",detail:selectionError},422);
     if(typeof payload.expected_updated_at !== "string" || payload.expected_updated_at !== existing.updated_at) return json({error:"reviewed_draft_changed",detail:"Reload and review the latest saved email before approving."},409);
     let provenance: Record<string, unknown>;
@@ -3808,7 +3880,9 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
     .maybeSingle();
   if (dErr) throw dErr;
   if (!draft) return json({ error: "not_found" }, 404);
-  if (draft.gbp_commercial_snapshot) {
+  const dispatch = await classifyOutreachDraft(id, draft);
+  if (dispatch.kind === "unsupported") return json({ error: "outreach_mapping_not_ready", detail: dispatch.reason }, 422);
+  if (dispatch.kind === "gbp") {
     const gbpValidationError = await validateGbpDraft(id, draft);
     if (gbpValidationError) return json({ error: "outreach_mapping_not_ready", detail: gbpValidationError }, 422);
     return json({ error: "gbp_commercial_send_not_released" }, 409);
@@ -3880,6 +3954,14 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
     (overridden
       ? `<p style="background:#fef3c7;border:1px solid #f59e0b;padding:8px 10px;border-radius:6px;font-family:system-ui"><strong>TEST SEND</strong> — intended recipient: ${esc(prospectEmail || "(none on file)")}</p>`
       : "") + htmlFromBody(String(draft.body ?? ""));
+
+  // Billing exposes read-only catalogue reads, not an immutable version binding
+  // or atomic reservation. Re-read immediately before the canonical claim to
+  // minimize the external race; the claim still binds the persisted identity
+  // and fails closed if it differs. The residual provider-side TOCTOU cannot
+  // be eliminated until Billing supplies such a primitive.
+  const finalSelectionError = await validateDraftSelection(id,draft);
+  if(finalSelectionError) return json({error:"outreach_mapping_not_ready",detail:finalSelectionError},422);
 
   const provenance = {
     lead_id: id, current_assessment_id: draft.approved_current_assessment_id, scenario_id: draft.scenario_id,

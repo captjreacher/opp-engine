@@ -58,6 +58,8 @@ suite(
     beforeAll(() => {
       if (!db?.startsWith("opp_release_test"))
         throw new Error("Explicit disposable release database required");
+      if (sql("select current_database()") !== db)
+        throw new Error("PostgreSQL identity check failed");
       sql(
         "drop schema public cascade; drop schema if exists auth cascade; create schema public;",
       );
@@ -229,6 +231,23 @@ suite(
           `select state from opportunity_outreach_send_claims where draft_id='${id(60)}'`,
         ),
       ).toBe("sent");
+    });
+    it("rolls back actual hardening statements after a partial schema and data change", () => {
+      const beforeLeads = sql("select count(*) from local_business_leads");
+      const beforeFunctions = sql("select count(*) from pg_proc where proname='fixture_partial_migration_function'");
+      const beforeTriggers = sql("select count(*) from pg_trigger where tgname='fixture_partial_migration_trigger'");
+      expect(() => sql(`begin;
+        alter table public.opportunity_outreach_templates add column if not exists product_id text;
+        update public.opportunity_outreach_templates set product_id = offer_id where product_id is null;
+        create function public.fixture_partial_migration_function() returns trigger language plpgsql as $$ begin return new; end $$;
+        create trigger fixture_partial_migration_trigger after update on public.opportunity_outreach_templates for each row execute function public.fixture_partial_migration_function();
+        do $$ begin raise exception 'deliberate post-migration failure'; end $$;
+        commit;`)).toThrow();
+      expect(sql("select count(*) from information_schema.columns where table_schema='public' and table_name='opportunity_outreach_templates' and column_name='product_id'")).toBe("0");
+      expect(sql("select count(*) from pg_proc where proname='fixture_partial_migration_function'")).toBe(beforeFunctions);
+      expect(sql("select count(*) from pg_trigger where tgname='fixture_partial_migration_trigger'")).toBe(beforeTriggers);
+      expect(sql("select count(*) from local_business_leads")).toBe(beforeLeads);
+      expect(sql("select status from local_business_leads where id='" + id(1) + "'")).toBe("assessed");
     });
     it("rolls back state when atomic completion audit fails", () => {
       draft(70, 5);

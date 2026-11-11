@@ -8,6 +8,8 @@ export type ApprovedDetails = {
 };
 export type Offer = {
   id: string;
+  plan_id: string;
+  product_id: string;
   name: string;
   description: string;
   components: string[];
@@ -78,6 +80,8 @@ export async function resolveOffer(
   )
     throw new Error("Billing catalogue is not configured.");
   const details = template.approved_details;
+  if (!requiredText(template.product_id))
+    throw new Error("Approved Billing product identity is required.");
   if (
     !details ||
     !Number.isFinite(Date.parse(details.approved_at)) ||
@@ -115,6 +119,7 @@ export async function resolveOffer(
   const plan = await read(`plans/${id}`);
   if (
     plan.planId !== template.offer_id ||
+    plan.productId !== template.product_id ||
     plan.isSellable !== true ||
     plan.isArchived === true ||
     !requiredText(plan.name) ||
@@ -134,7 +139,7 @@ export async function resolveOffer(
   if (
     !current ||
     current.planId !== template.offer_id ||
-    !["published", "superseded"].includes(String(current.status)) ||
+    current.status !== "published" ||
     !requiredText(current.planVersionId) ||
     !Number.isFinite(Date.parse(String(current.effectiveFrom))) ||
     Date.parse(String(current.effectiveFrom)) > now ||
@@ -173,6 +178,8 @@ export async function resolveOffer(
   }
   return {
     id: template.offer_id,
+    plan_id: plan.planId,
+    product_id: plan.productId,
     name: plan.name,
     description: plan.description,
     components: details.inclusions,

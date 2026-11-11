@@ -176,6 +176,7 @@ export type OutreachTemplate = {
   subject: string;
   body: string;
   offer_id: string;
+  product_id?: string | null;
   destination: string | null;
   destination_verified_at: string | null;
   enabled: boolean;

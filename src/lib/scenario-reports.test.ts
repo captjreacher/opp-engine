@@ -31,6 +31,7 @@ const template: OutreachTemplate & {
   subject: "Opportunity for {{business_name}}",
   body: "Hello,\nWe reviewed the recorded observations for {{business_name}}.",
   offer_id: "plan-existing",
+  product_id: "product-existing",
   destination: "https://maximisedai.com/products/verified",
   destination_verified_at: "2026-10-01",
   approved_details: {
@@ -150,6 +151,16 @@ describe("approved Billing resolution", () => {
     { ...plan, planId: "another-plan" },
   ])("blocks withdrawn, archived and mismatched offers", async (p) => {
     await expect(resolveOffer(template, config, billing(p))).rejects.toThrow();
+  });
+  it("rejects a plan belonging to a different Billing product", async () => {
+    await expect(
+      resolveOffer(template, config, billing({ ...plan, productId: "other-product" })),
+    ).rejects.toThrow();
+  });
+  it("rejects a superseded current price", async () => {
+    await expect(
+      resolveOffer(template, config, billing(plan, { ...price, status: "superseded" })),
+    ).rejects.toThrow();
   });
   it.each([
     null,

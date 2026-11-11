@@ -45,6 +45,7 @@ const template = (id = "website"): OutreachTemplate => ({
   subject: "Findings for {{business_name}}",
   body: "{{findings}}\nRequest a free assessment: {{destination}}",
   offer_id: "existing-billing-product",
+  product_id: "existing-billing-product-product",
   destination: "https://maximisedai.com/contact/?source=opportunity-engine",
   destination_verified_at: "2026-10-10",
   enabled: true,
