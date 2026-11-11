@@ -73,16 +73,16 @@ export function deriveNextAction(
 
   if (score >= 120) {
     return {
-      label: "Approve Digital Opportunity Audit",
+      label: "Review Scenario Reports",
       description:
-        "This business shows strong opportunity signals. Proceed with a full digital audit to identify specific growth areas.",
+        "This business shows strong opportunity signals. Review the assessed scenarios and recorded evidence.",
     };
   }
   if (score >= 60) {
     return {
       label: "Review Assessment Data",
       description:
-        "Moderate opportunity detected. Review the individual metrics below and consider proceeding with an audit.",
+        "Moderate opportunity detected. Review the individual metrics below and review the assessed scenarios.",
     };
   }
   return {

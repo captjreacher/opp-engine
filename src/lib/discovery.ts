@@ -211,5 +211,5 @@ export function validateDiscoveryInput(
 }
 
 export function isActiveDiscoveryStatus(status: string): boolean {
-  return ["queued", "discovering", "enriching", "scoring", "auditing"].includes(status);
+  return ["queued", "discovering", "enriching", "scoring"].includes(status);
 }

@@ -1,0 +1,63 @@
+name: PostgreSQL release gate
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+jobs:
+  postgres-release-gate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: opp_outreach_test_rehearsal
+        ports:
+          - 55485:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d opp_outreach_test_rehearsal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      OPP_OUTREACH_DATABASE: opp_outreach_test_rehearsal
+      OPP_TEST_PGPORT: "55485"
+      OPP_TEST_PSQL: psql
+      PGHOST: 127.0.0.1
+      PGPORT: "55485"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify disposable database gate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$OPP_OUTREACH_DATABASE" = "opp_outreach_test_rehearsal"
+          test "$OPP_TEST_PSQL" = "psql"
+          command -v "$OPP_TEST_PSQL"
+          test "$(psql -X -At -d "$OPP_OUTREACH_DATABASE" -c 'select current_database();')" = "opp_outreach_test_rehearsal"
+
+      - name: Run mandatory PostgreSQL reconciliation and full Vitest gate
+        run: npm test -- --run
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Check patch formatting
+        shell: bash
+        run: git diff --check

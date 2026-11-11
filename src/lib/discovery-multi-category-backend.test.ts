@@ -82,12 +82,13 @@ describe("multi-category Discovery backend", () => {
     const executed: Record<string, unknown>[] = [];
     const createRun = new Function(
       "deps",
-      `const { cleanText, numberInRange, loadDiscoverySettings, resolveDiscoveryScenario, listAllActiveCategories, findActiveCategories, findActiveCategory, categorySupportsScenario, json, supabase, GOOGLE_PLACES_API_KEY, expandCategoriesSearchTerms, executeDiscoveryRun, formatCategorySummary, MIN_RADIUS_M, MAX_RADIUS_M } = deps;\n${runJs}\nreturn createDiscoveryRun;`,
+      `const { cleanText, numberInRange, loadDiscoverySettings, enabledCompanyScenarios, resolveDiscoveryScenario, listAllActiveCategories, findActiveCategories, findActiveCategory, categorySupportsScenario, json, supabase, GOOGLE_PLACES_API_KEY, expandCategoriesSearchTerms, executeDiscoveryRun, formatCategorySummary, MIN_RADIUS_M, MAX_RADIUS_M } = deps;\n${runJs}\nreturn createDiscoveryRun;`,
     )({
       cleanText: (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : null,
       numberInRange: (value: unknown, min: number, max: number) =>
         typeof value === "number" && value >= min && value <= max ? value : null,
-      loadDiscoverySettings: async () => ({
+      enabledCompanyScenarios: async () => [{id:"scenario-1",slug:"local-digital-presence",version:1,status:"active",assessment_config:{},discovery_config:{}}],
+    loadDiscoverySettings: async () => ({
         default_result_limit: 10,
         max_result_limit: 20,
         max_search_terms: 3,

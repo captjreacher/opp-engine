@@ -1,0 +1,31 @@
+{
+  "observedAt": "2026-10-21",
+  "source": "pg_get_functiondef normalized CRLF; read-only production metadata",
+  "functions": [
+    {
+      "proname": "check_prospect_eligibility",
+      "arguments": "p_business_name text, p_email text, p_phone text",
+      "definition_md5": "078d58b5de32a3f026e3d90262bc77f0"
+    },
+    {
+      "proname": "opportunity_apply_default_output_scenario",
+      "arguments": "",
+      "definition_md5": "35385e90d34b2f0090c899062de63b2d"
+    },
+    {
+      "proname": "opportunity_attempt_cockpit_handoff",
+      "arguments": "p_draft_id uuid, p_send_metadata jsonb",
+      "definition_md5": "af12087eb3e95d811382f119880e692c"
+    },
+    {
+      "proname": "opportunity_import_discovery_candidate",
+      "arguments": "p_candidate_id uuid",
+      "definition_md5": "f2439ee63938ab0260d87da684b9fe33"
+    },
+    {
+      "proname": "queue_local_business_enrichment",
+      "arguments": "p_lead_id uuid, p_project_url text, p_operator_token text, p_retry boolean",
+      "definition_md5": "351c52f269fd44e50360a7b809f37f7f"
+    }
+  ]
+}

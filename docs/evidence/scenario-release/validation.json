@@ -1,0 +1,60 @@
+{
+  "validatedAt": "2026-10-21",
+  "branch": "codex/scenario-release-candidate",
+  "main": "5ecb21c000d90f78670efd352e1ec5bd787ff66b",
+  "reconciledFoundation": "754593f7a0e41ceaaea1ee36cfe97320fad8842d",
+  "reports": "a8a250343294ea5d65a32911e76db12c01474b64",
+  "archiveCommitted": "37976ab344b5ad913b39f3a881ce1c607e60e795",
+  "tests": {
+    "failed": 0,
+    "passed": 430,
+    "postgresIntegrationTests": 22,
+    "skipped": 0
+  },
+  "build": "passed",
+  "changedEdgeFunctionsTypecheck": "passed",
+  "preExistingAllEdgeTypeErrors": 12,
+  "preExistingDenoLintFindings": 4,
+  "browser": {
+    "mobile": "390x844",
+    "desktop": "1440x1000",
+    "stats": {
+      "mockTransportAttempts": 1,
+      "outboundMessages": 0,
+      "retainedClaims": [
+        {
+          "lead_id": "f0000000-0000-4000-8000-000000000003",
+          "state": "sending"
+        },
+        {
+          "lead_id": "f0000000-0000-4000-8000-000000000004",
+          "state": "uncertain"
+        },
+        {
+          "lead_id": "f0000000-0000-4000-8000-000000000006",
+          "state": "sent"
+        },
+        {
+          "lead_id": "f0000000-0000-4000-8000-000000000005",
+          "state": "sending"
+        },
+        {
+          "lead_id": "11111111-1111-4111-8111-111111111111",
+          "state": "uncertain"
+        }
+      ],
+      "ids": {
+        "single": "11111111-1111-4111-8111-111111111111",
+        "multi": "22222222-2222-4222-8222-222222222222",
+        "missing": "33333333-3333-4333-8333-333333333333",
+        "archived": "44444444-4444-4444-8444-444444444444",
+        "withdrawn": "55555555-5555-4555-8555-555555555555"
+      }
+    },
+    "transport": "refusing local mock only"
+  },
+  "productionWorkerVersion": "2adf39b9-4376-43ee-b2a3-027e7d1be68b",
+  "readiness": "blocked; see scenario-release-validation.md",
+  "remoteChanges": false,
+  "productionChanges": false
+}

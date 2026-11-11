@@ -345,6 +345,7 @@ function AddAnalysableForm({ leadId, onAdded }: AddAnalysableFormProps) {
 // ── Panel ───────────────────────────────────────────────────────────────────
 
 interface VisualEvidencePanelProps {
+  readOnly?: boolean;
   leadId: string;
   evidence: VisualEvidence[];
   onAdded: () => Promise<void>;
@@ -362,7 +363,7 @@ interface VisualEvidencePanelProps {
  * - Future visual-condition findings will be listed per evidence item with
  *   provenance back to its id; no findings are produced or faked yet.
  */
-export default function VisualEvidencePanel({ leadId, evidence, onAdded }: VisualEvidencePanelProps) {
+export default function VisualEvidencePanel({ leadId, evidence, onAdded, readOnly = false }: VisualEvidencePanelProps) {
   const streetViewCount = evidence.filter((e) => e.source === "google_street_view").length;
   const analysableCount = evidence.filter((e) => !isReferenceOnly(e)).length;
 
@@ -403,7 +404,7 @@ export default function VisualEvidencePanel({ leadId, evidence, onAdded }: Visua
       )}
 
       <div className="border-t border-graphite-800 pt-3 space-y-3">
-        <AddAnalysableForm leadId={leadId} onAdded={onAdded} />
+        {readOnly ? <p className="text-xs text-graphite-400">Restore this opportunity before adding evidence.</p> : <AddAnalysableForm leadId={leadId} onAdded={onAdded} />}
         <p className="text-[11px] leading-relaxed text-graphite-500">
           Future visual analysis will report conditions (
           {VISUAL_FINDING_CATEGORIES.map((c) => VISUAL_FINDING_CATEGORY_LABELS[c]).join(", ")}

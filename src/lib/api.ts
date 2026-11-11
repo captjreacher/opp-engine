@@ -1,3 +1,4 @@
+import type { OpportunityLifecycleView } from "../../supabase/functions/_shared/opportunityLifecycle";
 // Typed API client for the opp-engine frontend.
 //
 // The SPA NEVER talks to Supabase directly — every call goes through the
@@ -8,7 +9,6 @@ import type {
   ApiErrorBody,
   AddAnalysableEvidenceInput,
   AnalysisResponse,
-  AuditRunResponse,
   Draft,
   DraftResponse,
   DraftStatus,
@@ -78,6 +78,7 @@ export class ApiNotConfiguredError extends Error {
 
 function joinUrl(base: string, path: string): string {
   const trimmedBase = base.replace(/\/+$/, "");
+  if (path.startsWith("?")) return `${trimmedBase}${path}`;
   const trimmedPath = path.replace(/^\/+/, "");
   return trimmedPath ? `${trimmedBase}/${trimmedPath}` : trimmedBase;
 }
@@ -131,8 +132,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** GET {VITE_API_BASE} -> { opportunities: OppRow[] } */
-export function fetchOpportunities(): Promise<OppListResponse> {
-  return request<OppListResponse>("");
+export function fetchOpportunities(view?: OpportunityLifecycleView): Promise<OppListResponse> {
+  return request<OppListResponse>(view ? `?lifecycle=${encodeURIComponent(view)}` : "");
 }
 
 /** GET {VITE_API_BASE}/{id} -> OppDetail */
@@ -141,6 +142,7 @@ export function fetchOpportunityDetail(id: string): Promise<OppDetail> {
 }
 
 export interface OpportunityBatch {
+  archived_at?: string | null;
   id: string;
   name: string;
   purpose: string;
@@ -161,11 +163,34 @@ export function updateOpportunityBatch(id: string, fields: Pick<OpportunityBatch
 /** POST {VITE_API_BASE}/{id}/outreach -> { draft } (201) */
 export function createOutreachDraft(
   id: string,
-  payload?: { subject?: string; body?: string },
+  payload?: { subject?: string; body?: string; template_id?: string },
 ): Promise<DraftResponse> {
   return request<DraftResponse>(`/${encodeURIComponent(id)}/outreach`, {
     method: "POST",
     body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export interface GbpPreparationInput {
+  scenarioCode: 'G01' | 'G02';
+  serviceCount: number;
+  customerConfirmed: boolean;
+  profileStatus: 'none_or_unclaimed' | 'verified_controlled';
+  humanReviewed: boolean;
+  observedAt: string;
+  evidenceUrl?: string;
+  searchQuery?: string;
+  searchLocation?: string;
+  candidateReview?: string;
+  searchAttempted?: boolean;
+  searchResult?: 'no_match' | 'unclaimed_match' | 'matching_profile';
+  observation?: string;
+}
+
+/** Local draft preparation; the server blocks this when GBP draft mode is off. */
+export function prepareGbpCommercial(id: string, payload: GbpPreparationInput): Promise<DraftResponse> {
+  return request<DraftResponse>(`/${encodeURIComponent(id)}/gbp-commercial/prepare`, {
+    method: 'POST', body: JSON.stringify(payload),
   });
 }
 
@@ -181,6 +206,8 @@ export function updateOutreachDraft(
     subject?: string;
     body?: string;
     status?: Exclude<DraftStatus, "sent">;
+    reviewed?: boolean;
+    expected_updated_at?: string;
   },
 ): Promise<DraftResponse> {
   return request<DraftResponse>(
@@ -204,9 +231,12 @@ export function sendOutreachDraft(
 ): Promise<SendResponse> {
   return request<SendResponse>(
     `/${encodeURIComponent(id)}/outreach/${encodeURIComponent(draftId)}/send`,
-    { method: "POST", body: JSON.stringify({}) },
+    { method: "POST", body: JSON.stringify({confirm_send:true}) },
   );
 }
+
+export function moveBatchMember(id:string,from:string,to:string) { return request(`/${encodeURIComponent(id)}/batch-membership`,{method:"POST",body:JSON.stringify({from,to,confirm_move:true})}); }
+export function archiveBatch(id:string) { return request(`/batches/${encodeURIComponent(id)}/archive`,{method:"POST",body:JSON.stringify({})}); }
 
 /** POST {VITE_API_BASE}/{id}/review -> { review_state, event } (201) */
 export function setReviewState(
@@ -321,7 +351,7 @@ export function fetchDiscoveryCandidates(
 
 function discoveryBatch(
   runId: string,
-  action: "import" | "assess" | "audit",
+  action: "import" | "assess",
   candidateIds: string[],
   retry = false,
 ): Promise<BatchActionResponse> {
@@ -341,11 +371,6 @@ export const assessDiscoveryCandidates = (
   ids: string[],
   retry = false,
 ) => discoveryBatch(runId, "assess", ids, retry);
-export const auditDiscoveryCandidates = (
-  runId: string,
-  ids: string[],
-  retry = false,
-) => discoveryBatch(runId, "audit", ids, retry);
 
 /**
  * POST {VITE_API_BASE}/discovery-candidates/{id}/acknowledge
@@ -470,15 +495,13 @@ export function assessOpportunity(
   return analyzeOpportunity(id, retry);
 }
 
-export function auditOpportunity(
-  id: string,
-  retry = false,
-): Promise<AuditRunResponse> {
-  return request(`/${encodeURIComponent(id)}/audit`, {
-    method: "POST",
-    body: JSON.stringify({ retry }),
-  });
-}
 
 /** Re-exported for convenience so components can type draft state without importing types directly. */
 export type { Draft };
+
+/** Archive/restore only; the API never exposes a destructive workaround. */
+export function setOpportunityArchived(id: string, archived: boolean, reason = ""): Promise<{ ok: true; id: string; archived_at: string | null; idempotent: boolean }> {
+  return request(`/${encodeURIComponent(id)}/${archived ? "archive" : "restore"}`, {
+    method: "POST", body: JSON.stringify({ confirm: true, reason }),
+  });
+}

@@ -1,0 +1,125 @@
+{
+  "database": "opp_inherited_test_verified",
+  "port": 55486,
+  "sourceManifest": [
+    {
+      "path": "C:/Users/user/Local Sites/mgrnz/app/supabase/baseline/linked_public_schema_baseline.sql",
+      "sha256": "7cfe90c762c7ccda2595a0c1eceae6416cde14c6fe6f3e0b036e145ef42517d8"
+    },
+    {
+      "path": "C:\\DEV_LOCAL\\mgrnz-readiness-audit-20261020\\supabase\\migrations\\20260801010000_generalise_ticketing_case_management.sql",
+      "sha256": "33441b3ed50d6ea166b4ee01e90e13068f0779a52c494cb59c987b85a7fd49d8"
+    },
+    {
+      "path": "C:\\DEV_LOCAL\\opp-engine-lifecycle-review-37976ab\\client-relational-prefix.sql",
+      "sha256": "3d2e1470e781ce114c5479f1062600ce2535c67824ba42a37dcb49dced3bfa8a"
+    },
+    {
+      "path": "C:\\DEV_LOCAL\\mgrnz-readiness-audit-20261020\\supabase\\migrations\\20260810053516_visual_opportunity_intelligence.sql",
+      "sha256": "36a445d8922cd30bdbe1ce16ad35cb2c06333829539cddca8b7453ac739c9900"
+    },
+    {
+      "path": "C:\\DEV_LOCAL\\mgrnz-readiness-audit-20261020\\supabase\\migrations\\20260907123000_opportunity_prospect_eligibility.sql",
+      "sha256": "2e604e05b9a647450737333a8fba1e0b624612845d07cbc49db9ceba2ed2202a"
+    },
+    {
+      "path": "supabase/migrations/20260822171709_queue_opportunity_enrichment_pg_net.sql",
+      "sha256": "b8c8f8969765c4eee7c79fdf806767a54d17de85f153b1ca45749179ff5db585"
+    },
+    {
+      "path": "supabase/migrations/20260907110000_opportunity_scenario_registry_v1.sql",
+      "sha256": "7a18204f39a4492b5e259d4c02d8b649ddd70d78960fdc2735eaf299ec7ec650"
+    },
+    {
+      "path": "supabase/migrations/20260907111000_opportunity_scenario_compatibility.sql",
+      "sha256": "2e70bcc7ddee7bf3169cfa393748c349e3b60c89fca0b7ab3cd0474a64894aac"
+    },
+    {
+      "path": "supabase/migrations/20260907124500_gate_candidate_import_by_cockpit_eligibility.sql",
+      "sha256": "e4dcec564c32c911380de01143c6a1fe0e337092e483e9bc16ab83bf484fef53"
+    },
+    {
+      "path": "supabase/migrations/20260907125500_enforce_candidate_eligibility_before_work.sql",
+      "sha256": "3968e2ff8b8923d24b94dcb1c06769b58d0307c9ec345915fae1ece5ff16c925"
+    },
+    {
+      "path": "C:\\DEV_LOCAL\\mgrnz-readiness-audit-20261020\\supabase\\migrations\\20260907131000_opportunity_outbound_handoff.sql",
+      "sha256": "48509a50455bb1d3448149262f86f2ea464ddb284d13eccb1ab16e4443d391c0"
+    },
+    {
+      "path": "supabase/migrations/20260907132500_handoff_sent_outreach_to_cockpit.sql",
+      "sha256": "209d81e1ca72e4250694fa7f957c2298b78d383e08228158dba9df5c75d74717"
+    },
+    {
+      "path": "supabase/migrations/20260913120000_opportunity_possible_match_acknowledgement.sql",
+      "sha256": "d214bafb7f705a94f68cb34722c24610c5be1056cefb00d20efdcb3656107045"
+    },
+    {
+      "path": "supabase/migrations/20260914120000_opportunity_discovery_intake_categories.sql",
+      "sha256": "d50c859a11d81da1371f7c165cb8c1b57eb31a52e457d64937e60f50562b1924"
+    },
+    {
+      "path": "supabase/migrations/20260914150000_opportunity_discovery_settings.sql",
+      "sha256": "408f7e3574dc01c5c9f94ee84e8e174a1523ca34015f6bfcd438af361ee82e99"
+    },
+    {
+      "path": "supabase/migrations/20260915120000_opportunity_enrichment_budget_recovery.sql",
+      "sha256": "039ee81becd2ac0877d0fab6166a657d0fbee15c012e35a9766b0b03a624f90d"
+    },
+    {
+      "path": "supabase/migrations/20260922000000_opportunity_multi_category_discovery.sql",
+      "sha256": "52aea3593cecfbcd06628db5e498ffed4a5d46653687f4c75c03787cb62f1ca9"
+    },
+    {
+      "path": "supabase/migrations/20261002044415_opportunity_batches.sql",
+      "sha256": "74defee2cfff7af8ff13cde7bd34948ca01ec1c777955a5ce4495b4c9f3f4cb7"
+    },
+    {
+      "path": "supabase/migrations/20261009145236_company_scenario_workflow.sql",
+      "sha256": "6be8b3ed70593f59b86ed3ac358f390fd20c24bc7d2467d00b49cf2118a9c253"
+    },
+    {
+      "path": "supabase/migrations/20261018144011_opportunity_archive_restore_governance.sql",
+      "sha256": "758a8d19bf63f4130072f682d95494e17865457c2288dd046fb2b10b45c5d95d"
+    },
+    {
+      "path": "supabase/migrations/20261020234438_scenario_reports.sql",
+      "sha256": "39cc14336d4bb0fd6a49d4df3d81c149845bded5dcbfda8ccc14bff5daa81dd2"
+    },
+    {
+      "path": "supabase/migrations/20261021003415_scenario_archive_release_compatibility.sql",
+      "sha256": "f0c1e2ba4a4c221ae881e2a6ee7b2c489a7739b9665d7b19f7f0c2c3d7a919d6"
+    },
+    {
+      "path": "supabase/migrations/20261021012142_scenario_owner_retention_reconciliation.sql",
+      "sha256": "3a50c97e026b409f69f9719b581c98ff3b1ba1a3233e7ae444ce7f05c628f624"
+    }
+  ],
+  "baselineErrors": {
+    "count": 48,
+    "unique": [
+      "ERROR:  relation \"paperclip.issues\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_paperclip_issues\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_available_actions\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_journey_candidates\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_journey_summary\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_operating_summary\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_workflow_queue\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_workflow_summary\" does not exist\r",
+      "ERROR:  relation \"public.cockpit_operator_mode_summary\" does not exist\r"
+    ]
+  },
+  "summary": {
+    "tables": 145,
+    "triggers": 144,
+    "functions": 176,
+    "network_stub": true,
+    "second_send_ledger": false
+  },
+  "limitations": [
+    "Historical public schema baseline; current production drift requires comparison",
+    "External Paperclip views omitted",
+    "Auth helpers are fixtures; net.http_post records locally without network",
+    "Storage/platform execution not emulated"
+  ]
+}

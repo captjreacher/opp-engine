@@ -1,6 +1,8 @@
+import { isOpportunityArchived } from "../../supabase/functions/_shared/opportunityLifecycle";
+import { validateBatchFilter } from "../../supabase/functions/_shared/opportunityBatches";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { analyzeOpportunity, enrichOpportunity, fetchOpportunityBatch, fetchOpportunityBatches, updateOpportunityBatch, type OpportunityBatch } from "../lib/api";
+import { archiveBatch, analyzeOpportunity, enrichOpportunity, fetchOpportunityBatch, fetchOpportunityBatches, updateOpportunityBatch, type OpportunityBatch } from "../lib/api";
 import type { OppRow } from "../lib/types";
 import Filters from "../components/Filters";
 import { canSelectOpportunity, enrichSelectedOpportunities } from "../lib/bulk-enrichment";
@@ -37,7 +39,7 @@ export default function OpportunityBatches() {
           if (cancelled) return;
           setBatch(result.batch); setRows(result.opportunities);
           setName(result.batch.name); setPurpose(result.batch.purpose);
-          setFilter({ ...DEFAULT_BATCH_FILTER, ...result.batch.record_filter });
+          setFilter(validateBatchFilter(result.batch.record_filter));
         } else {
           const result = await fetchOpportunityBatches();
           if (!cancelled) setBatches(result.batches);
@@ -57,9 +59,11 @@ export default function OpportunityBatches() {
   }, [id, running, busy]);
 
   const matching = useMemo(() => rows.filter((row) => matchesBatchFilter(row, filter)), [rows, filter]);
-  const enrichTargets = matching.filter((row) => canSelectOpportunity(row) && !row.enrichment_ready);
-  const assessTargets = matching.filter((row) => canSelectOpportunity(row) && row.enrichment_ready && !row.assessed_at);
-  const dirty = !!batch && (name !== batch.name || purpose !== batch.purpose || JSON.stringify(filter) !== JSON.stringify({ ...DEFAULT_BATCH_FILTER, ...batch.record_filter }));
+  // Existing active membership prevents creating another batch, not work in its owning batch.
+  const actionable = matching.filter(row=>!batch?.archived_at && row.batch_member_active !== false && canSelectOpportunity({...row,batches:[]}));
+  const enrichTargets = actionable.filter(row=>!row.enrichment_ready);
+  const assessTargets = actionable.filter(row=>row.enrichment_ready && !row.assessed_at);
+  const dirty = !!batch && (name !== batch.name || purpose !== batch.purpose || JSON.stringify(filter) !== JSON.stringify(validateBatchFilter(batch.record_filter)));
 
   async function save() {
     if (!id || busy) return;
@@ -80,7 +84,7 @@ export default function OpportunityBatches() {
     const errors: string[] = [];
     try {
       if (action === "enrich") {
-        const result = await enrichSelectedOpportunities(targets, enrichOpportunity, (count) => setProgress(`Queuing ${count} of ${targets.length}…`));
+        const result = await enrichSelectedOpportunities(targets.map(row=>({...row,batches:[]})), enrichOpportunity, (count) => setProgress(`Queuing ${count} of ${targets.length}…`));
         succeeded = result.started.length;
         errors.push(...result.failures.map((failure) => `${failure.name}: ${failure.error}`));
       } else {
@@ -116,6 +120,7 @@ export default function OpportunityBatches() {
   return <div className="space-y-4">
     <Link className="text-sm text-accent-400" to="/batches">← All batches</Link>
     <h1 className="text-xl font-semibold text-graphite-100">{batch.name}</h1>
+    {batch.archived_at ? <p className="text-sm text-graphite-400">Archived — historical membership retained.</p> : <button className={button} disabled={busy} onClick={async()=>{if(!window.confirm("Archive this batch and release its active members? Historical membership is retained."))return;try{await archiveBatch(batch.id);setBatch({...batch,archived_at:new Date().toISOString()});}catch(err){setError(err instanceof Error?err.message:"Archive failed");}}}>Archive batch</button>}
     <section className="space-y-3 rounded-lg border border-graphite-800 bg-graphite-900/60 p-4">
       <label className="block text-sm text-graphite-300">Name<input className={`${input} mt-1`} value={name} maxLength={120} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
       <label className="block text-sm text-graphite-300">Purpose<textarea className={`${input} mt-1`} value={purpose} maxLength={2000} rows={2} disabled={busy} onChange={(event) => setPurpose(event.target.value)} /></label>
@@ -138,7 +143,7 @@ export default function OpportunityBatches() {
     {busy && progress && <p role="status" className="text-sm text-sky-300">{progress}</p>}
     <div className="overflow-x-auto rounded-lg border border-graphite-800"><table className="w-full text-left text-sm text-graphite-300">
       <thead className="bg-graphite-900"><tr><th className="p-3">Business</th><th className="p-3">Enrichment</th><th className="p-3">Assessment</th><th className="p-3">Pipeline status</th></tr></thead>
-      <tbody>{matching.map((row) => <tr key={row.id} className="border-t border-graphite-800"><td className="p-3"><Link to={`/opportunities/${row.id}`} className="text-accent-400 hover:underline">{row.business_name}</Link></td><td className="p-3">{row.enrichment_running ? "Running…" : row.enrichment_ready ? "Enriched" : row.enrichment_status ?? "Not started"}</td><td className="p-3">{row.assessed_at ? "Assessed" : "Not assessed"}</td><td className="p-3">{row.pipeline_status === "disqualified" ? "Not suitable" : row.pipeline_status}</td></tr>)}</tbody>
+      <tbody>{matching.map((row) => <tr key={row.id} className="border-t border-graphite-800"><td className="p-3"><Link to={`/opportunities/${row.id}`} className="text-accent-400 hover:underline">{row.business_name}</Link></td><td className="p-3">{row.enrichment_running ? "Running…" : row.enrichment_ready ? "Enriched" : row.enrichment_status ?? "Not started"}</td><td className="p-3">{row.assessed_at ? "Assessed" : "Not assessed"}</td><td className="p-3">{isOpportunityArchived(row) ? "Archived" : row.pipeline_status === "disqualified" ? "Not suitable" : row.pipeline_status}</td></tr>)}</tbody>
     </table>{!matching.length && <p className="p-4 text-sm text-graphite-500">No batch records match this filter.</p>}</div>
   </div>;
 }

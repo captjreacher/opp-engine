@@ -1,0 +1,540 @@
+{
+  "observedAt": "2026-10-21",
+  "source": "read-only production query; snapshot only, not configuration",
+  "rows": [
+    {
+      "plan_id": "plan-maximisedai-ai-agent-hosting-annual",
+      "name": "AI Agent Hosting — Annual",
+      "description": "Annual prepaid hosting.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-agent-hosting",
+      "display_name": "AI Agent SEO Weekly",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-agent-hosting-annual-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-agent-hosting-monthly",
+      "name": "AI Agent Hosting — Monthly",
+      "description": "Recurring monthly hosting.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-agent-hosting",
+      "display_name": "AI Agent SEO Weekly",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-agent-hosting-monthly-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-agent-hosting-usage",
+      "name": "AI Agent Hosting — Usage",
+      "description": "Metered usage-based hosting.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-agent-hosting",
+      "display_name": "AI Agent SEO Weekly",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-agent-hosting-usage-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-agent-management",
+      "name": "AI Agent Management — Monthly",
+      "description": "Recurring monthly management.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-agent-management",
+      "display_name": "AI Agent Management",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-agent-management-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-assistant-implementation",
+      "name": "AI Assistant Implementation — One-off",
+      "description": "Single implementation project.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-assistant-implementation",
+      "display_name": "AI Assistant Implementation",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-assistant-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-customer-support-agent",
+      "name": "AI Customer Support Agent — Monthly",
+      "description": "Recurring monthly service.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-customer-support-agent",
+      "display_name": "AI Customer Support Agent",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-support-agent-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-integration-services",
+      "name": "AI Integration Services — POA",
+      "description": "Scoped to engagement; price on application.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-integration-services",
+      "display_name": "AI Integration Services",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-integration-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-knowledge-base",
+      "name": "AI Knowledge Base — One-off",
+      "description": "Single implementation project.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-knowledge-base",
+      "display_name": "AI Knowledge Base",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-kb-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-lead-qualification-agent",
+      "name": "AI Lead Qualification Agent — Monthly",
+      "description": "Recurring monthly service.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-lead-qualification-agent",
+      "display_name": "AI Lead Qualification Agent",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-lead-agent-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-monitoring-annual",
+      "name": "AI Monitoring — Annual",
+      "description": "Annual prepaid monitoring.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-monitoring",
+      "display_name": "AI Monitoring",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-monitoring-annual-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-monitoring-monthly",
+      "name": "AI Monitoring — Monthly",
+      "description": "Recurring monthly monitoring.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-monitoring",
+      "display_name": "AI Monitoring",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-monitoring-monthly-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-ai-workflow-automation",
+      "name": "AI Workflow Automation — One-off",
+      "description": "Single automation project.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-ai-workflow-automation",
+      "display_name": "AI Workflow Automation",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-ai-workflow-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-database-hosting-monthly",
+      "name": "Supabase Instance Hosting — Monthly",
+      "description": "Recurring monthly hosting for a single Supabase instance, dedicated to one customer.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-database-hosting",
+      "display_name": "Database Hosting",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_a23a4700-e0c9-4159-9401-6a7f7732ff9b",
+      "version": 3,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1500,
+        "currency": "NZD",
+        "amountMinor": 1000,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-19 00:32:31.417+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-database-initial-setup",
+      "name": "Supabase Instance Setup — One-off",
+      "description": "Setup single instance of Supabase for your company, monitor and maintain.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-database-initial-setup",
+      "display_name": "Database Initial Setup",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_d41238c6-a15c-4be6-8915-93de8ba8f431",
+      "version": 4,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1496,
+        "currency": "NZD",
+        "amountMinor": 9900,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-16 01:10:17.238+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-digital-trust-foundation",
+      "name": "Digital Trust Foundation — Annual",
+      "description": "Annual programme.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-digital-trust-foundation",
+      "display_name": "Digital Trust Foundation",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-digital-trust-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-domain-management",
+      "name": "Domain Management — Annual",
+      "description": "Annual renewal cycle.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-domain-management",
+      "display_name": "Domain Management",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-domain-management-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-email-hosting-annual",
+      "name": "Email Hosting — Annual",
+      "description": "Annual prepaid hosting.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-email-hosting",
+      "display_name": "Email Hosting",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-email-hosting-annual-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-email-hosting-monthly",
+      "name": "Email Hosting — Monthly",
+      "description": "Recurring monthly hosting, single user on zoho.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-email-hosting",
+      "display_name": "Email Hosting",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-email-hosting-monthly-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-landing-page",
+      "name": "Landing Page Website — One-off",
+      "description": "Design, build and launch.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-landing-page",
+      "display_name": "Landing Page Website",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_39b9cf70-b13e-40f1-aa40-d2eca23cfac2",
+      "version": 2,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1500,
+        "currency": "NZD",
+        "amountMinor": 50000,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-19 00:52:18.575+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-small-business-website",
+      "name": "Small Business Website Package — One-off",
+      "description": "Design, build and launch.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-small-business-website",
+      "display_name": "Small Business Website Package",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_6290e424-7457-451a-b144-f01f703a6378",
+      "version": 2,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1500,
+        "currency": "NZD",
+        "amountMinor": 125000,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-19 00:50:59.278+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-tradie-website",
+      "name": "Tradie Website Package — One-off",
+      "description": "Design, build and launch.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-tradie-website",
+      "display_name": "Tradie Website Package",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_4165623f-5210-47b8-86be-561614bf2669",
+      "version": 2,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1500,
+        "currency": "NZD",
+        "amountMinor": 125000,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-19 00:51:32.63+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-web-database-hosting-monthly",
+      "name": "Web + Database Hosting — Monthly",
+      "description": "Recurring monthly hosting.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-web-database-hosting",
+      "display_name": "Web + Database Hosting",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_479525b3-069a-4b47-a566-235d5eb7cb97",
+      "version": 2,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1500,
+        "currency": "NZD",
+        "amountMinor": 2500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-19 00:37:21.3+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-web-hosting-annual",
+      "name": "Web Hosting — Annual",
+      "description": "Annual prepaid hosting.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-web-hosting",
+      "display_name": "Web Hosting",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-web-hosting-annual-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-web-hosting-monthly",
+      "name": "Web Hosting — Monthly",
+      "description": "Recurring monthly hosting.",
+      "is_sellable": true,
+      "is_archived": false,
+      "product_id": "product-maximisedai-web-hosting",
+      "display_name": "Web Hosting",
+      "lifecycle_status": "published",
+      "plan_version_id": "plan_price_36f85a03-76ce-42bb-a9bc-fb34c3487d48",
+      "version": 3,
+      "price": {
+        "kind": "fixed",
+        "taxRate": 1500,
+        "currency": "NZD",
+        "amountMinor": 1750,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-10-19 00:38:26.504+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-website-care",
+      "name": "Website Care — Monthly",
+      "description": "Recurring monthly care.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-website-care",
+      "display_name": "Website Care",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-website-care-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    },
+    {
+      "plan_id": "plan-maximisedai-website-refresh",
+      "name": "Website Refresh — One-off",
+      "description": "Single refresh engagement.",
+      "is_sellable": false,
+      "is_archived": true,
+      "product_id": "product-maximisedai-website-refresh",
+      "display_name": "Website Refresh",
+      "lifecycle_status": "published",
+      "plan_version_id": "pv-max-website-refresh-v1",
+      "version": 1,
+      "price": {
+        "kind": "poa",
+        "taxRate": 1500,
+        "taxTreatment": "exclusive"
+      },
+      "status": "published",
+      "effective_from": "2026-08-08 00:00:00+00",
+      "effective_to": null
+    }
+  ]
+}

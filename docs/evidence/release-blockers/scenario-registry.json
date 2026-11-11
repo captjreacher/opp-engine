@@ -1,0 +1,104 @@
+{
+  "observedAt": "2026-10-21",
+  "source": "read-only production query; snapshot only, not configuration",
+  "rows": [
+    {
+      "slug": "automation-opportunity",
+      "version": 1,
+      "status": "draft",
+      "commercial_config": {},
+      "report_config": {},
+      "outreach_config": {}
+    },
+    {
+      "slug": "business-systems-gap",
+      "version": 1,
+      "status": "draft",
+      "commercial_config": {},
+      "report_config": {},
+      "outreach_config": {}
+    },
+    {
+      "slug": "lead-capture-conversion",
+      "version": 1,
+      "status": "draft",
+      "commercial_config": {},
+      "report_config": {},
+      "outreach_config": {}
+    },
+    {
+      "slug": "local-digital-presence",
+      "version": 1,
+      "status": "active",
+      "commercial_config": {
+        "ctas": [
+          {
+            "id": "website_refresh",
+            "type": "billing_offer",
+            "label": "Fix my website",
+            "conditions": {
+              "trust_leakage_min": 60
+            },
+            "billing_offer_id": null
+          },
+          {
+            "id": "local_visibility",
+            "type": "billing_offer",
+            "label": "Improve my local visibility",
+            "conditions": {
+              "trust_leakage_min": 60
+            },
+            "billing_offer_id": null
+          },
+          {
+            "id": "discovery_session",
+            "type": "cockpit_case",
+            "label": "Talk through the findings",
+            "case_type": "discovery"
+          }
+        ]
+      },
+      "report_config": {
+        "sections": [
+          "summary",
+          "metrics",
+          "observed_evidence",
+          "recommendations",
+          "commercial_ctas"
+        ],
+        "template": "local_digital_presence_audit_v1",
+        "customer_ready_required": true
+      },
+      "outreach_config": {
+        "minimum_score": 60,
+        "message_template": "local_digital_presence_outreach_v1",
+        "subject_template": "Quick opportunity audit for {{business_name}}",
+        "requires_operator_approval": true
+      }
+    },
+    {
+      "slug": "local-search-visibility",
+      "version": 1,
+      "status": "draft",
+      "commercial_config": {},
+      "report_config": {},
+      "outreach_config": {}
+    },
+    {
+      "slug": "reputation-trust",
+      "version": 1,
+      "status": "draft",
+      "commercial_config": {},
+      "report_config": {},
+      "outreach_config": {}
+    },
+    {
+      "slug": "website-improvement",
+      "version": 1,
+      "status": "draft",
+      "commercial_config": {},
+      "report_config": {},
+      "outreach_config": {}
+    }
+  ]
+}

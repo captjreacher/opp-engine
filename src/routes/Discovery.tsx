@@ -4,7 +4,6 @@ import Badge, { toneForStatus } from "../components/Badge";
 import {
   acknowledgePossibleMatch,
   assessDiscoveryCandidates,
-  auditDiscoveryCandidates,
   fetchDiscoveryCandidates,
   fetchDiscoveryRun,
   fetchLocationDetails,
@@ -270,7 +269,6 @@ function CandidateDrawer({
           <dt className="text-graphite-500">Source</dt><dd className="text-graphite-200">{candidate.source} · {candidate.source_identifier}</dd>
           <dt className="text-graphite-500">Duplicate</dt><dd>{candidate.duplicate_lead_id ? <Link className="text-amber-300 hover:underline" to={`/opportunities/${candidate.duplicate_lead_id}`}>Existing opportunity</Link> : "No match"}</dd>
           <dt className="text-graphite-500">Assessment</dt><dd><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge>{candidate.preliminary_score ? ` · ${candidate.preliminary_score}` : ""}</dd>
-          <dt className="text-graphite-500">Audit</dt><dd><Badge tone={statusTone(candidate.audit_status)}>{candidate.audit_status}</Badge></dd>
         </dl>
         <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Provider evidence</h3><pre className="mt-2 max-h-64 overflow-auto rounded-md bg-graphite-950 p-3 text-xs text-graphite-400">{JSON.stringify(evidence, null, 2)}</pre></section>
         <section className="mt-7"><h3 className="text-sm font-semibold text-graphite-200">Enrichment evidence</h3><pre className="mt-2 max-h-64 overflow-auto rounded-md bg-graphite-950 p-3 text-xs text-graphite-400">{JSON.stringify(candidate.enrichment_evidence, null, 2)}</pre></section>
@@ -673,17 +671,15 @@ export default function Discovery() {
     }
   }
 
-  async function batch(action: "import" | "assess" | "audit", retry = false) {
+  async function batch(action: "import" | "assess", retry = false) {
     if (!run || !selectedIds.length) return;
     if (action === "import" && selectedIds.length > 10 && !window.confirm(`Import ${selectedIds.length} businesses into Opportunities?`)) return;
     setBusy(action); setError(null); setNotice(null);
     try {
       const response = action === "import"
         ? await importDiscoveryCandidates(run.id, selectedIds)
-        : action === "assess"
-          ? await assessDiscoveryCandidates(run.id, selectedIds, retry)
-          : await auditDiscoveryCandidates(run.id, selectedIds, retry);
-      setNotice(`${action === "import" ? "Import" : action === "assess" ? "Assessment" : "Audit"}: ${response.succeeded} succeeded, ${response.failed} failed.`);
+        : await assessDiscoveryCandidates(run.id, selectedIds, retry);
+      setNotice(`${action === "import" ? "Import" : "Assessment"}: ${response.succeeded} succeeded, ${response.failed} failed.`);
       await reload(run.id);
     } catch (reason) { setError(displayError(reason)); await reload(run.id).catch(() => undefined); }
     finally { setBusy(null); }
@@ -695,7 +691,7 @@ export default function Discovery() {
 
       <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-5">
         <div className="mb-5 grid gap-3 border-b border-graphite-800 pb-5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <label className="text-sm text-graphite-300">Opportunity scenario *
+          <label className="text-sm text-graphite-300">Discovery search profile *
             <select className={fieldClass} value={selectedScenarioId} disabled={scenarioLoading || scenarios.length === 0} onChange={(event) => chooseScenario(event.target.value)}>
               {scenarios.length === 0 && <option value="">{scenarioLoading ? "Loading scenarios…" : "No active scenarios"}</option>}
               {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name} · v{scenario.version}</option>)}
@@ -703,7 +699,7 @@ export default function Discovery() {
           </label>
           <div className="rounded-md border border-graphite-800 bg-graphite-950/50 px-4 py-3 text-sm text-graphite-400">
             <p className="font-medium text-graphite-200">{selectedScenario?.name ?? "Scenario required"}</p>
-            <p className="mt-1">{selectedScenario?.description ?? "The scenario determines the assessment, report and commercial outcome path."}</p>
+            <p className="mt-1">{selectedScenario?.description}</p><p className="mt-1">Each company is evaluated against all enabled scenarios relevant to this search; this profile controls provider search defaults.</p>
           </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -746,9 +742,9 @@ export default function Discovery() {
 
       {run && <section className="rounded-lg border border-graphite-800 bg-graphite-900/60 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold text-graphite-200">Discovery run</h2><p className="mt-1 font-mono text-xs text-graphite-500">{run.id}</p></div><Badge tone={statusTone(run.status)}>{run.status.replace(/_/g, " ")}</Badge></div>
-        <div className="mt-4 h-1.5 overflow-hidden rounded bg-graphite-800"><div className="h-full bg-accent-500 transition-all" style={{ width: `${Math.min(100, run.businesses_discovered ? 25 + (run.candidates_scored / run.businesses_discovered) * 45 + (run.audits_generated / run.businesses_discovered) * 30 : isActiveDiscoveryStatus(run.status) ? 12 : 100)}%` }} /></div>
+        <div className="mt-4 h-1.5 overflow-hidden rounded bg-graphite-800"><div className="h-full bg-accent-500 transition-all" style={{ width: `${Math.min(100, run.businesses_discovered ? 25 + (run.candidates_scored / run.businesses_discovered) * 75 : isActiveDiscoveryStatus(run.status) ? 12 : 100)}%` }} /></div>
         <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4 lg:grid-cols-8">{[
-          ["Stage", run.current_stage], ["Discovered", run.businesses_discovered], ["Enriched", run.candidates_enriched], ["Scored", run.candidates_scored], ["Audited", run.audits_generated], ["Failures", run.failures], ["Started", run.started_at ? new Date(run.started_at).toLocaleTimeString() : "—"], ["Completed", run.completed_at ? new Date(run.completed_at).toLocaleTimeString() : "—"],
+          ["Stage", run.current_stage], ["Discovered", run.businesses_discovered], ["Enriched", run.candidates_enriched], ["Scored", run.candidates_scored], ["Failures", run.failures], ["Started", run.started_at ? new Date(run.started_at).toLocaleTimeString() : "—"], ["Completed", run.completed_at ? new Date(run.completed_at).toLocaleTimeString() : "—"],
         ].map(([label, value]) => <div key={String(label)}><dt className="text-xs text-graphite-500">{label}</dt><dd className="mt-1 text-graphite-200">{value}</dd></div>)}</dl>
         <p className="mt-4 text-xs text-graphite-500">
           Location: <span className="text-graphite-300">{run.location}</span>
@@ -759,15 +755,15 @@ export default function Discovery() {
       </section>}
 
       <section className="overflow-hidden rounded-lg border border-graphite-800 bg-graphite-900/60">
-        <div className="flex flex-wrap items-center gap-2 border-b border-graphite-800 p-4"><h2 className="mr-auto text-sm font-semibold text-graphite-200">Candidates <span className="text-graphite-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before importing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before scoring." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("assess")}>Score selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before auditing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("audit")}>Generate audits</button></div>
-        {!run ? <p className="p-8 text-center text-sm text-graphite-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-graphite-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-graphite-950/50 text-xs text-graphite-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Eligibility", "Score", "Assessment", "Audit", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-graphite-800">{candidates.map((candidate) => { const eligibility = candidateEligibilityDisplay(candidate); return <tr key={candidate.id} className="hover:bg-graphite-800/30">
+        <div className="flex flex-wrap items-center gap-2 border-b border-graphite-800 p-4"><h2 className="mr-auto text-sm font-semibold text-graphite-200">Candidates <span className="text-graphite-500">({candidates.length})</span></h2><button className={buttonClass} disabled={!eligible.length} onClick={() => setSelected(new Set(eligible.map((item) => item.id)))}>Select all eligible</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before importing." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("import")}>Import selected</button><button className={buttonClass} title={selectionNeedsAcknowledgement ? "Acknowledge possible matches before scoring." : undefined} disabled={!selectionAllowed || busy !== null} onClick={() => void batch("assess")}>Score selected</button></div>
+        {!run ? <p className="p-8 text-center text-sm text-graphite-500">Start a discovery run to find candidate businesses.</p> : candidates.length === 0 ? <p className="p-8 text-center text-sm text-graphite-500">No businesses matched this search.</p> : <div className="overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-graphite-950/50 text-xs text-graphite-500"><tr>{["", "Business", "Location", "Category", "Website", "Contact", "Duplicate", "Eligibility", "Score", "Assessment", "Import", ""].map((heading, index) => <th key={`${heading}-${index}`} className="px-3 py-2 text-left font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-graphite-800">{candidates.map((candidate) => { const eligibility = candidateEligibilityDisplay(candidate); return <tr key={candidate.id} className="hover:bg-graphite-800/30">
           <td className="px-3 py-3"><input aria-label={`Select ${candidate.business_name}`} type="checkbox" checked={selected.has(candidate.id)} onChange={() => setSelected((current) => { const next = new Set(current); next.has(candidate.id) ? next.delete(candidate.id) : next.add(candidate.id); return next; })} /></td>
-          <td className="whitespace-nowrap px-3 py-3 font-medium text-graphite-200">{candidate.business_name}</td><td className="px-3 py-3 text-graphite-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-graphite-400">{candidate.industry ?? "—"}</td>
+          <td className="whitespace-nowrap px-3 py-3 font-medium text-graphite-200">{candidate.business_name}<div className="mt-1 text-xs text-graphite-400">{candidate.scenario_matches?.map(match => `${match.scenario_key}: ${match.state}`).join(" · ")}</div></td><td className="px-3 py-3 text-graphite-400">{candidate.location ?? "—"}</td><td className="px-3 py-3 text-graphite-400">{candidate.industry ?? "—"}</td>
           <td className="max-w-44 truncate px-3 py-3">{candidate.website_url ? <a className="text-accent-400 hover:underline" href={candidate.website_url} target="_blank" rel="noreferrer">Visit</a> : "—"}</td><td className="px-3 py-3 text-graphite-400">{candidate.email ? "Email" : candidate.phone ? "Phone" : "None"}</td>
           <td className="px-3 py-3"><Badge tone={candidate.duplicate_lead_id ? "warning" : "success"}>{candidate.duplicate_lead_id ? "existing" : "new"}</Badge></td>
           <td className="whitespace-nowrap px-3 py-3"><Badge tone={eligibility.tone} title={candidate.eligibility_result?.reason ?? undefined}>{eligibility.label}</Badge></td>
           <td className="px-3 py-3 font-mono text-graphite-300">{candidate.preliminary_score ?? "—"}</td>
-          <td className="px-3 py-3"><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.audit_status)}>{candidate.audit_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.import_status)}>{candidate.import_status.replace(/_/g, " ")}</Badge></td>
+          <td className="px-3 py-3"><Badge tone={statusTone(candidate.assessment_status)}>{candidate.assessment_status}</Badge></td><td className="px-3 py-3"><Badge tone={statusTone(candidate.import_status)}>{candidate.import_status.replace(/_/g, " ")}</Badge></td>
           <td className="whitespace-nowrap px-3 py-3"><button className="text-accent-400 hover:underline" onClick={() => setInspecting(candidate)}>Inspect</button>{(candidate.imported_lead_id ?? candidate.duplicate_lead_id) && <Link className="ml-3 text-sky-400 hover:underline" to={`/opportunities/${candidate.imported_lead_id ?? candidate.duplicate_lead_id}`}>Open</Link>}</td>
         </tr>; })}</tbody></table></div>}
       </section>

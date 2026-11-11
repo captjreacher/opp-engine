@@ -63,7 +63,7 @@ function autocompleteBlock(): string {
 /** SQL statements only: migration doc comments legitimately name what they must not touch. */
 function withoutSqlComments(source: string): string {
   return source
-    .split("\n")
+    .split(/\r?\n/)
     .map((line) => line.replace(/--.*$/, ""))
     .join("\n");
 }
@@ -148,8 +148,8 @@ describe("admin category contract", () => {
     expect(block).not.toMatch(/opportunity_categories[\s\S]{0,200}eq\("status", "active"\)/);
   });
 
-  it("deactivates instead of deleting, and never exposes a delete route", () => {
-    expect(edgeSource).not.toMatch(/req\.method === "DELETE"/);
+  it("deactivates instead of deleting, and never performs database deletion", () => {
+    // Lifecycle DELETE now has an explicit fail-closed response, tested by the router suite.
     expect(edgeSource).not.toMatch(/\.delete\(\)/);
     expect(settingsMigration + categoriesMigration).not.toMatch(/drop table/i);
     expect(adminBlock()).toContain('CATEGORY_STATUSES = ["active", "inactive"]');

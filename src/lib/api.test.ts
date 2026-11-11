@@ -147,8 +147,7 @@ describe("Discovery batch function contract", () => {
     const auditButtonLine = discoverySource
       .split("\n")
       .find((line) => line.includes('batch("audit")'));
-    expect(auditButtonLine).toBeTruthy();
-    expect(auditButtonLine).toContain("busy !== null");
+    expect(auditButtonLine).toBeUndefined();
   });
 
   it("batch function clears previous error and notice on start", () => {

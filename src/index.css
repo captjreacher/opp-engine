@@ -81,3 +81,6 @@
 
 /* Keep active selections above the utility layer. */
 select.oe-filter-active { border-color: #ff8179; background-color: #3a1112; }
+
+.oe-actions-dialog::backdrop { background: rgb(0 0 0 / 0.72); }
+.oe-actions-dialog { max-height: calc(100dvh - 2rem); overflow-y: auto; }

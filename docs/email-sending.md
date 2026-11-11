@@ -9,19 +9,22 @@ Route: `POST /opportunities/:id/outreach/:draftId/send`
 ## Lifecycle
 ```
 draft → approved → (sending) → sent
-                       └── failed → retry
+                       └── failed/uncertain → manual reconciliation
 ```
 - `sending` is a transient UI state (the in-flight request).
 - The DB `status` column is constrained to `draft / pending_review / approved / rejected / sent /
   archived`, so there is **no persisted `sending`/`failed` status**. `failed` is **derived** from the
   `outreach_send_failed` audit event: a failed send leaves the draft `approved`, so the operator can
-  retry. Only a successful send flips it to `sent` (+ `sent_at`).
+  review delivery. An atomic company/draft claim is retained after failed or ambiguous
+  delivery; there is no automatic retry or claim-reset endpoint. Only a successful send
+  flips it to `sent` (+ `sent_at`).
 
 ## Controls
 - Approved-only; explicit two-step confirm in the console; **no auto-send**.
 - Idempotent — an already-`sent` draft returns 409.
 - Never false success — draft becomes `sent` and `outreach_sent` is logged **only** after SMTP returns 250.
-- Failure handling — logs `outreach_send_failed`, returns 502 (`retryable: true`), draft stays `approved`.
+- Failure handling — logs `outreach_send_failed`, returns 502 (`retryable: false`), draft stays `approved` and requires explicit delivery reconciliation.
+- Template selection uses confirmed recorded findings and a verified offer destination. Approval requires explicit manual review; sending requires `confirm_send: true`. Cockpit eligibility is freshly checked before SMTP. Concurrent attempts across different drafts for one company are blocked.
 - Standalone — writes only `local_business_outreach_drafts` + the app-owned audit log.
 
 ## Secrets (set on the Edge Function; none committed)
@@ -51,4 +54,4 @@ If `MGRNZ_SMTP_*` is missing or invalid, the route returns `503` and sends nothi
 
 ## Events (app-owned audit log)
 `outreach_draft_created` → `outreach_draft_updated` / `outreach_draft_approved` →
-`outreach_sent` (success) or `outreach_send_failed` (failure; retry available).
+`outreach_sent` (success) or `outreach_send_failed` (failure; manual reconciliation required).

@@ -53,7 +53,7 @@ describe("Phase 5 backend contract", () => {
     );
   });
 
-  it.each(["assess", "audit"])(
+  it.each(["assess"])(
     "contains discovery candidate batch route contract %s",
     (operation) => {
       expect(edgeSource).toMatch(

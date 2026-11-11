@@ -15,7 +15,7 @@ const SYSTEM_EVENTS: Record<string, { label: string; icon: string }> = {
 const WORKFLOW_MILESTONES: { id: string; label: string; color: string; icon: string }[] = [
   { id: "detected", label: "Opportunity discovered", color: "text-graphite-400", icon: "◉" },
   { id: "assessment", label: "Assessment completed", color: "text-graphite-400", icon: "◉" },
-  { id: "audit", label: "Audit generated", color: "text-graphite-400", icon: "◉" },
+  { id: "reports", label: "Scenario reports prepared", color: "text-graphite-400", icon: "◉" },
   { id: "draft", label: "Draft created", color: "text-graphite-400", icon: "◉" },
   { id: "approved", label: "Outreach approved", color: "text-graphite-400", icon: "◉" },
   { id: "sent", label: "Email sent", color: "text-graphite-400", icon: "◉" },
@@ -85,7 +85,7 @@ export function deriveMilestones(
   reviewState: ReviewState,
   outcomeState: OutcomeState | null,
   hasAssessment: boolean,
-  hasAudit: boolean,
+  hasScenarioReports: boolean,
   hasDraft: boolean,
   hasSentDraft: boolean,
 ): TimelineMilestone[] {
@@ -112,7 +112,7 @@ export function deriveMilestones(
       let progress = 0;
       if (reviewIdx >= 0) progress = 1;
       if (hasAssessment) progress = 2;
-      if (hasAudit) progress = 3;
+      if (hasScenarioReports) progress = 3;
       if (hasDraft) progress = 4;
       if (reviewIdx >= 2) progress = 5;
       if (hasSentDraft) progress = 6;
@@ -141,7 +141,7 @@ interface EventTimelineProps {
   reviewState: ReviewState;
   outcomeState: OutcomeState | null;
   hasAssessment: boolean;
-  hasAudit: boolean;
+  hasScenarioReports: boolean;
   hasDraft: boolean;
   hasSentDraft: boolean;
 }
@@ -155,7 +155,7 @@ export default function EventTimeline({
   reviewState,
   outcomeState,
   hasAssessment,
-  hasAudit,
+  hasScenarioReports,
   hasDraft,
   hasSentDraft,
 }: EventTimelineProps) {
@@ -165,7 +165,7 @@ export default function EventTimeline({
     reviewState,
     outcomeState,
     hasAssessment,
-    hasAudit,
+    hasScenarioReports,
     hasDraft,
     hasSentDraft,
   );
