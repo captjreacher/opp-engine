@@ -1,4 +1,4 @@
-import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, billingReadConfiguration, type ScenarioReport, type ApprovedDetails, type Offer } from "../_shared/scenarioReports.ts";
+import { resolveOffer, buildScenarioReport, reportEmail, validateEmailEdit, canonicalJson, billingReadConfiguration, REPORT_TEMPLATE_VERSION, type ScenarioReport, type ApprovedDetails, type Offer } from "../_shared/scenarioReports.ts";
 import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTemplate, type ScenarioMatch, type OutreachTemplate, type CompanyScenario } from "../_shared/companyScenarios.ts";
 import { isOpportunityArchived, lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, type OpportunityLifecycleView } from "../_shared/opportunityLifecycle.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
@@ -3184,12 +3184,15 @@ async function prepareSelectedOutreach(id:string,requested?:string) {
   const {matches,templates}=await outreachOptions(id);
   const template=selectTemplate(matches,templates,requested);
   const reports=(await prepareScenarioReports(id,assessment,lead)).filter(r=>r.report.source_template?.id===template.id && template.scenario_keys.includes(r.report.scenario.key));
-  if(reports.length!==template.scenario_keys.length || new Set(reports.map(r=>r.report.scenario.key)).size!==template.scenario_keys.length) throw new Error("Every selected scenario requires exactly one report.");
-  const selectedScenarioIds=reports.map(r=>r.report.scenario.id);
-  const selectedScenarioVersions=reports.map(r=>r.report.scenario.version);
-  if(reports.some(r=>!r.id || !r.report.scenario.id || !Number.isInteger(r.report.scenario.version))) throw new Error("Every selected scenario requires authoritative identity.");
+  if(reports.length!==template.scenario_keys.length) throw new Error("Every selected scenario requires a report.");
+  const scenarioIdentities=reports.map(({report})=>({
+    id:String(report.scenario.id),
+    key:String(report.scenario.key),
+    version:Number(report.scenario.version),
+  }));
+  if(scenarioIdentities.some(identity=>!identity.id || !identity.key || !Number.isInteger(identity.version) || identity.version<1)) throw new Error("Selected scenario identity is incomplete.");
   const rendered=reportEmail(template,reports.map(r=>r.report),lead.business_name);
-  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,scenario_id:reports.length===1?selectedScenarioIds[0]:null,scenario_version:reports.length===1?selectedScenarioVersions[0]:null,offer_id:template.offer_id,product_id:template.product_id ?? null,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
+  return {rendered,selection:{template_id:template.id,template_version:template.version,scenario_keys:template.scenario_keys,scenario_identities:scenarioIdentities,offer_id:template.offer_id,product_id:template.product_id ?? null,destination:template.destination,report_ids:reports.map(r=>r.id),reports:reports.map(r=>r.report),assessment_id:assessment.id},template};
 }
 type OutreachDispatch = { kind: "website" } | { kind: "gbp"; scenarioCode: "G01" | "G02" } | { kind: "unsupported"; reason: string };
 async function classifyOutreachDraft(leadId: string, draft: JsonObject): Promise<OutreachDispatch> {
@@ -3197,47 +3200,46 @@ async function classifyOutreachDraft(leadId: string, draft: JsonObject): Promise
   const keys = Array.isArray(selection?.scenario_keys) ? selection.scenario_keys : null;
   const reportIds = Array.isArray(selection?.report_ids) ? selection.report_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
   const uniqueKeys = keys && keys.every((key) => typeof key === "string" && key.trim().length > 0) ? [...new Set(keys as string[])] : [];
-  if (!keys || uniqueKeys.length !== keys.length || uniqueKeys.length === 0 || reportIds.length !== uniqueKeys.length || new Set(reportIds).size !== reportIds.length) return { kind: "unsupported", reason: "scenario_identity_required" };
+  const persistedIdentities = Array.isArray(selection?.scenario_identities) ? selection.scenario_identities : null;
+  if (!keys || uniqueKeys.length !== keys.length || uniqueKeys.length === 0 || reportIds.length !== uniqueKeys.length || new Set(reportIds).size !== reportIds.length || !persistedIdentities || persistedIdentities.length !== uniqueKeys.length || typeof selection?.assessment_id !== "string") return { kind: "unsupported", reason: "scenario_identity_required" };
+  const { data: lead, error: leadError } = await supabase.from("local_business_leads").select("id").eq("id", leadId).maybeSingle();
+  if (leadError || !lead || lead.id !== leadId) return { kind: "unsupported", reason: "opportunity_identity_unavailable" };
+  const { data: assessment, error: assessmentError } = await supabase.from("local_business_lead_assessments").select("id,lead_id,scenario_id,scenario_version,scenario_matches").eq("id", selection.assessment_id).eq("lead_id", leadId).maybeSingle();
+  if (assessmentError || !assessment) return { kind: "unsupported", reason: "source_assessment_unavailable" };
   const { data: reports, error: reportError } = await supabase.from("opportunity_scenario_reports").select("id,lead_id,assessment_id,scenario_id,fingerprint,created_at,report").eq("lead_id", leadId).in("id", reportIds);
   if (reportError || !reports || reports.length !== reportIds.length) return { kind: "unsupported", reason: "scenario_report_identity_unavailable" };
   const reportRows = reports as Array<{ id: string; lead_id: string; assessment_id: string; scenario_id: string; fingerprint: string; created_at: string; report: JsonObject | null }>;
   const { data: template, error: templateError } = await supabase.from("opportunity_outreach_templates").select("*").eq("id", selection?.template_id).maybeSingle();
-  if (templateError || !template || template.version !== selection?.template_version || canonicalJson(template.scenario_keys) !== canonicalJson(keys) || template.id !== selection?.template_id) return { kind: "unsupported", reason: "template_identity_unavailable" };
+  if (templateError || !template || template.id !== selection?.template_id || template.version !== selection?.template_version || canonicalJson(template.scenario_keys) !== canonicalJson(keys)) return { kind: "unsupported", reason: "template_identity_unavailable" };
+  const scenarioIds = [...new Set(reportRows.map(row=>row.scenario_id))];
+  const { data: scenarios, error: scenarioError } = await supabase.from("opportunity_scenarios").select("id,slug,version,status").in("id", scenarioIds);
+  if (scenarioError || !scenarios || scenarios.length !== scenarioIds.length) return { kind: "unsupported", reason: "canonical_scenario_unavailable" };
+  const scenarioRows = scenarios as Array<{id:string;slug:string;version:number;status:string}>;
+  const assessmentMatches = Array.isArray(assessment.scenario_matches) ? assessment.scenario_matches as JsonObject[] : [];
   const reportKeys = reportRows.map((row) => String((row.report?.scenario as JsonObject | null)?.key ?? ""));
   if (reportKeys.some((key) => !key) || canonicalJson([...reportKeys].sort()) !== canonicalJson(uniqueKeys.slice().sort())) return { kind: "unsupported", reason: "scenario_identity_mismatch" };
+  const expectedIdentities = reportRows.map(row => {
+    const report = row.report;
+    const scenario = report?.scenario as JsonObject | null;
+    const canonical = scenarioRows.find(candidate=>candidate.id===row.scenario_id);
+    return {id:row.scenario_id,key:String(scenario?.key ?? ""),version:Number(scenario?.version),canonical};
+  }).sort((a,b)=>a.id.localeCompare(b.id));
+  const actualIdentities = persistedIdentities.map(identity=>({id:String((identity as JsonObject)?.id ?? ""),key:String((identity as JsonObject)?.key ?? ""),version:Number((identity as JsonObject)?.version)})).sort((a,b)=>a.id.localeCompare(b.id));
+  if (actualIdentities.some(identity=>!identity.id || !identity.key || !Number.isInteger(identity.version)) || canonicalJson(actualIdentities)!==canonicalJson(expectedIdentities.map(identity=>({id:identity.id,key:identity.key,version:identity.version})))) return { kind: "unsupported", reason: "persisted_scenario_identity_mismatch" };
+  if (expectedIdentities.some(identity=>!identity.canonical || identity.canonical.status !== "active" || identity.canonical.slug !== identity.key || identity.canonical.version !== identity.version)) return { kind: "unsupported", reason: "canonical_scenario_identity_mismatch" };
+  if (expectedIdentities.length === 1) {
+    if (draft.scenario_id !== expectedIdentities[0].id || draft.scenario_version !== expectedIdentities[0].version) return { kind: "unsupported", reason: "draft_scenario_identity_mismatch" };
+    if (assessment.scenario_id !== expectedIdentities[0].id || Number(assessment.scenario_version) !== expectedIdentities[0].version) return { kind: "unsupported", reason: "opportunity_scenario_relationship_mismatch" };
+  } else if (draft.scenario_id !== null || draft.scenario_version !== null) return { kind: "unsupported", reason: "combined_scenario_identity_ambiguous" };
+  if (!Array.isArray(selection.reports) || selection.reports.length !== reportIds.length || reportIds.some((id,index)=>canonicalJson(selection.reports[index])!==canonicalJson(reportRows.find(row=>row.id===id)?.report))) return { kind: "unsupported", reason: "scenario_report_snapshot_mismatch" };
   for (const row of reportRows) {
     const report = row.report;
     const scenario = report?.scenario as JsonObject | null;
     const sourceScenario = report?.source_scenario as JsonObject | null;
     const sourceTemplate = report?.source_template as JsonObject | null;
-    if (!report || row.lead_id !== leadId || row.assessment_id !== selection?.assessment_id || row.scenario_id !== scenario?.id || row.scenario_id !== sourceScenario?.id || scenario?.key !== sourceScenario?.slug && scenario?.key !== sourceScenario?.key || scenario?.version !== sourceScenario?.version || sourceTemplate?.id !== template.id || sourceTemplate?.version !== template.version || (uniqueKeys.length===1 && (draft.scenario_id !== row.scenario_id || draft.scenario_version !== scenario?.version)) || (uniqueKeys.length>1 && (draft.scenario_id !== null && draft.scenario_id !== undefined || draft.scenario_version !== null && draft.scenario_version !== undefined))) return { kind: "unsupported", reason: "scenario_report_template_identity_mismatch" };
-  }
-  const { data: lead, error: leadError } = await supabase.from("local_business_leads").select("id,business_name").eq("id", leadId).maybeSingle();
-  if (leadError || !lead) return { kind: "unsupported", reason: "opportunity_identity_unavailable" };
-  const { data: assessment, error: assessmentError } = await supabase.from("local_business_lead_assessments").select("id,scenario_matches").eq("id", selection?.assessment_id).eq("lead_id", leadId).maybeSingle();
-  if (assessmentError || !assessment) return { kind: "unsupported", reason: "assessment_identity_unavailable" };
-  const matches = Array.isArray(assessment.scenario_matches) ? assessment.scenario_matches as Array<JsonObject> : [];
-  for (const row of reportRows) {
-    const report = row.report!;
-    const scenario = report.scenario as JsonObject;
-    const match = matches.find(candidate => candidate.scenario_id === row.scenario_id && candidate.scenario_version === scenario.version && (candidate.scenario_key === scenario.key || candidate.scenario_key === scenario.slug));
-    if (!match || String((report.business as JsonObject | null)?.id ?? "") !== leadId || String(report.source_assessment_id ?? "") !== String(assessment.id)) return { kind: "unsupported", reason: "canonical_ownership_mismatch" };
-  }
-  const { data: scenarios, error: scenarioError } = await supabase.from("opportunity_scenarios").select("id,slug,version,status").in("id", reportRows.map(row => row.scenario_id));
-  const unreleasedGbpScenario = uniqueKeys.length === 1 && (uniqueKeys[0] === "G01" || uniqueKeys[0] === "G02");
-  if (scenarioError || !scenarios || scenarios.length !== reportRows.length || scenarios.some(s => (s.status !== "active" && !unreleasedGbpScenario) || !reportRows.some(row => row.scenario_id === s.id && row.report?.scenario?.version === s.version && row.report?.scenario?.key === s.slug))) return { kind: "unsupported", reason: "canonical_scenario_unavailable" };
-  if (!unreleasedGbpScenario) {
-    const commercialIdentities = reportRows.map(row => {
-      const offer = row.report?.offer as JsonObject | null;
-      return {
-        id: String(offer?.id ?? ""),
-        plan_id: String(offer?.plan_id ?? ""),
-        product_id: String(offer?.product_id ?? ""),
-        price_version: String(offer?.price_version ?? ""),
-        destination: String(offer?.destination ?? ""),
-      };
-    });
-    if (commercialIdentities.some(offer => !offer.id || !offer.plan_id || !offer.product_id || !offer.price_version || !offer.destination || offer.id !== String(selection.offer_id ?? "") || offer.plan_id !== String(selection.offer_id ?? "") || offer.product_id !== String(selection.product_id ?? "") || offer.product_id !== String(template.product_id ?? "") || offer.destination !== String(selection.destination ?? "") || offer.destination !== String(template.destination ?? "")) || commercialIdentities.some(offer => canonicalJson(offer) !== canonicalJson(commercialIdentities[0]))) return { kind: "unsupported", reason: "report_commercial_identity_mismatch" };
+    const canonical = scenarioRows.find(candidate=>candidate.id===row.scenario_id);
+    const assessmentMatch = assessmentMatches.some(match=>match.scenario_id===row.scenario_id && Number(match.scenario_version)===canonical?.version && (match.scenario_key===canonical.slug || match.scenario_key===scenario?.key));
+    if (!report || row.lead_id !== leadId || row.assessment_id !== selection?.assessment_id || report.source_assessment_id !== row.assessment_id || (report.business as JsonObject | null)?.id !== leadId || row.scenario_id !== scenario?.id || row.scenario_id !== sourceScenario?.id || scenario?.key !== canonical?.slug || scenario?.version !== canonical?.version || sourceScenario?.slug !== canonical.slug || sourceScenario?.version !== canonical.version || sourceTemplate?.id !== template.id || sourceTemplate?.version !== template.version || report.template_version !== REPORT_TEMPLATE_VERSION || !assessmentMatch) return { kind: "unsupported", reason: "canonical_scenario_report_identity_mismatch" };
   }
   const { data: relatedReports, error: relatedError } = await supabase.from("opportunity_scenario_reports").select("id,scenario_id,created_at").eq("lead_id", leadId).eq("assessment_id", selection?.assessment_id).in("scenario_id", reportRows.map((row) => row.scenario_id));
   if (relatedError || !relatedReports) return { kind: "unsupported", reason: "scenario_report_history_unavailable" };
@@ -3280,15 +3282,18 @@ async function approvalProvenance(id: string, draft: JsonObject): Promise<Record
   if (!recipient || !isValidEmailAddress(recipient)) throw new Error("invalid_recipient");
   const destination = String((draft.gbp_commercial_snapshot as JsonObject | null)?.destination ?? selection.destination ?? "");
   const commercial = { offer_id: selection.offer_id ?? null, snapshot: draft.gbp_commercial_snapshot ?? null, catalogue: reports.map((report) => { const offer = (report.report as JsonObject | null)?.offer as JsonObject | null; return { id: offer?.id ?? null, plan_id: offer?.plan_id ?? null, product_id: offer?.product_id ?? null, price_version: offer?.price_version ?? null, destination: offer?.destination ?? null }; }) };
+  const scenarioIdentities = Array.isArray(selection.scenario_identities) ? selection.scenario_identities : [];
+  if (scenarioIdentities.length !== reportReferences.length) throw new Error("scenario_identity_required");
   const identity = {
-    lead_id: id, current_assessment_id: assessment.id, scenario_id: selection.scenario_id ?? (reportReferences.length === 1 ? reportReferences[0].scenario_id : null),
+    lead_id: id, current_assessment_id: assessment.id, scenario_id: reportReferences.length === 1 ? reportReferences[0].scenario_id : null,
+    scenario_identities: scenarioIdentities,
     scenario_report_id: scenarioReportId, scenario_report_fingerprint: scenarioReportFingerprint, scenario_report_references: reportReferences,
     audit_report_id: audit?.id ?? null, audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null,
     billing: commercial, destination_url: destination, recipient,
     subject: String(draft.subject ?? ""), body: String(draft.body ?? ""),
   };
   const approval = await approvalFingerprint(identity as never);
-  return { ...identity, approval_fingerprint: approval, approved_current_assessment_id: assessment.id, approved_scenario_report_id: scenarioReportId, approved_scenario_report_fingerprint: scenarioReportFingerprint, approved_scenario_report_references: reportReferences, approved_audit_report_id: audit?.id ?? null, approved_audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null, approved_billing_offer_id: String(selection.offer_id ?? ""), approved_recipient: recipient, approved_destination_url: destination, approved_commercial_reference: commercial };
+  return { lead_id: id, current_assessment_id: assessment.id, scenario_id: identity.scenario_id, scenario_report_id: scenarioReportId, scenario_report_fingerprint: scenarioReportFingerprint, scenario_report_references: reportReferences, audit_report_id: audit?.id ?? null, audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null, billing: commercial, destination_url: destination, recipient, subject: String(draft.subject ?? ""), body: String(draft.body ?? ""), approval_fingerprint: approval, approved_current_assessment_id: assessment.id, approved_scenario_report_id: scenarioReportId, approved_scenario_report_fingerprint: scenarioReportFingerprint, approved_scenario_report_references: reportReferences, approved_audit_report_id: audit?.id ?? null, approved_audit_report_fingerprint: audit?.outreach_identity_fingerprint ?? null, approved_billing_offer_id: String(selection.offer_id ?? ""), approved_recipient: recipient, approved_destination_url: destination, approved_commercial_reference: commercial };
 }
 
 async function listOpportunities(view: OpportunityLifecycleView = "active"): Promise<Response> {
@@ -3659,6 +3664,11 @@ async function createOutreach(
     rendered=prepared.rendered;
   } catch(error) {return json({error:"outreach_mapping_not_ready",detail:String((error as Error).message)},422);}
   const {subject,body}=rendered;
+  const scenarioIdentities=Array.isArray(selection.scenario_identities) ? selection.scenario_identities as JsonObject[] : [];
+  const selectedKeys=Array.isArray(selection.scenario_keys) ? selection.scenario_keys.filter((key): key is string => typeof key === "string" && key.trim().length > 0) : [];
+  const identityKeys=scenarioIdentities.map(identity=>typeof identity.key === "string" ? identity.key : "");
+  if(!scenarioIdentities.length || selectedKeys.length !== scenarioIdentities.length || new Set(selectedKeys).size !== selectedKeys.length || new Set(identityKeys).size !== identityKeys.length || canonicalJson(selectedKeys.slice().sort()) !== canonicalJson(identityKeys.slice().sort()) || scenarioIdentities.some(identity=>typeof identity.id!=="string" || !identity.id || typeof identity.key!=="string" || !identity.key || !Number.isInteger(identity.version) || identity.version < 1)) return json({error:"scenario_identity_required"},422);
+  const primaryScenario=scenarioIdentities.length===1 ? scenarioIdentities[0] : null;
 
   const { data: draft, error: insErr } = await supabase
     .from("local_business_outreach_drafts")
@@ -3666,12 +3676,12 @@ async function createOutreach(
       lead_id: id,
       channel: "email",
       selection,
-      scenario_id: selection.scenario_id ?? null,
-      scenario_version: selection.scenario_version ?? null,
       subject,
       body,
       status: "draft",
       created_by: "operator-console",
+      scenario_id: primaryScenario?.id ?? null,
+      scenario_version: primaryScenario?.version ?? null,
     })
     .select("*")
     .single();
@@ -3750,7 +3760,7 @@ async function prepareGbpCommercial(id: string, payload: Record<string, unknown>
   if (reportError) throw reportError;
   const { data: stored, error: readError } = await supabase.from('opportunity_scenario_reports').select('id,report').eq('fingerprint', fingerprint).single();
   if (readError || !stored) throw readError ?? new Error('gbp_report_unavailable');
-  const selection = { template_id: template.id, template_version: template.version, scenario_keys: [q.scenarioCode], offer_id: offerMap.productId, product_id: snapshot.productId, destination: snapshot.destination, report_ids: [stored.id], reports: [report], assessment_id: assessment.id, findings: match.evidence };
+  const selection = { template_id: template.id, template_version: template.version, scenario_keys: [q.scenarioCode], scenario_identities: [{ id: scenario.id, key: q.scenarioCode, version: scenario.version }], offer_id: offerMap.productId, product_id: snapshot.productId, destination: snapshot.destination, report_ids: [stored.id], reports: [report], assessment_id: assessment.id, findings: match.evidence };
   const { data: draft, error: insertError } = await supabase.from('local_business_outreach_drafts').insert({ lead_id: id, channel: 'email', subject: message.subject, body: message.body, status: 'draft', created_by: 'operator-console', scenario_id: scenario.id, scenario_version: scenario.version, selection, gbp_commercial_snapshot: snapshot }).select('*').single();
   if (insertError) return json({ error: 'gbp_draft_create_failed', detail: insertError.message }, 409);
   await supabase.from('opportunity_console_audit_log').insert({ action: 'outreach_draft_created', lead_id: id, draft_id: draft.id, actor: 'operator-console', metadata: { scenario_code: q.scenarioCode, plan_id: snapshot.planId, price_version_id: snapshot.priceVersionId } });
@@ -3963,15 +3973,17 @@ async function sendOutreach(id: string, draftId: string, payload: JsonObject): P
   const finalSelectionError = await validateDraftSelection(id,draft);
   if(finalSelectionError) return json({error:"outreach_mapping_not_ready",detail:finalSelectionError},422);
 
+  const approvedReferences = Array.isArray(draft.approved_scenario_report_references) ? draft.approved_scenario_report_references as JsonObject[] : [];
   const provenance = {
     lead_id: id, current_assessment_id: draft.approved_current_assessment_id, scenario_id: draft.scenario_id,
+    scenario_identities: (draft.selection as JsonObject | null)?.scenario_identities ?? [],
     scenario_report_id: draft.approved_scenario_report_id, scenario_report_fingerprint: draft.approved_scenario_report_fingerprint,
     scenario_report_references: draft.approved_scenario_report_references ?? [],
     audit_report_id: draft.approved_audit_report_id, audit_report_fingerprint: draft.approved_audit_report_fingerprint,
     billing: draft.approved_commercial_reference, destination_url: draft.approved_destination_url,
     recipient, subject, body: String(draft.body ?? ""), approval_fingerprint: draft.approval_fingerprint,
   };
-  const {data:claim,error:claimError}=await supabase.rpc("opportunity_claim_outreach_send",{p_draft_id:draftId,p_attempt_id:crypto.randomUUID(),p_approval_fingerprint:draft.approval_fingerprint,p_current_assessment_id:provenance.current_assessment_id,p_scenario_id:provenance.scenario_id,p_scenario_report_id:provenance.scenario_report_id,p_scenario_report_fingerprint:provenance.scenario_report_fingerprint,p_audit_report_id:provenance.audit_report_id,p_audit_report_fingerprint:provenance.audit_report_fingerprint,p_recipient:recipient,p_destination_url:provenance.destination_url,p_snapshot:provenance,p_claim_ttl_seconds:120});
+  const {data:claim,error:claimError}=await supabase.rpc("opportunity_claim_outreach_send",{p_draft_id:draftId,p_attempt_id:crypto.randomUUID(),p_approval_fingerprint:draft.approval_fingerprint,p_current_assessment_id:provenance.current_assessment_id,p_scenario_id:approvedReferences[0]?.scenario_id ?? provenance.scenario_id,p_scenario_report_id:provenance.scenario_report_id,p_scenario_report_fingerprint:provenance.scenario_report_fingerprint,p_audit_report_id:provenance.audit_report_id,p_audit_report_fingerprint:provenance.audit_report_fingerprint,p_recipient:recipient,p_destination_url:provenance.destination_url,p_snapshot:provenance,p_claim_ttl_seconds:120});
   if(claimError || !claim?.ok) return json({error:claim?.error ?? "send_claim_failed",detail:"The canonical send attempt could not be claimed."},409);
   const attemptId = String(claim.attempt_id);
   const {data:started,error:startError}=await supabase.rpc("opportunity_start_outreach_send",{p_draft_id:draftId,p_attempt_id:attemptId});

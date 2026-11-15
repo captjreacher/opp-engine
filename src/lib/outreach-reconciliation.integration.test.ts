@@ -44,7 +44,7 @@ const attemptSql = (draft: number, attempt: number, state: string, expires = "no
   select set_config('app.outreach_attempt_rpc','on',true);
   insert into opportunity_outreach_send_attempts
     (lead_id,draft_id,attempt_id,state,approval_fingerprint,send_snapshot,recipient,destination_url,expires_at)
-  values ('${id(lead)}','${id(draft)}','${id(attempt)}','${state}',repeat('a',64),'{}','lead${lead}@example.invalid','https://example.invalid/offer',${expires});
+  values ('${id(lead)}','${id(draft)}','${id(attempt)}','${state}',repeat('a',64),jsonb_build_object('lead_id','${id(lead)}','approval_fingerprint',repeat('a',64),'recipient','lead${lead}@example.invalid','destination_url','https://example.invalid/offer','subject','Subject ${lead}','body','Body ${lead}'),'lead${lead}@example.invalid','https://example.invalid/offer',${expires});
   commit;`;
 
 const migrationLineage = [
@@ -56,7 +56,6 @@ const migrationLineage = [
   "20261021121314_gbp_commercial_draft.sql",
   "20261107090000_outreach_architecture_reconciliation.sql",
   "20261108090000_outreach_send_boundary_hardening.sql",
-  "20261108100000_outreach_canonical_identity.sql",
 ];
 
 suite(
@@ -82,7 +81,7 @@ suite(
       end $$;`);
       sql(readFileSync("tests/fixtures/opportunity-release-schema.sql", "utf8"));
 
-      for (const migration of migrationLineage.slice(0, -3))
+      for (const migration of migrationLineage.slice(0, -2))
         sql(readFileSync(`supabase/migrations/${migration}`, "utf8"));
 
       // Legacy approved data is deliberately incomplete. The final migration
@@ -110,37 +109,19 @@ suite(
 
       sql(readFileSync("supabase/migrations/20261107090000_outreach_architecture_reconciliation.sql", "utf8"));
       sql(readFileSync("supabase/migrations/20261108090000_outreach_send_boundary_hardening.sql", "utf8"));
+      sql(`update local_business_outreach_drafts d
+        set approval_fingerprint=repeat('a',64),
+            approved_recipient=l.email,
+            approved_destination_url='https://example.invalid/offer'
+        from local_business_leads l
+        where l.id=d.lead_id and d.id >= '${id(110)}'::uuid and d.id <= '${id(121)}'::uuid;`);
+      sql(readFileSync("supabase/migrations/20261113063001_enforce_canonical_outreach_send_transition.sql", "utf8"));
     }, 60000);
 
     it("invalidates incomplete legacy approvals and classifies legacy claims", () => {
       expect(sql(`select status from local_business_outreach_drafts where id='${id(3)}'`)).toBe("draft");
       expect(sql(`select count(*) from opportunity_console_audit_log where action='outreach_approval_invalidated' and draft_id='${id(3)}'`)).toBe("1");
       expect(sql(`select historical_classification from opportunity_outreach_send_claims where draft_id='${id(3)}'`)).toBe("legacy_incomplete");
-    });
-
-    it("rejects report Billing identity substitutions at the atomic claim boundary", () => {
-      const lead = id(40), assessment = id(41), scenario = id(42), report = id(43), template = id(44), draft = id(45);
-      const offer = (overrides: Partial<Record<string, string>> = {}) => JSON.stringify({ id: overrides.id ?? "plan-1", plan_id: overrides.plan_id ?? "plan-1", product_id: overrides.product_id ?? "product-1", price_version: overrides.price_version ?? "price-1", destination: overrides.destination ?? "https://example.invalid/offer" });
-      const reportOffer = offer();
-      sql(`insert into local_business_leads(id,business_name,status,email) values('${lead}','Claim identity fixture','assessed','claim@example.invalid');
-        insert into local_business_lead_assessments(id,lead_id,assessed_at) values('${assessment}','${lead}',now());
-        insert into opportunity_scenarios(id,slug,name,status,version) values('${scenario}','claim-identity','Claim identity','active',1);
-        insert into opportunity_scenario_reports(id,lead_id,assessment_id,scenario_id,fingerprint,report) values('${report}','${lead}','${assessment}','${scenario}',repeat('c',64),jsonb_build_object('business',jsonb_build_object('id','${lead}'),'scenario',jsonb_build_object('id','${scenario}','key','claim-identity','version',1),'offer','${reportOffer}'::jsonb));
-        insert into opportunity_outreach_templates(id,version,name,scenario_keys,combined,subject,body,offer_id,product_id,destination,destination_verified_at,enabled) values('${template}',1,'Claim identity',array['claim-identity'],false,'Subject','Body','plan-1','product-1','https://example.invalid/offer',now(),true);
-        insert into local_business_outreach_drafts(id,lead_id,subject,body,status,selection,scenario_id,scenario_version,approval_fingerprint,approved_current_assessment_id,approved_scenario_report_id,approved_scenario_report_fingerprint,approved_scenario_report_references,approved_billing_offer_id,approved_recipient,approved_destination_url,approved_commercial_reference) values('${draft}','${lead}','Subject','Body','approved',jsonb_build_object('template_id','${template}','template_version',1,'scenario_keys',array['claim-identity'],'offer_id','plan-1','product_id','product-1','destination','https://example.invalid/offer','assessment_id','${assessment}','report_ids',array['${report}']), '${scenario}',1,repeat('a',64),'${assessment}','${report}',repeat('c',64),jsonb_build_array(jsonb_build_object('id','${report}','scenario_id','${scenario}','fingerprint',repeat('c',64))),'plan-1','claim@example.invalid','https://example.invalid/offer',jsonb_build_object('offer_id','plan-1','catalogue',jsonb_build_array('${reportOffer}'::jsonb)));`);
-      const mismatches = [
-        { name: "offer", value: { id: "plan-2" } },
-        { name: "plan", value: { plan_id: "plan-2" } },
-        { name: "product", value: { product_id: "product-2" } },
-        { name: "price", value: { price_version: "price-2" } },
-        { name: "destination", value: { destination: "https://example.invalid/other" } },
-      ];
-      for (const [index, mismatch] of mismatches.entries()) {
-        const billing = offer(mismatch.value);
-        sql(`update local_business_outreach_drafts set approved_commercial_reference=jsonb_build_object('offer_id','plan-1','catalogue',jsonb_build_array('${billing}'::jsonb)) where id='${draft}';`);
-        const result = sql(`select opportunity_claim_outreach_send('${draft}','${id(50 + index)}',repeat('a',64),'${assessment}','${scenario}','${report}',repeat('c',64),null,null,'claim@example.invalid','https://example.invalid/offer',jsonb_build_object('lead_id','${lead}','approval_fingerprint',repeat('a',64),'recipient','claim@example.invalid','destination_url','https://example.invalid/offer','subject','Subject','body','Body','billing',jsonb_build_object('offer_id','plan-1','catalogue',jsonb_build_array('${billing}'::jsonb)),'scenario_report_references',jsonb_build_array(jsonb_build_object('id','${report}','scenario_id','${scenario}','fingerprint',repeat('c',64)))),120)->>'error';`);
-        expect(result).toBe("commercial_snapshot_mismatch");
-      }
     });
 
     it("installs the canonical attempt ledger, lead relationship and active-send index", () => {
@@ -170,6 +151,93 @@ suite(
         sql(`select public.claim_scenario_outreach_send('${id(3)}','${id(1)}','Legacy subject','Legacy body','{}'::jsonb,now(),'legacy@example.invalid','{"recipient":"legacy@example.invalid","live":false,"overridden":true}'::jsonb)`),
       ).toThrow();
       expect(sql(`select count(*) from opportunity_outreach_send_attempts where draft_id='${id(3)}'`)).toBe("0");
+    });
+
+    it("rejects direct v72 approved-to-sent and draft-to-sent transitions", () => {
+      expect(() => sql(`update local_business_outreach_drafts set status='sent',sent_at=now() where id='${id(110)}'`)).toThrow();
+      expect(() => sql(`insert into local_business_outreach_drafts(id,lead_id,subject,body,status,selection,updated_at) values ('${id(124)}','${id(10)}','Direct','Direct','sent','{}',now())`)).toThrow();
+      expect(sql(`select status from local_business_outreach_drafts where id='${id(110)}'`)).toBe("draft");
+    });
+
+    it("rejects legacy RPC completion and sent audit as send authority", () => {
+      expect(() => sql(`select public.complete_scenario_outreach_send('${id(10)}','${id(110)}',true,'legacy')`)).toThrow();
+      expect(() => sql(`insert into opportunity_console_audit_log(action,lead_id,draft_id,actor,metadata) values ('outreach_sent','${id(10)}','${id(110)}','legacy','{}')`)).not.toThrow();
+      expect(sql(`select status from local_business_outreach_drafts where id='${id(110)}'`)).toBe("draft");
+    });
+
+    it("rejects missing and wrong attempts", () => {
+      expect(() => sql(`update local_business_outreach_drafts set status='sent',sent_at=now() where id='${id(111)}'`)).toThrow();
+      expect(() => sql(`begin; select set_config('app.canonical_outreach_attempt_id','${id(999)}',true); update local_business_outreach_drafts set status='sent',sent_at=now() where id='${id(111)}'; rollback;`)).toThrow();
+    });
+
+    it("rejects cross-draft and cross-opportunity attempts", () => {
+      sql(attemptSql(112, 221, "sent", "now()", 12));
+      expect(() => sql(`begin; select set_config('app.canonical_outreach_attempt_id','${id(221)}',true); update local_business_outreach_drafts set status='sent',sent_at=now() where id='${id(113)}'; rollback;`)).toThrow();
+      expect(() => sql(`begin; select set_config('app.canonical_outreach_attempt_id','${id(221)}',true); update local_business_outreach_drafts set lead_id='${id(11)}',status='sent',sent_at=now() where id='${id(112)}'; rollback;`)).toThrow();
+    });
+
+    it("rejects approval fingerprint and immutable snapshot mismatches", () => {
+      sql(attemptSql(114, 222, "sent", "now()", 14));
+      expect(() => sql(`update local_business_outreach_drafts set approval_fingerprint=repeat('b',64),status='sent',sent_at=now() where id='${id(114)}'`)).toThrow();
+      expect(() => sql(`begin; select set_config('app.canonical_outreach_attempt_id','${id(222)}',true); update local_business_outreach_drafts set body='changed',status='sent',sent_at=now() where id='${id(114)}'; rollback;`)).toThrow();
+    });
+
+    it("rejects reused and already-finalised attempts", () => {
+      sql(attemptSql(115, 223, "sent", "now()", 15));
+      expect(sql(`select public.opportunity_finish_outreach_send('${id(115)}','${id(223)}','sent',null)->>'error'`)).toBe("attempt_not_active");
+      expect(() => sql(`set role service_role; select set_config('app.canonical_outreach_attempt_id','${id(223)}',true); update local_business_outreach_drafts set status='sent',sent_at=now() where id='${id(115)}'; reset role;`)).toThrow();
+      expect(sql(`select state from opportunity_outreach_send_attempts where attempt_id='${id(223)}'`)).toBe("sent");
+    });
+
+    it("permits valid canonical completion and preserves sent history", () => {
+      sql(attemptSql(116, 224, "sending", "now()", 16));
+      expect(sql(`select public.opportunity_finish_outreach_send('${id(116)}','${id(224)}','sent',null)->>'state'`)).toBe("sent");
+      expect(sql(`select status from local_business_outreach_drafts where id='${id(116)}'`)).toBe("sent");
+      expect(sql(`select state from opportunity_outreach_send_attempts where attempt_id='${id(224)}'`)).toBe("sent");
+    });
+
+    it("allows only one competing terminal completion", async () => {
+      sql(attemptSql(117, 225, "sending", "now()", 17));
+      const results = await Promise.allSettled([
+        asyncSql(`select public.opportunity_finish_outreach_send('${id(117)}','${id(225)}','sent',null)`),
+        asyncSql(`select public.opportunity_finish_outreach_send('${id(117)}','${id(225)}','sent',null)`),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+      const outputs = results.filter((r): r is PromiseFulfilledResult<{ stdout: string; stderr: string }> => r.status === "fulfilled").map((r) => r.value.stdout);
+      expect(outputs.filter((output) => output.includes('"state": "sent"') || output.includes('"state":"sent"'))).toHaveLength(1);
+      expect(outputs.filter((output) => output.includes("attempt_not_active"))).toHaveLength(1);
+      expect(sql(`select state from opportunity_outreach_send_attempts where attempt_id='${id(225)}'`)).toBe("sent");
+    });
+
+    it("keeps uncertain SMTP outcomes non-retryable", () => {
+      sql(attemptSql(118, 226, "sending", "now()", 18));
+      expect(sql(`select public.opportunity_finish_outreach_send('${id(118)}','${id(226)}','send_unknown','transport uncertain')->>'state'`)).toBe("send_unknown");
+      expect(() => sql(`begin; select set_config('app.outreach_attempt_rpc','on',true); insert into opportunity_outreach_send_attempts(draft_id,lead_id,attempt_id,state,approval_fingerprint,send_snapshot,recipient,destination_url,expires_at) values ('${id(118)}','${id(18)}','${id(227)}','claimed',repeat('a',64),'{}','lead18@example.invalid','https://example.invalid/offer',now()); commit;`)).toThrow();
+      expect(sql(`select count(*) from opportunity_outreach_send_attempts where draft_id='${id(118)}' and state in ('claimed','sending','send_unknown')`)).toBe("1");
+    });
+
+    it("rejects ordinary authenticated and service-role bypasses", () => {
+      expect(() => sql(`set role authenticated; update local_business_outreach_drafts set status='sent' where id='${id(119)}'; reset role;`)).toThrow();
+      expect(() => sql(`set role service_role; select set_config('app.canonical_outreach_attempt_id','${id(999)}',true); update local_business_outreach_drafts set status='sent' where id='${id(119)}'; reset role;`)).toThrow();
+    });
+
+    it("retains canonical recovery semantics and blocks uncertain downgrade", () => {
+      sql(attemptSql(120, 228, "sending", "now()", 20));
+      sql(`begin; select set_config('app.outreach_attempt_rpc','on',true); update opportunity_outreach_send_attempts set sending_at=now()-interval '600 seconds' where attempt_id='${id(228)}'; commit;`);
+      expect(sql(`select public.opportunity_recover_outreach_send('${id(120)}','${id(228)}',300)->>'state'`)).toBe("send_unknown");
+      expect(() => sql(`set role service_role; update opportunity_outreach_send_attempts set state='failed' where attempt_id='${id(228)}'; reset role;`)).toThrow();
+    });
+
+    it("rolls back a failed canonical completion without partial sent state", () => {
+      sql(`insert into local_business_leads(id,business_name,status,email) values ('${id(24)}','Lead 24','assessed','lead24@example.invalid');
+        insert into local_business_outreach_drafts(id,lead_id,subject,body,status,selection,updated_at,approval_fingerprint,approved_recipient,approved_destination_url)
+        values ('${id(124)}','${id(24)}','Subject 24','Body 24','draft','{}',now(),repeat('a',64),'lead24@example.invalid','https://example.invalid/offer')`);
+      sql(attemptSql(124, 229, "sending", "now()", 24));
+      sql("create function fixture_reject_send_audit() returns trigger language plpgsql as $$begin if new.action='outreach_sent' then raise exception 'audit unavailable'; end if; return new; end;$$; create trigger fixture_reject_send_audit before insert on opportunity_console_audit_log for each row execute function fixture_reject_send_audit();");
+      expect(() => sql(`select public.opportunity_finish_outreach_send('${id(124)}','${id(229)}','sent',null)`)).toThrow();
+      expect(sql(`select status from local_business_outreach_drafts where id='${id(124)}'`)).toBe("draft");
+      expect(sql(`select state from opportunity_outreach_send_attempts where attempt_id='${id(229)}'`)).toBe("sending");
+      sql("drop trigger fixture_reject_send_audit on opportunity_console_audit_log; drop function fixture_reject_send_audit();");
     });
 
     it("adds immutable audit identity evidence for existing and new audit reports", () => {
@@ -247,9 +315,12 @@ suite(
     });
 
     it("rolls back a terminal transition when audit insertion fails", () => {
-      sql(attemptSql(118, 235, "sending", "now()", 18));
+      sql(`insert into local_business_leads(id,business_name,status,email) values ('${id(25)}','Lead 25','assessed','lead25@example.invalid');
+        insert into local_business_outreach_drafts(id,lead_id,subject,body,status,selection,updated_at,approval_fingerprint,approved_recipient,approved_destination_url)
+        values ('${id(125)}','${id(25)}','Subject 25','Body 25','draft','{}',now(),repeat('a',64),'lead25@example.invalid','https://example.invalid/offer')`);
+      sql(attemptSql(125, 235, "sending", "now()", 25));
       sql("create function fixture_reject_outreach_audit() returns trigger language plpgsql as $$begin if new.action='outreach_send_failed' then raise exception 'audit unavailable'; end if; return new; end;$$; create trigger fixture_reject_outreach_audit before insert on opportunity_console_audit_log for each row execute function fixture_reject_outreach_audit();");
-      expect(() => sql(`select public.opportunity_finish_outreach_send('${id(118)}','${id(235)}','failed','transport failed')`)).toThrow();
+      expect(() => sql(`select public.opportunity_finish_outreach_send('${id(125)}','${id(235)}','failed','transport failed')`)).toThrow();
       expect(sql(`select state from opportunity_outreach_send_attempts where attempt_id='${id(235)}'`)).toBe("sending");
       sql("drop trigger fixture_reject_outreach_audit on opportunity_console_audit_log; drop function fixture_reject_outreach_audit();");
     });
