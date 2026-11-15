@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const round5Id = "20261113100000";
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultReleaseContractPath = path.join(moduleDirectory, "release-contract-v1.json");
+const trustedProductionEvidence = new WeakSet();
 const iso = (value) => new Date(value).toISOString();
 const canonical = (value) => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -17,6 +18,12 @@ const canonical = (value) => {
 };
 const sha256 = (value) => crypto.createHash("sha256").update(Buffer.isBuffer(value) ? value : typeof value === "string" ? value : canonical(value)).digest("hex");
 const fail = (failures, code) => failures.push(code);
+const freezeEvidence = (value, seen = new WeakSet()) => {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) freezeEvidence(child, seen);
+  return Object.freeze(value);
+};
 
 export function verifyAuthoritativeEvidence(evidence, { now = new Date(), mode = "production", expectedProjectRef, expectedDatabaseId, expectedCandidateSha, expectedManifestSha } = {}) {
   const failures = [];
@@ -31,12 +38,13 @@ export function verifyAuthoritativeEvidence(evidence, { now = new Date(), mode =
   else if (new Date(evidence.collection.expiresAt) <= now || new Date(evidence.collection.collectedAt) > now) fail(failures, "collection.freshness:invalid");
   if (!evidence?.collection?.sourceEvidenceHash) fail(failures, "collection.sourceEvidenceHash:missing");
   if (evidence?.collection?.sourceEvidenceHash !== sha256(evidence.observations ?? {})) fail(failures, "collection.sourceEvidenceHash:mismatch");
+  if (mode === "production" && (!trustedProductionEvidence.has(evidence) || !Object.isFrozen(evidence))) fail(failures, "production:trusted-collector-required");
 
   const target = evidence?.targetIdentity;
   if (!target?.projectRef || !target?.databaseId || target.authenticated !== true || target.boundToApprovedTarget !== true) fail(failures, "targetIdentity:unauthenticated-or-unbound");
   if (mode === "production") {
     const binding = target?.connectionBinding;
-    if (!binding?.projectRef || binding.projectRef !== target.projectRef || !binding.authoritativeDatabaseHost || binding.effectiveHost !== binding.authoritativeDatabaseHost || binding.tlsMode !== "verify-full" || binding.tlsVerified !== true || binding.routeVerified !== true || binding.poolerOrProxy === true || !binding.effectiveServerAddress) fail(failures, "targetIdentity:connection-binding-unverified");
+    if (!binding?.projectRef || binding.projectRef !== target.projectRef || !binding.authoritativeDatabaseHost || binding.effectiveHost !== binding.authoritativeDatabaseHost || binding.tlsMode !== "verify-full" || binding.clientSslMode !== "verify-full" || binding.hostnameVerification !== true || !binding.tlsTrustSource || binding.tlsVerified !== true || binding.routeVerified !== true || binding.poolerOrProxy === true || !binding.effectiveServerAddress) fail(failures, "targetIdentity:connection-binding-unverified");
   }
   if (expectedProjectRef && target?.projectRef !== expectedProjectRef) fail(failures, "targetIdentity.projectRef:mismatch");
   if (expectedDatabaseId && target?.databaseId !== expectedDatabaseId) fail(failures, "targetIdentity.databaseId:mismatch");
@@ -150,6 +158,26 @@ export function loadReleaseContract(contractPath = defaultReleaseContractPath) {
   return { contract, contractPath, contractSha: sha256(bytes) };
 }
 
+const phaseIds = (contract, phase) => {
+  const definition = contract?.phases?.[phase];
+  const shared = (definition?.requiredSharedIds ?? []).map(String);
+  const applied = (definition?.appliedReleaseIds ?? []).map(String);
+  const pending = (definition?.pendingReleaseIds ?? []).map(String);
+  const releaseIds = (contract?.releaseSequence ?? []).map((entry) => String(entry.id));
+  const valid = definition && Array.isArray(definition.requiredSharedIds) && Array.isArray(definition.appliedReleaseIds) && Array.isArray(definition.pendingReleaseIds)
+    && new Set(shared).size === shared.length
+    && new Set(applied).size === applied.length
+    && new Set(pending).size === pending.length
+    && shared.length === (contract?.sharedPrerequisites ?? []).length
+    && shared.every((id, index) => id === String(contract.sharedPrerequisites[index]?.id))
+    && applied.length + pending.length === releaseIds.length
+    && releaseIds.every((id) => applied.includes(id) || pending.includes(id))
+    && !applied.some((id) => pending.includes(id))
+    && applied.every((id, index) => id === releaseIds[index])
+    && pending.every((id, index) => id === releaseIds[applied.length + index]);
+  return { valid, definition, shared, applied, pending, releaseIds };
+};
+
 const assertNoFilesystemIndirection = (candidateRoot, filePath) => {
   const root = fs.realpathSync.native(candidateRoot);
   const relative = path.relative(root, filePath);
@@ -198,17 +226,20 @@ export function validateMigrationManifest(manifest, { projectRef, contract } = {
 
 export function reconcileMigrationHistory({ observedVersions, expectedVersions, phase, contract }) {
   const failures = [];
-  const phaseDefinition = contract?.phases?.[phase];
-  if (!phaseDefinition || !Array.isArray(observedVersions) || !Array.isArray(expectedVersions) || new Set(observedVersions).size !== observedVersions.length || new Set(expectedVersions).size !== expectedVersions.length) failures.push("migration:history-input-invalid");
-  const required = [...(contract?.sharedPrerequisites ?? []).map((entry) => String(entry.id)), ...(phaseDefinition?.requiredReleaseIds ?? []).map(String)];
-  const missing = required.filter((id) => !expectedVersions.includes(id) || !observedVersions.includes(id));
-  const unexpected = observedVersions.filter((id) => !expectedVersions.includes(id));
-  const baselineMissing = expectedVersions.filter((id) => !observedVersions.includes(id));
-  const positions = required.map((id) => observedVersions.indexOf(id));
+  const phaseDefinition = phaseIds(contract, phase);
+  const observed = Array.isArray(observedVersions) ? observedVersions.map(String) : [];
+  const baseline = Array.isArray(expectedVersions) ? expectedVersions.map(String) : [];
+  if (!phaseDefinition.valid || !Array.isArray(observedVersions) || !Array.isArray(expectedVersions) || new Set(observed).size !== observed.length || new Set(baseline).size !== baseline.length) failures.push("migration:history-input-invalid");
+  const requiredApplied = [...phaseDefinition.shared, ...phaseDefinition.applied];
+  const missing = requiredApplied.filter((id) => !baseline.includes(id) || !observed.includes(id));
+  const pending = phaseDefinition.pending.filter((id) => observed.includes(id) || baseline.includes(id));
+  const unexpected = observed.filter((id) => !baseline.includes(id));
+  const baselineMissing = baseline.filter((id) => !observed.includes(id));
+  const positions = requiredApplied.map((id) => observed.indexOf(id));
   const orderingValid = positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]));
-  const excluded = (contract?.excludedMigrationIds ?? []).filter((id) => observedVersions.includes(id) || expectedVersions.includes(id));
-  if (missing.length || unexpected.length || baselineMissing.length || excluded.length || !orderingValid) failures.push("migration:history-mismatch");
-  return { passed: failures.length === 0, failures, missing, unexpected: [...unexpected, ...baselineMissing], excluded, orderingValid, required };
+  const excluded = (contract?.excludedMigrationIds ?? []).map(String).filter((id) => observed.includes(id) || baseline.includes(id));
+  if (missing.length || pending.length || unexpected.length || baselineMissing.length || excluded.length || !orderingValid) failures.push("migration:history-mismatch");
+  return { passed: failures.length === 0, failures, missing, pending, unexpected: [...unexpected, ...baselineMissing], excluded, orderingValid, required: requiredApplied, appliedReleaseIds: phaseDefinition.applied, pendingReleaseIds: phaseDefinition.pending };
 }
 
 export async function collectProductionEvidence({ env = process.env, exec = run, now = new Date() } = {}) {
@@ -259,7 +290,7 @@ export async function collectProductionEvidence({ env = process.env, exec = run,
   const appliedSql = json(exec(schemaVerifier, ["--read-only", "--project-ref", projectRef, "--database-id", databaseId], env), "schema-fingerprint-verifier");
   const observedQuiescence = json(exec(quiescenceVerifier, ["--read-only", "--project-ref", projectRef, "--database-id", databaseId], env), "quiescence-verifier");
   const observedDeployment = json(exec(deploymentVerifier, ["--read-only", "--project-ref", projectRef, "--candidate-sha", candidateSha], env), "deployment-verifier");
-  const connectionBinding = { projectRef, authoritativeDatabaseHost: connectionConfig.host, effectiveHost: connectionConfig.host, resolvedAddresses, effectiveServerAddress, effectiveServerPort: identity.serverPort, tlsMode: connectionConfig.sslmode, tlsVerified: true, routeVerified: true, poolerOrProxy: false };
+  const connectionBinding = { projectRef, authoritativeDatabaseHost: connectionConfig.host, effectiveHost: connectionConfig.host, resolvedAddresses, effectiveServerAddress, effectiveServerPort: identity.serverPort, tlsMode: connectionConfig.sslmode, clientSslMode: connectionConfig.sslmode, hostnameVerification: true, tlsTrustSource: env.PGSSLROOTCERT ? "PGSSLROOTCERT" : "platform-default", tlsVerified: true, routeVerified: true, poolerOrProxy: false };
   const observations = { project, opportunities, identity, connectionBinding, observedVersions, quiescenceRows, backupRestore, appliedSql, observedQuiescence, observedDeployment };
   const evidence = {
     evidenceKind: "authoritative-release-evidence", mode: "production", operatorDeclarationOnly: false,
@@ -272,7 +303,11 @@ export async function collectProductionEvidence({ env = process.env, exec = run,
     observations,
     collection: { sourceType: "direct-authenticated", synthetic: false, authenticated: true, collectorVersion: "round8-p102-1", preflightId: crypto.randomUUID(), collectedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 15 * 60_000).toISOString(), sourceEvidenceHash: sha256(observations) },
   };
-  return { evidence, verification: verifyAuthoritativeEvidence(evidence, { now, expectedProjectRef: projectRef, expectedDatabaseId: databaseId, expectedCandidateSha: candidateSha, expectedManifestSha: manifestSha }) };
+  freezeEvidence(evidence);
+  trustedProductionEvidence.add(evidence);
+  const verification = verifyAuthoritativeEvidence(evidence, { now, expectedProjectRef: projectRef, expectedDatabaseId: databaseId, expectedCandidateSha: candidateSha, expectedManifestSha: manifestSha });
+  if (!verification.passed) trustedProductionEvidence.delete(evidence);
+  return { evidence, verification };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

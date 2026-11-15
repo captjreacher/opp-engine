@@ -38,13 +38,37 @@ describe("P1-02 verification contracts", () => {
     ]) { const value: any = structuredClone(fullManifest); mutate(value); expect(() => validateMigrationManifest(value, { projectRef, contract })).toThrow(); }
   });
 
-  it("D: reconciles actual history against a separate complete baseline and phase", () => {
-    const pre = [...contract.sharedPrerequisites, ...contract.releaseSequence.filter((entry) => entry.id !== "20261113063001")].map((entry) => entry.id);
-    const post = [...pre, "20261113063001"];
-    expect(reconcileMigrationHistory({ observedVersions: post, expectedVersions: post, phase: "post-p1-02", contract })).toMatchObject({ passed: true });
-    expect(reconcileMigrationHistory({ observedVersions: pre, expectedVersions: pre, phase: "post-p1-02", contract }).passed).toBe(false);
-    expect(reconcileMigrationHistory({ observedVersions: [...post, "20990101000000"], expectedVersions: post, phase: "post-p1-02", contract }).passed).toBe(false);
-    expect(reconcileMigrationHistory({ observedVersions: [...pre, "20261113100000"], expectedVersions: [...pre, "20261113100000"], phase: "pre-p1-02", contract }).passed).toBe(false);
+  it("D: models pending pre-cutover, intermediate and post-cutover states separately", () => {
+    const shared = contract.sharedPrerequisites.map((entry) => entry.id);
+    const release = contract.releaseSequence.map((entry) => entry.id);
+    const intermediate = [...shared, ...release.slice(0, -1)];
+    const post = [...intermediate, release.at(-1)!];
+    expect(reconcileMigrationHistory({ observedVersions: shared, expectedVersions: shared, phase: "pre-cutover", contract })).toMatchObject({ passed: true, pendingReleaseIds: release });
+    expect(reconcileMigrationHistory({ observedVersions: intermediate, expectedVersions: intermediate, phase: "intermediate-pre-p1-02", contract })).toMatchObject({ passed: true, pendingReleaseIds: [release.at(-1)] });
+    expect(reconcileMigrationHistory({ observedVersions: post, expectedVersions: post, phase: "post-cutover", contract })).toMatchObject({ passed: true, pendingReleaseIds: [] });
+    expect(reconcileMigrationHistory({ observedVersions: shared, expectedVersions: shared, phase: "post-cutover", contract }).passed).toBe(false);
+    expect(reconcileMigrationHistory({ observedVersions: post, expectedVersions: post, phase: "pre-cutover", contract }).passed).toBe(false);
+  });
+
+  it("D: rejects premature, missing, unknown, excluded, duplicate and reordered history", () => {
+    const shared = contract.sharedPrerequisites.map((entry) => entry.id);
+    const release = contract.releaseSequence.map((entry) => entry.id);
+    const post = [...shared, ...release];
+    expect(reconcileMigrationHistory({ observedVersions: [...shared, release[0]], expectedVersions: [...shared, release[0]], phase: "pre-cutover", contract }).passed).toBe(false);
+    expect(reconcileMigrationHistory({ observedVersions: post.slice(0, -1), expectedVersions: post, phase: "post-cutover", contract }).passed).toBe(false);
+    expect(reconcileMigrationHistory({ observedVersions: [...post, "20990101000000"], expectedVersions: post, phase: "post-cutover", contract }).passed).toBe(false);
+    expect(reconcileMigrationHistory({ observedVersions: [...shared, "20261113100000"], expectedVersions: [...shared, "20261113100000"], phase: "pre-cutover", contract }).passed).toBe(false);
+    expect(reconcileMigrationHistory({ observedVersions: [...shared, shared[0]], expectedVersions: [...shared, shared[0]], phase: "pre-cutover", contract }).passed).toBe(false);
+    expect(reconcileMigrationHistory({ observedVersions: [shared[1], shared[0], shared[2]], expectedVersions: [shared[1], shared[0], shared[2]], phase: "pre-cutover", contract }).passed).toBe(false);
+  });
+
+  it("D: rejects a phase contract that skips release checkpoints", () => {
+    const invalidContract: any = structuredClone(contract);
+    const release = invalidContract.releaseSequence.map((entry: any) => entry.id);
+    invalidContract.phases["intermediate-pre-p1-02"].appliedReleaseIds = [release[1]];
+    invalidContract.phases["intermediate-pre-p1-02"].pendingReleaseIds = [release[0], ...release.slice(2)];
+    const shared = invalidContract.sharedPrerequisites.map((entry: any) => entry.id);
+    expect(reconcileMigrationHistory({ observedVersions: shared, expectedVersions: shared, phase: "intermediate-pre-p1-02", contract: invalidContract }).passed).toBe(false);
   });
 
   it("C: resolves only regular files under the authorised migrations root", () => {

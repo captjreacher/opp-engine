@@ -81,4 +81,34 @@ describe("authoritative release evidence", () => {
     const v: any = production();
     expect(verifyAuthoritativeEvidence(v, { now }).failures).toContain("targetIdentity:connection-binding-unverified");
   });
+  it("rejects encrypted evidence without explicit verify-full client and trust-source evidence", () => {
+    const v: any = production();
+    v.targetIdentity.connectionBinding = { projectRef: "disposable-project", authoritativeDatabaseHost: "db.example", effectiveHost: "db.example", tlsMode: "verify-full", tlsVerified: true, routeVerified: true, poolerOrProxy: false, effectiveServerAddress: "203.0.113.10/32" };
+    expect(verifyAuthoritativeEvidence(v, { now }).failures).toContain("targetIdentity:connection-binding-unverified");
+  });
+  it("rejects the original self-attested TLS exploit even with plausible approved fields", () => {
+    const v: any = production();
+    v.targetIdentity.authenticated = true;
+    v.targetIdentity.boundToApprovedTarget = true;
+    v.targetIdentity.connectionBinding = { projectRef: "disposable-project", authoritativeDatabaseHost: "db.example", effectiveHost: "db.example", tlsMode: "verify-full", clientSslMode: "verify-full", hostnameVerification: true, tlsTrustSource: "platform-default", tlsVerified: true, routeVerified: true, poolerOrProxy: false, effectiveServerAddress: "203.0.113.10/32" };
+    v.releaseBinding.contractId = "contract";
+    v.releaseBinding.contractSha = "contract-sha";
+    v.migration.contractId = "contract";
+    v.migration.phase = "pre-cutover";
+    v.migration.baselineVerified = true;
+    expect(verifyAuthoritativeEvidence(v, { now }).failures).toContain("production:trusted-collector-required");
+  });
+  it("does not expose a transferable production authority property", () => {
+    const v: any = production();
+    v.targetIdentity.authenticated = true;
+    v.targetIdentity.boundToApprovedTarget = true;
+    v.targetIdentity.connectionBinding = { projectRef: "disposable-project", authoritativeDatabaseHost: "db.example", effectiveHost: "db.example", tlsMode: "verify-full", clientSslMode: "verify-full", hostnameVerification: true, tlsTrustSource: "platform-default", tlsVerified: true, routeVerified: true, poolerOrProxy: false, effectiveServerAddress: "203.0.113.10/32" };
+    v.releaseBinding.contractId = "contract";
+    v.releaseBinding.contractSha = "contract-sha";
+    v.migration.contractId = "contract";
+    v.migration.phase = "pre-cutover";
+    v.migration.baselineVerified = true;
+    expect(Reflect.ownKeys(v).filter((key) => typeof key === "symbol")).toHaveLength(0);
+    expect(verifyAuthoritativeEvidence(v, { now }).failures).toContain("production:trusted-collector-required");
+  });
 });
