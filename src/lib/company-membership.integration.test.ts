@@ -6,7 +6,11 @@ import { resolve } from "node:path";
 const database = process.env.OPP_TEST_DATABASE;
 const suite = database ? describe : describe.skip;
 const psql = process.env.OPP_TEST_PSQL ?? "psql";
+const prefix = process.env.OPP_TEST_PSQL_PREFIX_JSON
+  ? (JSON.parse(process.env.OPP_TEST_PSQL_PREFIX_JSON) as string[])
+  : [];
 const args = [
+  ...prefix,
   "-h",
   "127.0.0.1",
   "-p",

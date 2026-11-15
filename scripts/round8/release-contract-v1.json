@@ -1,0 +1,51 @@
+{
+  "contractVersion": 1,
+  "contractId": "opps-engine-round8-p1-02-v1",
+  "targetProject": "jqfodlzcsgfocyuawzyx",
+  "provenance": {
+    "governance": "C:/DEV_LOCAL/opp-engine-production-rehearsal-r1.rehearsal/round8-p1-release-runbook.md",
+    "nineMigrationEvidence": "C:/DEV_LOCAL/opp-engine-production-rehearsal-r1.rehearsal/runs/r8-p102-identity-independent-20261113-230522/nine-migrations-comparison.json",
+    "sharedPrerequisiteEvidence": "C:/DEV_LOCAL/opp-engine-production-rehearsal-r1.rehearsal/round6-release-governance-report.md",
+    "decision": "The nine reviewed Opps Engine migrations, the approved draft-scenario follow-up, and the P1-01 enforcement migration are the scoped release transition. The Round 5 migration is excluded. This contract does not claim to reconstruct the wider shared-production ledger."
+  },
+  "sharedPrerequisites": [
+    {"id":"20260907123000","source":"MGRNZ","sha256":"2E604E05B9A647450737333A8FBA1E0B624612845D07CBC49DB9CEBA2ED2202A"},
+    {"id":"20260907131000","source":"MGRNZ","sha256":"48509A50455BB1D3448149262F86F2EA464DDB284D13ECCB1AB16E4443D391C0"},
+    {"id":"20260907132500","source":"MGRNZ-deployed-history","sha256":"209D81E1CA72E4250694FA7F957C2298B78D383E08228158DBA9DF5C75D74717"}
+  ],
+  "releaseSequence": [
+    {"id":"20261009145236","file":"20261009145236_company_scenario_workflow.sql","sha256":"6BE8B3ED70593F59B86ED3AC358F390FD20C24BC7D2467D00B49CF2118A9C253"},
+    {"id":"20261018144011","file":"20261018144011_opportunity_archive_restore_governance.sql","sha256":"758A8D19BF63F4130072F682D95494E17865457C2288DD046FB2B10B45C5D95D"},
+    {"id":"20261020234438","file":"20261020234438_scenario_reports.sql","sha256":"39CC14336D4BB0FD6A49D4DF3D81C149845BDED5DCBFDA8CCC14BFF5DAA81DD2"},
+    {"id":"20261021003415","file":"20261021003415_scenario_archive_release_compatibility.sql","sha256":"A13329F9EFBE71105F23F295E026F2E5575673F1C5CE0BF70765964A6D0F07FC"},
+    {"id":"20261021012142","file":"20261021012142_scenario_owner_retention_reconciliation.sql","sha256":"C427734F92DCA0F2F4E0FE21B8F5FED67863E1818C61CFDDCEAED623CB460DEA"},
+    {"id":"20261021121314","file":"20261021121314_gbp_commercial_draft.sql","sha256":"D8C4B508C6CCCA3B71C89B2D26646542C0B891CE3A1B55CEAAA114566FA525CE"},
+    {"id":"20261107090000","file":"20261107090000_outreach_architecture_reconciliation.sql","sha256":"752230200F4FCEAF7ED7C77805D13A99CCAE7CCC580E9740DB9AB7CBCF0B1AC6"},
+    {"id":"20261108090000","file":"20261108090000_outreach_send_boundary_hardening.sql","sha256":"BC208CDA998B7CAB232312A9E7569D59C22D3F40C3EBC1C74F3E2BD20981DBB6"},
+    {"id":"20261108100000","file":"20261108100000_outreach_canonical_identity.sql","sha256":"195318D5A6A789D997BAD08973EDEEBF668D73D1375ABA9561D98A0BDD64B797"},
+    {"id":"20261109120000","file":"20261109120000_outreach_draft_scenario_identity.sql","sha256":"4935DFD4EB978A9BF494BD8428DB23CA694F1D532B0C08E1C9A6E0B34A4547C7"},
+    {"id":"20261113063001","file":"20261113063001_enforce_canonical_outreach_send_transition.sql","sha256":"2E82F013C7E433AA97B1E4FC9097BD2732F29259D59B64681D69286B149DD2C2"}
+  ],
+  "legacyPhases": {
+    "pre-p1-02": {"requiredReleaseIds": ["20261009145236","20261018144011","20261020234438","20261021003415","20261021012142","20261021121314","20261107090000","20261108090000","20261108100000","20261109120000"]},
+    "post-p1-02": {"requiredReleaseIds": ["20261009145236","20261018144011","20261020234438","20261021003415","20261021012142","20261021121314","20261107090000","20261108090000","20261108100000","20261109120000","20261113063001"]}
+  },
+  "phases": {
+    "pre-cutover": {
+      "requiredSharedIds": ["20260907123000","20260907131000","20260907132500"],
+      "appliedReleaseIds": [],
+      "pendingReleaseIds": ["20261009145236","20261018144011","20261020234438","20261021003415","20261021012142","20261021121314","20261107090000","20261108090000","20261108100000","20261109120000","20261113063001"]
+    },
+    "intermediate-pre-p1-02": {
+      "requiredSharedIds": ["20260907123000","20260907131000","20260907132500"],
+      "appliedReleaseIds": ["20261009145236","20261018144011","20261020234438","20261021003415","20261021012142","20261021121314","20261107090000","20261108090000","20261108100000","20261109120000"],
+      "pendingReleaseIds": ["20261113063001"]
+    },
+    "post-cutover": {
+      "requiredSharedIds": ["20260907123000","20260907131000","20260907132500"],
+      "appliedReleaseIds": ["20261009145236","20261018144011","20261020234438","20261021003415","20261021012142","20261021121314","20261107090000","20261108090000","20261108100000","20261109120000","20261113063001"],
+      "pendingReleaseIds": []
+    }
+  },
+  "excludedMigrationIds": ["20261113100000"]
+}
