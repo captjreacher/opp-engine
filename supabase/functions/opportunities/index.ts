@@ -49,9 +49,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { GBP_OFFER_MAP, buildGbpSnapshot, gbpFinding, gbpOutreach, qualifyGbp, type GbpCommercialSnapshot } from '../_shared/gbpCommercial.ts';
 import { resolveGbpBillingPrice } from '../_shared/gbpBilling.ts';
 import { approvalFingerprint } from '../_shared/outreachSafety.ts';
+import { enrichmentServiceHeaders } from './auth.ts';
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS")!)["opps_engine"];
+const SECRET_KEYS = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS")!);
+const SERVICE_ROLE_KEY = SECRET_KEYS["opps_engine"];
 const OPERATOR_TOKEN = Deno.env.get("OPERATOR_TOKEN") ?? "";
 const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
 const GOOGLE_PLACES_API_KEY = Deno.env.get("GOOGLE_PLACES_API_KEY") ?? "";
@@ -2542,8 +2544,7 @@ async function assessOpportunity(
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-          apikey: SERVICE_ROLE_KEY,
+          ...enrichmentServiceHeaders(SECRET_KEYS),
           "content-type": "application/json",
         },
         body: JSON.stringify({

@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authorizeVisualAssessRequest } from "./auth.ts";
 
 type VisualAssessRequest = {
   candidate_id?: string;
@@ -265,6 +266,10 @@ Deno.serve(async (req) => {
 
   if (req.method !== "POST") {
     return json({ error: "method_not_allowed" }, 405);
+  }
+
+  if (!authorizeVisualAssessRequest(req)) {
+    return json({ error: "unauthorized" }, 401);
   }
 
   try {
