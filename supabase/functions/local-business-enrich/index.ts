@@ -297,7 +297,7 @@ function getRequiredEnv(name: string) {
 
 function createSupabaseAdmin() {
   // Canonical service-role secret name. Keep service role usage inside Edge Functions only; never expose it to Cockpit.
-  return createClient(getRequiredEnv("SUPABASE_URL"), getRequiredEnv("SUPABASE_SERVICE_ROLE_KEY"));
+  return createClient(getRequiredEnv("SUPABASE_URL"), JSON.parse(getRequiredEnv("SUPABASE_SECRET_KEYS"))["opps_engine"]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

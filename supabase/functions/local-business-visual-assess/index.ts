@@ -269,7 +269,8 @@ Deno.serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const secretKeys = Deno.env.get("SUPABASE_SECRET_KEYS");
+    const serviceRoleKey = secretKeys ? JSON.parse(secretKeys)["opps_engine"] : undefined;
     const googleApiKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
 
     if (!supabaseUrl) {
@@ -277,7 +278,7 @@ Deno.serve(async (req) => {
     }
 
     if (!serviceRoleKey) {
-      throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured");
+      throw new Error("SUPABASE_SECRET_KEYS[opps_engine] is not configured");
     }
 
     if (!googleApiKey) {
