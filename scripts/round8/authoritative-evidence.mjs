@@ -207,7 +207,10 @@ export function resolveVerifiedManifestFile(candidateRoot, entry) {
     const bytes = fs.readFileSync(fd);
     const after = fs.lstatSync(filePath);
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || fs.realpathSync.native(filePath) !== realFile) throw new Error("production-preflight:manifest-file-changed-during-verification");
-    return { filePath, sha256: sha256(bytes), bytes };
+    // Approved migration fingerprints are LF-canonical. Keep raw bytes available for evidence,
+    // but compare the governed identity after normalising repository line endings.
+    const canonicalBytes = Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"));
+    return { filePath, sha256: sha256(canonicalBytes), rawSha256: sha256(bytes), bytes };
   } finally { fs.closeSync(fd); }
 }
 
