@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.0";
 import { representation, validAddress, validAttributes } from "./contract.ts";
+import { isAuthorizedVisualEvidenceRequest } from "./auth.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const secretKeys = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") ?? "{}");
@@ -21,10 +22,6 @@ function json(body: unknown, status = 200): Response {
 }
 function error(code: string, status: number): Response {
   return json({ error: { code } }, status);
-}
-function isAuthorized(req: Request): boolean {
-  const bearer = req.headers.get("authorization") ?? "";
-  return secret.length > 0 && bearer === `Bearer ${secret}`;
 }
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -176,7 +173,7 @@ async function resolveReference(address: string): Promise<ImageryResult> {
 
 Deno.serve(async (req) => {
   if (!db) return error("service_not_configured", 503);
-  if (!isAuthorized(req)) return error("unauthorized", 401);
+  if (!isAuthorizedVisualEvidenceRequest(req)) return error("unauthorized", 401);
   const path = new URL(req.url).pathname
     .replace(/^\/functions\/v1/, "")
     .replace(/^\/visual-evidence/, "");

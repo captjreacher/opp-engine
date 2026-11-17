@@ -3,6 +3,7 @@ import { evaluateScenarios, aggregateScenarios, compatibleTemplates, selectTempl
 import { isOpportunityArchived, lifecycleView, lifecycleMatches, validateLifecyclePayload, LIFECYCLE_CAPABILITIES, PERMANENT_DELETION_UNAVAILABLE, type OpportunityLifecycleView } from "../_shared/opportunityLifecycle.ts";
 import { enrichmentReadiness, assessmentIsCurrent } from "../_shared/opportunityWorkflow.ts";
 import { validateBatchFilter } from "../_shared/opportunityBatches.ts";
+import { namedServiceHeaders } from "../_shared/namedServiceAuth.ts";
 // Supabase Edge Function: `opportunities`
 // Standalone Local Business Opportunity Engine — the API boundary (Phase 1-5).
 //
@@ -4285,7 +4286,7 @@ async function requestVisualInspection(
   }
 
   const headers: Record<string, string> = {
-    apikey: SERVICE_ROLE_KEY,
+    ...namedServiceHeaders(SERVICE_ROLE_KEY),
     "content-type": "application/json",
   };
   if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
