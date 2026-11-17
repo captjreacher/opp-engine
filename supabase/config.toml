@@ -1,0 +1,8 @@
+[functions.opportunity-scenarios]
+verify_jwt = false
+
+[functions.opportunities]
+verify_jwt = false
+
+[functions.local-business-visual-assess]
+verify_jwt = false
