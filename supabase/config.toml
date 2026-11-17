@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.local-business-visual-assess]
 verify_jwt = false
+
+[functions.visual-evidence]
+verify_jwt = false
