@@ -22,11 +22,9 @@ export function isAuthorizedNamedServiceRequest(req: Request, keyName: string): 
   const expected = configuredSecret(keyName);
   if (!expected) return false;
   const apikey = req.headers.get("apikey") ?? "";
-  const authorization = req.headers.get("authorization") ?? "";
-  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
-  return equalSecret(apikey, expected) || equalSecret(bearer, expected);
+  return equalSecret(apikey, expected);
 }
 
 export function namedServiceHeaders(secret: string): Record<string, string> {
-  return { Authorization: `Bearer ${secret}`, apikey: secret };
+  return { apikey: secret };
 }

@@ -4285,7 +4285,6 @@ async function requestVisualInspection(
   }
 
   const headers: Record<string, string> = {
-    authorization: `Bearer ${SERVICE_ROLE_KEY}`,
     apikey: SERVICE_ROLE_KEY,
     "content-type": "application/json",
   };

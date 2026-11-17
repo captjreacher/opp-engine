@@ -15,9 +15,10 @@ describe("named service authentication boundaries", () => {
     expect(authorizeVisualAssessRequest(new Request("https://example.test", { method: "POST", headers: { apikey: "opps-secret" } }))).toBe(true);
   });
 
-  it("accepts the bearer form used by internal service callers", () => {
+  it("accepts only the apikey form for modern secret-key service callers", () => {
     configureSecrets({ opps_engine: "opps-secret" });
-    expect(isAuthorizedNamedServiceRequest(new Request("https://example.test", { headers: { Authorization: "Bearer opps-secret" } }), "opps_engine")).toBe(true);
+    expect(isAuthorizedNamedServiceRequest(new Request("https://example.test", { headers: { apikey: "opps-secret" } }), "opps_engine")).toBe(true);
+    expect(isAuthorizedNamedServiceRequest(new Request("https://example.test", { headers: { Authorization: "Bearer opps-secret" } }), "opps_engine")).toBe(false);
   });
 
   it("makes the enrichment contract use the MGRNZ named key, not the Opps key", () => {

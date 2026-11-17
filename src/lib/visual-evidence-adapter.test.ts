@@ -53,10 +53,10 @@ describe("POST /:id/inspection Gate 1 adapter contract", () => {
     expect(adapter).not.toMatch(/JSON\.stringify\([^)]*\bid\b/);
   });
 
-  it("authenticates with the service role and forwards idempotency", () => {
+  it("authenticates with the named service key and forwards idempotency", () => {
     const adapter = adapterBlock();
-    expect(adapter).toContain("authorization: `Bearer ${SERVICE_ROLE_KEY}`");
     expect(adapter).toContain("apikey: SERVICE_ROLE_KEY");
+    expect(adapter).not.toContain("authorization: `Bearer ${SERVICE_ROLE_KEY}`");
     expect(adapter).toContain(
       'if (idempotencyKey) headers["idempotency-key"] = idempotencyKey',
     );
